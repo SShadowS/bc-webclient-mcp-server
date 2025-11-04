@@ -1,0 +1,6 @@
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\publish\CopilotPatcher.dll
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\publish\CopilotPatcher.deps.json
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\publish\CopilotPatcher.pdb
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\publish\0Harmony.dll
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\publish\Microsoft.AspNetCore.Mvc.Versioning.dll
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\publish\System.Text.Json.dll

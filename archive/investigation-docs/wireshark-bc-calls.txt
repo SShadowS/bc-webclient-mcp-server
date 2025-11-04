@@ -1,0 +1,140 @@
+═══════════════════════════════════════════════════════════
+REAL BC WEB CLIENT INTERACTIONS (from Wireshark)
+═══════════════════════════════════════════════════════════
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Navigate Interactions (Page Navigation from Menu)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Navigate
+   Parameters:
+     nodeId: "0000233e-2a58-0000-0c52-fd00836bd2d2"
+     source: null
+     navigationTreeContext: 0
+   formId: AB
+   controlPath: server:c[0]
+   openFormIds: [AB]
+   tracked forms: 1
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+InvokeAction Interactions (Opening Related Records)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. InvokeAction
+   Parameters:
+     systemAction: 40
+     key: "19_JAAAAACLAAAAAAJ7BDEAMAAwADE"
+     data: {"AlwaysCommit":false}
+     repeaterControlTarget: null
+   formId: AB
+   controlPath: server:c[3]/cr
+   openFormIds: [AB]
+   tracked forms: 1
+
+2. InvokeAction
+   Parameters:
+     systemAction: 0
+     key: "2E_6AAAAAJ7_0cARQBOAEUAUgBFAEwAVAAAAAJ7_0QAQQBHAEwASQBHAFQ"
+     data: {"AlwaysCommit":false}
+     repeaterControlTarget: null
+   formId: B4
+   controlPath: server:c[3]/cr
+   openFormIds: [AB, B4]
+   tracked forms: 2
+
+3. InvokeAction
+   Parameters:
+     systemAction: 120
+     key: null
+     repeaterControlTarget: null
+   formId: B6
+   controlPath: server:c[2]/c[0]
+   openFormIds: [AB, B4, BB]
+   tracked forms: 3
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+LoadForm Interactions (Loading Data into Existing Forms)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. LoadForm
+   Parameters:
+     delayed: true
+     openForm: true
+     loadData: true
+   formId: A8
+   controlPath: server:
+   openFormIds: [AB]
+   tracked forms: 1
+
+2. LoadForm
+   Parameters:
+     delayed: true
+     openForm: true
+     loadData: true
+   formId: A9
+   controlPath: server:
+   openFormIds: [AB]
+   tracked forms: 1
+
+3. LoadForm
+   Parameters:
+     delayed: true
+     openForm: true
+     loadData: true
+   formId: A7
+   controlPath: server:
+   openFormIds: [AB]
+   tracked forms: 1
+
+4. LoadForm
+   Parameters:
+     delayed: true
+     openForm: true
+     loadData: true
+   formId: AA
+   controlPath: server:
+   openFormIds: [AB]
+   tracked forms: 1
+
+5. LoadForm
+   Parameters:
+     delayed: true
+     openForm: true
+     loadData: true
+   formId: AF
+   controlPath: server:
+   openFormIds: [AB, B3]
+   tracked forms: 2
+
+   ... and 6 more LoadForm interactions
+
+
+═══════════════════════════════════════════════════════════
+SUMMARY
+═══════════════════════════════════════════════════════════
+
+Total interactions: 41
+
+Interaction breakdown:
+  LoadForm: 11
+  InvokeSessionAction: 2
+  InvokeAction: 3
+  KeepAlive: 23
+  CloseForm: 1
+  Navigate: 1
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+KEY INSIGHTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. OpenForm is used ONLY ONCE at session start
+2. New pages are opened via Navigate (menu navigation)
+3. Related records are opened via InvokeAction
+4. LoadForm is used to load data into existing forms (factboxes/parts)
+5. openFormIds accumulates across the session as forms stay open
+6. Real BC never calls OpenForm repeatedly for different pages!
+

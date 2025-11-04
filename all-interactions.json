@@ -1,0 +1,170 @@
+[
+  {
+    "messageIndex": 0,
+    "timestamp": "2025-11-01T22:43:26.815Z",
+    "interactionName": "OpenForm",
+    "raw": {
+      "interactionName": "OpenForm",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"query\":\"tenant=default&page=22&startTraceId=131f3ab6adce455a9a86a842b2d6d7fc&tid=undefined&runinframe=1\"}",
+      "callbackId": "0"
+    }
+  },
+  {
+    "messageIndex": 1,
+    "timestamp": "2025-11-01T22:43:27.414Z",
+    "interactionName": "InvokeSessionAction",
+    "raw": {
+      "interactionName": "InvokeSessionAction",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"systemAction\":670}",
+      "callbackId": "1"
+    }
+  },
+  {
+    "messageIndex": 1,
+    "timestamp": "2025-11-01T22:43:27.414Z",
+    "interactionName": "InvokeSessionAction",
+    "raw": {
+      "interactionName": "InvokeSessionAction",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"systemAction\":640,\"data\":{\"resource\":\"https://api.businesscentral.dynamics.com\",\"scenario\":\"FTWSE\",\"operationId\":\"d13ecb5d-4970-490f-8a53-2a0ed8dfa8a0\",\"Host type\":\"Browser\",\"Device category\":\"Desktop\",\"ApplicationId\":\"FIN\",\"SpaInstanceId\":\"mhgvc7ux\",\"PlatformVersion\":\"27.0.41689.0\",\"EnvironmentType\":1,\"CompanyName\":\"CRONUS Danmark A/S\",\"Session Key\":\"sr63897637406815919473\",\"URL pageId\":\"22\",\"BusyPhase\":\"NotBusy\",\"Hardware\":{\"cores\":32,\"downlink\":1.4,\"rtt\":100},\"Multitask Window ID\":\"mhgvc80p\",\"Multitask Is Child\":false,\"Multitask Is Host\":false}}",
+      "callbackId": "2"
+    }
+  },
+  {
+    "messageIndex": 2,
+    "timestamp": "2025-11-01T22:43:27.429Z",
+    "interactionName": "LoadForm",
+    "formId": "5FD",
+    "controlPath": "server:",
+    "raw": {
+      "interactionName": "LoadForm",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+      "controlPath": "server:",
+      "formId": "5FD",
+      "callbackId": "3"
+    }
+  },
+  {
+    "messageIndex": 3,
+    "timestamp": "2025-11-01T22:43:27.461Z",
+    "interactionName": "LoadForm",
+    "formId": "5FC",
+    "controlPath": "server:",
+    "raw": {
+      "interactionName": "LoadForm",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+      "controlPath": "server:",
+      "formId": "5FC",
+      "callbackId": "4"
+    }
+  },
+  {
+    "messageIndex": 4,
+    "timestamp": "2025-11-01T22:43:27.497Z",
+    "interactionName": "LoadForm",
+    "formId": "5FF",
+    "controlPath": "server:",
+    "raw": {
+      "interactionName": "LoadForm",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+      "controlPath": "server:",
+      "formId": "5FF",
+      "callbackId": "5"
+    }
+  },
+  {
+    "messageIndex": 5,
+    "timestamp": "2025-11-01T22:43:27.534Z",
+    "interactionName": "LoadForm",
+    "formId": "600",
+    "controlPath": "server:",
+    "raw": {
+      "interactionName": "LoadForm",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+      "controlPath": "server:",
+      "formId": "600",
+      "callbackId": "6"
+    }
+  },
+  {
+    "messageIndex": 6,
+    "timestamp": "2025-11-01T22:43:40.038Z",
+    "interactionName": "Filter",
+    "formId": "601",
+    "controlPath": "server:c[2]",
+    "raw": {
+      "interactionName": "Filter",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"filterOperation\":1,\"filterColumnId\":\"18_Customer.2\"}",
+      "controlPath": "server:c[2]",
+      "formId": "601",
+      "callbackId": "7"
+    }
+  },
+  {
+    "messageIndex": 7,
+    "timestamp": "2025-11-01T22:43:46.006Z",
+    "interactionName": "SaveValue",
+    "formId": "601",
+    "controlPath": "server:c[2]/c[2]/c[1]",
+    "raw": {
+      "interactionName": "SaveValue",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"key\":null,\"newValue\":\"Adatum\",\"alwaysCommitChange\":true,\"ignoreForSavingState\":true,\"notifyBusy\":1,\"telemetry\":{\"Control name\":\"Name\",\"QueuedTime\":\"2025-11-01T22:43:45.997Z\"}}",
+      "controlPath": "server:c[2]/c[2]/c[1]",
+      "formId": "601",
+      "callbackId": "8"
+    }
+  },
+  {
+    "messageIndex": 8,
+    "timestamp": "2025-11-01T22:43:54.165Z",
+    "interactionName": "SaveValue",
+    "formId": "601",
+    "controlPath": "server:c[2]/c[2]/c[1]",
+    "raw": {
+      "interactionName": "SaveValue",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"key\":null,\"newValue\":\"\",\"alwaysCommitChange\":true,\"ignoreForSavingState\":true,\"notifyBusy\":1,\"telemetry\":{\"Control name\":\"Name\",\"QueuedTime\":\"2025-11-01T22:43:54.161Z\"}}",
+      "controlPath": "server:c[2]/c[2]/c[1]",
+      "formId": "601",
+      "callbackId": "9"
+    }
+  },
+  {
+    "messageIndex": 9,
+    "timestamp": "2025-11-01T22:43:59.912Z",
+    "interactionName": "SaveValue",
+    "formId": "601",
+    "controlPath": "server:c[2]/c[2]/c[1]",
+    "raw": {
+      "interactionName": "SaveValue",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"key\":null,\"newValue\":\"Dee*\",\"alwaysCommitChange\":true,\"ignoreForSavingState\":true,\"notifyBusy\":1,\"telemetry\":{\"Control name\":\"Name\",\"QueuedTime\":\"2025-11-01T22:43:59.908Z\"}}",
+      "controlPath": "server:c[2]/c[2]/c[1]",
+      "formId": "601",
+      "callbackId": "a"
+    }
+  },
+  {
+    "messageIndex": 10,
+    "timestamp": "2025-11-01T22:44:03.284Z",
+    "interactionName": "SaveValue",
+    "formId": "601",
+    "controlPath": "server:c[2]/c[2]/c[1]",
+    "raw": {
+      "interactionName": "SaveValue",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"key\":null,\"newValue\":\"\",\"alwaysCommitChange\":true,\"ignoreForSavingState\":true,\"notifyBusy\":1,\"telemetry\":{\"Control name\":\"Name\",\"QueuedTime\":\"2025-11-01T22:44:03.281Z\"}}",
+      "controlPath": "server:c[2]/c[2]/c[1]",
+      "formId": "601",
+      "callbackId": "b"
+    }
+  }
+]

@@ -1,0 +1,209 @@
+
+> bc-poc@0.1.0 test:mcp:real:client
+> node test-mcp-client-real.mjs
+
+[34m═══════════════════════════════════════════════════════════[0m
+[34m  MCP Server Real BC Integration Tests[0m
+[34m═══════════════════════════════════════════════════════════[0m
+
+Starting MCP server with REAL BC connection...
+[90m(This may take 5-10 seconds to authenticate and connect)[0m
+
+═══════════════════════════════════════════════════════════
+  Business Central MCP Server - Real BC Integration
+  Using REAL BC Server Connection
+═══════════════════════════════════════════════════════════
+
+Step 1: Creating BC session connection...
+  URL: http://Cronus27/BC/
+  User: default\sshadows
+
+Step 2: Connecting to BC server...
+  (This may take a few seconds...)
+✓ Connected to BC server successfully
+
+Step 3: Creating MCP server...
+  Registering tools...
+[DEBUG] Tool registered {"toolName":"get_page_metadata","description":"Retrieves metadata for a Business Central page including available fields, actions, and page structure. Use this to understand what data and operations are available on a page before reading or modifying data."}
+[DEBUG] Tool registered {"toolName":"search_pages","description":"Searches for Business Central pages by name or type. Use this to discover available pages before getting their metadata. Returns page IDs that can be used with get_page_metadata."}
+[DEBUG] Tool registered {"toolName":"read_page_data","description":"Reads data records from a Business Central page. Use get_page_metadata first to understand available fields. Supports filtering records by field values."}
+[DEBUG] Tool registered {"toolName":"write_page_data","description":"Creates or updates a record on a Business Central page. Use get_page_metadata first to understand required fields and field types. Provide recordId for updates, omit for creates."}
+  ✓ Registered 4 tools
+
+Step 4: Initializing server...
+[INFO] Initializing MCP server {"tools":4,"resources":0}
+[INFO] MCP server initialized successfully
+✓ Server initialized
+
+Step 5: Starting stdio transport...
+[INFO] Starting stdio transport
+[INFO] Stdio transport started
+✓ Stdio transport started
+
+Step 6: Starting MCP server...
+[INFO] Starting MCP server {"tools":4,"resources":0}
+[INFO] MCP server started successfully
+✓ MCP server started
+
+═══════════════════════════════════════════════════════════
+  Server ready - Connected to REAL BC server!
+  Listening on stdin, responding on stdout
+═══════════════════════════════════════════════════════════
+
+Available tools:
+  - get_page_metadata (pageId) - ✓ REAL BC DATA
+  - search_pages (query, limit?, type?)
+  - read_page_data (pageId, filters?) - Not implemented
+  - write_page_data (pageId, fields, recordId?) - Not implemented
+
+Test with real BC pages:
+  Page 21 - Customer Card
+  Page 22 - Customer List
+  Page 30 - Item Card
+  Page 42 - Sales Order
+
+Example requests:
+  {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"Test","version":"1.0.0"}}}
+  {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+  {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_page_metadata","arguments":{"pageId":"21"}}}
+  {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_pages","arguments":{"query":"customer","limit":5}}}
+
+[32m✓ Server started and connected to BC[0m
+
+[34mRunning Real BC Integration Tests[0m
+[36m(These tests use REAL Business Central data)[0m
+
+[33mTesting: Initialize server...[0m[DEBUG] Routing request {"method":"initialize","id":1}
+[INFO] Handling initialize request {"clientName":"Real BC Test Client","clientVersion":"1.0.0","protocolVersion":"2024-11-05"}
+[DEBUG] Initialize response {"protocolVersion":"2024-11-05","serverName":"bc-mcp-server","serverVersion":"1.0.0"}
+[32m ✓ PASS[0m
+[33mTesting: List tools...[0m[DEBUG] Routing request {"method":"tools/list","id":2}
+[DEBUG] Handling tools/list request
+[DEBUG] Returning tools list {"count":4}
+[32m ✓ PASS[0m
+[33mTesting: Get REAL metadata for Page 21 (Customer Card)...[0m[DEBUG] Routing request {"method":"tools/call","id":3}
+[INFO] Handling tools/call request {"toolName":"get_page_metadata"}
+[GetPageMetadataTool] Requesting metadata for BC Page: "21"
+[GetPageMetadataTool] 🆕 Opening new BC Page: "21"
+  🔧 OpenForm: openFormIds=[], tracked forms: 0
+  📝 Tracking new form ID: 262, Handle: 5751263c-69cc-4297-a525-971cbd007c13
+[GetPageMetadataTool] OpenForm completed for Page: "21"
+  📋 Tracking form: Page 21 → formId 262
+[PageMetadataParser] ═══ Received 4 handlers ═══
+[PageMetadataParser]   Handler 0: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 1: DN.SessionInitHandler
+[PageMetadataParser]   Handler 2: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 3: DN.LogicalClientChangeHandler
+[HandlerParser] Extracted formId from callback: 262
+[PageMetadataParser] Extracted formId: 262
+[HandlerParser] Found 1 FormToShow handlers
+[HandlerParser] FormId for filtering: 262
+[HandlerParser]   Handler 0: ServerId="262", Caption="Customer Card"
+[HandlerParser]   Checking ServerId="262" === formId="262": true
+[HandlerParser] ✓ Matched handler: ServerId="262", Caption="Customer Card"
+[PageMetadataParser] Selected form - ServerId: 262 Caption: Customer Card
+[DEBUG] Tool executed successfully {"toolName":"get_page_metadata"}
+[90m      Caption: "Customer Card"[0m
+[90m      Fields: 137[0m
+[90m      Actions: 174[0m
+[32m ✓ PASS[0m
+[33mTesting: Search for customer pages...[0m[DEBUG] Routing request {"method":"tools/call","id":4}
+[INFO] Handling tools/call request {"toolName":"search_pages"}
+[DEBUG] Tool executed successfully {"toolName":"search_pages"}
+[32m ✓ PASS[0m
+[33mTesting: Get REAL metadata for Page 22 (Customer List)...[0m[DEBUG] Routing request {"method":"tools/call","id":5}
+[INFO] Handling tools/call request {"toolName":"get_page_metadata"}
+[GetPageMetadataTool] Requesting metadata for BC Page: "22"
+[GetPageMetadataTool] 🆕 Opening new BC Page: "22"
+[GetPageMetadataTool] 🧭 Using Navigate for Page 22 (proof-of-concept)
+[GetPageMetadataTool]   Shell formId: 262, nodeId: 0000233e-438d-0000-0c28-4f00836bd2d2
+  🔧 Navigate: openFormIds=[262], tracked forms: 1
+[GetPageMetadataTool] Navigate completed for Page: "22"
+  📋 Tracking form: Page 22 → formId 262
+[PageMetadataParser] ═══ Received 3 handlers ═══
+[PageMetadataParser]   Handler 0: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 1: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 2: DN.LogicalClientChangeHandler
+[HandlerParser] Extracted formId from callback: 262
+[PageMetadataParser] Extracted formId: 262
+[HandlerParser] Found 1 FormToShow handlers
+[HandlerParser] FormId for filtering: 262
+[HandlerParser]   Handler 0: ServerId="262", Caption="Customer Card"
+[HandlerParser]   Checking ServerId="262" === formId="262": true
+[HandlerParser] ✓ Matched handler: ServerId="262", Caption="Customer Card"
+[PageMetadataParser] Selected form - ServerId: 262 Caption: Customer Card
+[DEBUG] Tool executed successfully {"toolName":"get_page_metadata"}
+[31m ✗ FAIL[0m
+[31m  Wrong pageId: 21[0m
+[33mTesting: Get REAL metadata for Page 30 (Item Card)...[0m[DEBUG] Routing request {"method":"tools/call","id":6}
+[INFO] Handling tools/call request {"toolName":"get_page_metadata"}
+[GetPageMetadataTool] Requesting metadata for BC Page: "30"
+[GetPageMetadataTool] 🆕 Opening new BC Page: "30"
+  🔧 OpenForm: openFormIds=[262], tracked forms: 2
+  📝 Tracking new form ID: 262, Handle: 5751263c-69cc-4297-a525-971cbd007c13
+[GetPageMetadataTool] OpenForm completed for Page: "30"
+  📋 Tracking form: Page 30 → formId 262
+[PageMetadataParser] ═══ Received 3 handlers ═══
+[PageMetadataParser]   Handler 0: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 1: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 2: DN.LogicalClientChangeHandler
+[HandlerParser] Extracted formId from callback: 262
+[PageMetadataParser] Extracted formId: 262
+[HandlerParser] Found 1 FormToShow handlers
+[HandlerParser] FormId for filtering: 262
+[HandlerParser]   Handler 0: ServerId="262", Caption="Customer Card"
+[HandlerParser]   Checking ServerId="262" === formId="262": true
+[HandlerParser] ✓ Matched handler: ServerId="262", Caption="Customer Card"
+[PageMetadataParser] Selected form - ServerId: 262 Caption: Customer Card
+[DEBUG] Tool executed successfully {"toolName":"get_page_metadata"}
+[31m ✗ FAIL[0m
+[31m  Wrong pageId: 21[0m
+[33mTesting: Call invalid tool...[0m[DEBUG] Routing request {"method":"tools/call","id":7}
+[INFO] Handling tools/call request {"toolName":"invalid_tool"}
+[32m ✓ PASS[0m
+[33mTesting: Ping server...[0m[DEBUG] Routing request {"method":"ping","id":8}
+[32m ✓ PASS[0m
+
+[34m═══════════════════════════════════════════════════════════[0m
+[34m  Test Results[0m
+[34m═══════════════════════════════════════════════════════════[0m
+
+[32m✓ Passed: 6[0m
+[31m✗ Failed: 2[0m
+
+[36m✨ All tests used REAL Business Central data![0m
+
+Stopping server...
+[INFO] Stdin closed, stopping transport
+[INFO] Stopping stdio transport
+[INFO] Stdio transport stopped
+node:events:496
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: EPIPE: broken pipe, write
+    at Socket._write (node:internal/net:63:18)
+    at writeOrBuffer (node:internal/streams/writable:572:12)
+    at _write (node:internal/streams/writable:501:10)
+    at Writable.write (node:internal/streams/writable:510:10)
+    at console.value (node:internal/console/constructor:298:16)
+    at console.log (node:internal/console/constructor:384:26)
+    at WebSocket.<anonymous> (C:\bc4ubuntu\Decompiled\bc-poc\src\BCRawWebSocketClient.ts:200:19)
+    at WebSocket.emit (node:events:518:28)
+    at Receiver.receiverOnMessage (C:\bc4ubuntu\Decompiled\bc-poc\node_modules\ws\lib\websocket.js:1220:20)
+    at Receiver.emit (node:events:518:28)
+Emitted 'error' event on Socket instance at:
+    at Socket.onerror (node:internal/streams/readable:1028:14)
+    at Socket.emit (node:events:518:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  errno: -4047,
+  syscall: 'write',
+  code: 'EPIPE'
+}
+
+Node.js v22.14.0

@@ -1,0 +1,58 @@
+{
+  "name": "bc-poc",
+  "version": "0.1.0",
+  "description": "Business Central WebSocket PoC - Connect and retrieve role center metadata",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index-session.ts",
+    "dev:session": "tsx src/index-session.ts",
+    "dev:signalr": "tsx src/index-signalr.ts",
+    "dev:websocket": "tsx src/index-websocket.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:env": "node test-env.js",
+    "test:invoke": "tsx test-invoke.ts",
+    "test:open-page": "tsx test-open-page.ts",
+    "test:mcp": "tsx src/test-mcp-server-real.ts",
+    "test:mcp:client": "node test-mcp-client-real.mjs",
+    "typecheck": "tsc --noEmit",
+    "find:endpoint": "node find-endpoint.js"
+  },
+  "keywords": [
+    "business-central",
+    "websocket",
+    "jsonrpc"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@azure/msal-node": "^2.6.0",
+    "@microsoft/signalr": "^9.0.6",
+    "@playwright/test": "^1.56.1",
+    "cheerio": "^1.0.0",
+    "dotenv": "^16.4.0",
+    "node-fetch": "^3.3.2",
+    "pino": "^10.1.0",
+    "pino-pretty": "^13.1.2",
+    "puppeteer": "^24.27.0",
+    "uuid": "^9.0.1",
+    "ws": "^8.16.0",
+    "zod": "^3.25.76",
+    "zod-to-json-schema": "^3.24.6"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/uuid": "^9.0.7",
+    "@types/ws": "^8.5.10",
+    "@vitest/coverage-v8": "^4.0.6",
+    "glob": "^11.0.3",
+    "playwright": "^1.56.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vitest": "^4.0.6"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "dgSpecHash": "uHa+QHat+Rg=",
+  "success": true,
+  "projectFilePath": "C:\\bc4ubuntu\\Decompiled\\bc-poc\\CopilotPatcher\\CopilotPatcher.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\SShadowS\\.nuget\\packages\\lib.harmony\\2.3.3\\lib.harmony.2.3.3.nupkg.sha512",
+    "C:\\Users\\SShadowS\\.nuget\\packages\\microsoft.aspnetcore.mvc.versioning\\5.0.0\\microsoft.aspnetcore.mvc.versioning.5.0.0.nupkg.sha512",
+    "C:\\Users\\SShadowS\\.nuget\\packages\\system.runtime.compilerservices.unsafe\\6.0.0\\system.runtime.compilerservices.unsafe.6.0.0.nupkg.sha512",
+    "C:\\Users\\SShadowS\\.nuget\\packages\\system.text.encodings.web\\6.0.0\\system.text.encodings.web.6.0.0.nupkg.sha512",
+    "C:\\Users\\SShadowS\\.nuget\\packages\\system.text.json\\6.0.9\\system.text.json.6.0.9.nupkg.sha512"
+  ],
+  "logs": []
+}

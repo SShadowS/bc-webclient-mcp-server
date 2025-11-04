@@ -1,0 +1,155 @@
+═══════════════════════════════════════════════════════════════════════════════════════
+BC INTERACTION COMPARISON: Our MCP vs Real BC Web Client
+═══════════════════════════════════════════════════════════════════════════════════════
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ CRITICAL DIFFERENCE: Interaction Strategy                                           │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+OUR MCP:                                    REAL BC WEB CLIENT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Uses OpenForm for EVERY page request       Uses Navigate for menu navigation
+                                           Uses InvokeAction for related records
+                                           Uses LoadForm for factboxes/parts
+                                           OpenForm NOT USED in this capture!
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ Page 21 Request: Customer Card                                                      │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+OUR MCP:                                    REAL BC WEB CLIENT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Interaction: OpenForm                       Interaction: Navigate
+Parameters:                                 Parameters:
+  Page: "21"                                  nodeId: "0000233e-2a58-..."
+                                              source: null
+formId: null                                  navigationTreeContext: 0
+controlPath: null                           formId: AB
+openFormIds: []                             controlPath: server:c[0]
+                                            openFormIds: [AB]
+
+Result: formId 1AE returned                 Result: New form AB opened
+Caption: "Customer Card" ✓ Correct          Forms accumulate properly
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ Page 22 Request: Customer List                                                      │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+OUR MCP:                                    REAL BC WEB CLIENT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Interaction: OpenForm                       Interaction: InvokeAction
+Parameters:                                 Parameters:
+  Page: "22"                                  systemAction: 40
+                                              key: "19_JAAAAACLAAAAAAJ7..."
+formId: null                                  data: {"AlwaysCommit":false}
+controlPath: null                           formId: AB
+openFormIds: [1AE]  ← has previous!         controlPath: server:c[3]/cr
+                                            openFormIds: [AB]
+
+Result: SAME formId 1AE returned! ❌        Result: Stays on AB form
+Caption: "Customer Card" ❌ WRONG!          Opens related data within form
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ Page 30 Request: Item Card                                                          │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+OUR MCP:                                    REAL BC WEB CLIENT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Interaction: OpenForm                       Interaction: InvokeAction
+Parameters:                                 Parameters:
+  Page: "30"                                  systemAction: 0
+                                              key: "2E_6AAAAAJ7_0cARQB..."
+formId: null                                  data: {"AlwaysCommit":false}
+controlPath: null                           formId: B4
+openFormIds: [1AE, 1AE] ← duplicates!       controlPath: server:c[3]/cr
+                                            openFormIds: [AB, B4]
+
+Result: SAME formId 1AE returned! ❌        Result: New form B4 opened
+Caption: "Customer Card" ❌ WRONG!          Forms tracked separately: AB, B4
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ SUMMARY: Interaction Type Breakdown                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+OUR MCP:                                    REAL BC WEB CLIENT:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Total interactions: 3                       Total interactions: 41
+
+OpenForm: 3 (100%)                          OpenForm: 0 (0%)
+LoadForm: 0                                 LoadForm: 11 (27%)
+Navigate: 0                                 Navigate: 1 (2%)
+InvokeAction: 0                             InvokeAction: 3 (7%)
+CloseForm: 0                                CloseForm: 1 (2%)
+                                            InvokeSessionAction: 2 (5%)
+                                            KeepAlive: 23 (56%)
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ ROOT CAUSE ANALYSIS                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+WHY OUR MCP FAILS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. We use OpenForm repeatedly for different pages
+2. BC has SESSION-LEVEL caching that returns the SAME formId (1AE) for all
+   OpenForm requests, regardless of page ID
+3. BC expects OpenForm only at session start (if at all in this capture)
+4. Real BC uses Navigate (menu clicks) and InvokeAction (record navigation)
+5. These interactions properly create NEW forms with NEW formIds
+
+
+HOW REAL BC WORKS:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Session starts with Navigate or InvokeAction (not OpenForm!)
+2. Each navigation creates a NEW form with a UNIQUE formId (AB, B4, B6, etc.)
+3. Forms accumulate in openFormIds array: [AB], [AB, B4], [AB, B4, B6]
+4. LoadForm is used for factboxes/parts within existing forms
+5. CloseForm removes forms when tabs are closed
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ SOLUTION: Switch to Navigate Interaction                                            │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+TO ACHIEVE TRUE USER SIMULATION:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Replace OpenForm with Navigate interaction
+2. Navigate requires a nodeId parameter (page identifier in menu tree)
+3. We need to either:
+   a) Map page IDs to nodeIds (requires BC metadata query)
+   b) Use a page search/lookup to find nodeIds
+   c) Use InvokeAction with systemAction codes
+
+4. Each Navigate will create a NEW form with unique formId
+5. Track forms properly in openFormIds array
+6. This matches how real BC web client operates
+
+
+ALTERNATIVE: If we can't get nodeIds easily:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Research InvokeAction systemAction codes
+- systemAction 40 and 0 appear to open records
+- systemAction 120 might be related to actions/buttons
+- May need to combine Navigate for first page + InvokeAction for related records
+
+
+┌─────────────────────────────────────────────────────────────────────────────────────┐
+│ KEY INSIGHT: OpenForm is NOT for page opening!                                      │
+└─────────────────────────────────────────────────────────────────────────────────────┘
+
+Despite its name, "OpenForm" appears to be:
+- A session initialization call (if used at all)
+- NOT intended for opening different pages
+- BC's caching behavior confirms this: same formId for all calls
+
+Real page navigation uses:
+- Navigate (menu tree navigation)
+- InvokeAction (record/action navigation)
+- LoadForm (factboxes/embedded parts)
+
+OpenForm may have been deprecated or is only used in specific legacy scenarios.

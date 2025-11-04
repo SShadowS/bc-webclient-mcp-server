@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Harmony for runtime patching -->
+    <PackageReference Include="Lib.Harmony" Version="2.3.3" />
+
+    <!-- API Versioning (was missing in original) -->
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Versioning" Version="5.0.0" />
+
+    <!-- Use framework reference instead of explicit packages -->
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- BC assembly references for McpController -->
+    <Reference Include="Microsoft.Dynamics.Nav.Types">
+      <HintPath>..\..\Microsoft.Dynamics.Nav.Service.CopilotApi\lib\Microsoft.Dynamics.Nav.Types.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Microsoft.Dynamics.Nav.Service">
+      <HintPath>..\..\Microsoft.Dynamics.Nav.Service.CopilotApi\lib\Microsoft.Dynamics.Nav.Service.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Microsoft.Dynamics.Nav.Service.CopilotApi">
+      <HintPath>..\..\Microsoft.Dynamics.Nav.Server\lib\Microsoft.Dynamics.Nav.Service.CopilotApi.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

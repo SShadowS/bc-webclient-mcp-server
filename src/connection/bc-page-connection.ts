@@ -1,0 +1,363 @@
+/**
+ * BC Page Connection - Connection Per Page Architecture
+ *
+ * Creates a NEW WebSocket connection for each page request, matching the real BC client behavior.
+ * This prevents BC's connection-level form caching from affecting different pages.
+ *
+ * Solution for: BC caches forms at the WebSocket connection level, causing all pages
+ * to return the same cached form data when using a single connection.
+ */
+
+import type { Result } from '../core/result.js';
+import { ok, err } from '../core/result.js';
+import type { BCError } from '../core/errors.js';
+import { ConnectionError, ProtocolError } from '../core/errors.js';
+import type { IBCConnection } from '../core/interfaces.js';
+import type { BCSession, BCInteraction, Handler } from '../types/bc-types.js';
+import { BCRawWebSocketClient } from './clients/BCRawWebSocketClient.js';
+import type { ChildFormInfo } from '../util/loadform-helpers.js';
+import { logger } from '../core/logger.js';
+
+/**
+ * Configuration for BC page connection.
+ */
+export interface BCPageConnectionConfig {
+  readonly baseUrl: string;
+  readonly username: string;
+  readonly password: string;
+  readonly tenantId?: string;
+  readonly timeout?: number;
+}
+
+/**
+ * BC Connection that creates a NEW connection for each page request.
+ * This matches the real BC web client behavior to prevent form caching.
+ */
+export class BCPageConnection implements IBCConnection {
+  private readonly config: BCPageConnectionConfig;
+  private currentClient: BCRawWebSocketClient | null = null;
+  private currentSession: BCSession | undefined;
+  private currentPageId: string | null = null;
+
+  // Track open forms for compatibility (but we'll create new connections anyway)
+  private openForms: Map<string, string> = new Map();
+
+  // Ack sequence tracking and callback ID for correlation
+  private lastAckSequence = -1;
+  private nextCallbackId = 1;
+
+  public constructor(config: BCPageConnectionConfig) {
+    this.config = config;
+  }
+
+  /**
+   * Creates a fresh connection for page requests.
+   * For non-page requests, reuses existing connection.
+   */
+  public async connect(): Promise<Result<BCSession, BCError>> {
+    try {
+      // If we already have a session, return it (for initial connection)
+      if (this.currentSession) {
+        return ok(this.currentSession);
+      }
+
+      // Create initial connection
+      const client = await this.createNewConnection();
+      this.currentClient = client;
+
+      // Build session info (using same pattern as BCSessionConnection)
+      this.currentSession = {
+        sessionId: 'bc-page-session',
+        sessionKey: '',
+        company: '',
+      };
+
+      return ok(this.currentSession as BCSession);
+    } catch (error) {
+      return err(
+        new ConnectionError(
+          `Failed to connect to BC: ${String(error)}`,
+          { baseUrl: this.config.baseUrl, error: String(error) }
+        )
+      );
+    }
+  }
+
+  /**
+   * Creates a new WebSocket connection and authenticates.
+   */
+  private async createNewConnection(): Promise<BCRawWebSocketClient> {
+    logger.error(`[BCPageConnection] 🔌 Creating NEW WebSocket connection...`);
+
+    const client = new BCRawWebSocketClient(
+      { baseUrl: this.config.baseUrl } as any,
+      this.config.username,
+      this.config.password,
+      this.config.tenantId || 'default'
+    );
+
+    // Authenticate via web login
+    await client.authenticateWeb();
+
+    // Connect to SignalR hub
+    await client.connect();
+
+    // Open BC session
+    await client.openSession({
+      clientType: 'WebClient',
+      clientVersion: '26.0.0.0',
+      clientCulture: 'en-US',
+      clientTimeZone: 'UTC',
+    });
+
+    logger.error(`[BCPageConnection] ✓ New connection established`);
+    return client;
+  }
+
+  /**
+   * Sends an interaction and waits for response.
+   * For OpenForm: Creates a NEW connection to prevent caching.
+   */
+  public async invoke(interaction: BCInteraction): Promise<Result<readonly Handler[], BCError>> {
+    try {
+      // Check if this is an OpenForm for a new page
+      const isOpenForm = interaction.interactionName === 'OpenForm';
+      const namedParams = typeof interaction.namedParameters === 'object' && interaction.namedParameters !== null
+        ? interaction.namedParameters as Record<string, unknown>
+        : {};
+      const isNewPage = isOpenForm && namedParams.query;
+
+      if (isNewPage) {
+        // Extract page ID from query string
+        const queryString = String(namedParams.query);
+        const pageMatch = queryString.match(/page=(\d+)/);
+        const pageId = pageMatch ? pageMatch[1] : null;
+
+        logger.error(`[BCPageConnection] 🆕 OpenForm for Page ${pageId} - Creating NEW connection!`);
+
+        // Close existing connection if we have one
+        if (this.currentClient) {
+          try {
+            logger.error(`[BCPageConnection] 🔌 Closing previous connection...`);
+            await this.currentClient.disconnect();
+          } catch (error) {
+            logger.error(`[BCPageConnection] ⚠️ Error closing previous connection: ${String(error)}`);
+          }
+        }
+
+        // Create fresh connection for this page
+        this.currentClient = await this.createNewConnection();
+        this.currentPageId = pageId;
+        this.openForms.clear(); // Clear form tracking for new connection
+
+        logger.error(`[BCPageConnection] ✓ Using fresh connection for Page ${pageId}`);
+      }
+
+      // Ensure we have a connection
+      if (!this.currentClient) {
+        this.currentClient = await this.createNewConnection();
+      }
+
+      // Send the interaction
+      const response = await this.currentClient.invoke({
+        interactionName: interaction.interactionName,
+        namedParameters: interaction.namedParameters || {},
+        controlPath: interaction.controlPath,
+        formId: interaction.formId,
+        openFormIds: this.getAllOpenFormIds(),
+        lastClientAckSequenceNumber: this.lastAckSequence,
+        callbackId: this.nextCallbackId++,
+      } as any);
+
+      // Validate response
+      if (!Array.isArray(response)) {
+        return err(
+          new ProtocolError(
+            'Invalid response from BC: expected array of handlers',
+            {
+              interaction: interaction.interactionName,
+              receivedType: typeof response,
+            }
+          )
+        );
+      }
+
+      // Update ack sequence from response
+      this.updateAckSequenceFromHandlers(response);
+
+      // Track form if this was an OpenForm
+      if (isOpenForm) {
+        const formId = this.extractFormId(response);
+        if (formId && this.currentPageId) {
+          this.openForms.set(this.currentPageId, formId);
+          logger.error(`[BCPageConnection] 📝 Tracking form: Page ${this.currentPageId} → formId ${formId}`);
+        }
+      }
+
+      return ok(response as readonly Handler[]);
+    } catch (error) {
+      const errorMessage = String(error);
+      return err(
+        new ProtocolError(
+          `Interaction failed: ${errorMessage}`,
+          {
+            interaction: interaction.interactionName,
+            error: errorMessage,
+          }
+        )
+      );
+    }
+  }
+
+  /**
+   * Extracts form ID from OpenForm response.
+   */
+  private extractFormId(handlers: readonly Handler[]): string | null {
+    try {
+      const callbackHandler = handlers.find(
+        (h: any) => h.handlerType === 'DN.CallbackResponseProperties'
+      );
+
+      if (callbackHandler) {
+        const params = (callbackHandler as any).parameters?.[0];
+        const completedInteractions = params?.CompletedInteractions;
+        if (Array.isArray(completedInteractions) && completedInteractions.length > 0) {
+          return completedInteractions[0].Result?.value;
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Updates ack sequence number from handler responses.
+   * Scans handlers recursively for sequence numbers.
+   */
+  private updateAckSequenceFromHandlers(handlers: readonly Handler[]): void {
+    let maxSeq = this.lastAckSequence;
+
+    const visit = (obj: any): void => {
+      if (!obj || typeof obj !== 'object') return;
+      for (const [k, v] of Object.entries(obj)) {
+        const key = k.toLowerCase();
+        if (
+          typeof v === 'number' &&
+          (key.includes('sequencenumber') || key.includes('ack') || key.includes('serversequence'))
+        ) {
+          if (v > maxSeq) maxSeq = v;
+        } else if (v && typeof v === 'object') {
+          visit(v);
+        } else if (Array.isArray(v)) {
+          for (const item of v) visit(item);
+        }
+      }
+    };
+
+    for (const h of handlers as any[]) visit(h);
+    if (maxSeq > this.lastAckSequence) {
+      this.lastAckSequence = maxSeq;
+      logger.error(`[BCPageConnection] ↔︎ Updated lastAckSequence=${this.lastAckSequence}`);
+    }
+  }
+
+  /**
+   * Load child forms using the LoadForm interaction.
+   */
+  public async loadChildForms(childForms: ChildFormInfo[]): Promise<Result<readonly Handler[], BCError>> {
+    if (!this.currentClient) {
+      return err(
+        new ConnectionError(
+          'No active connection - call connect() first',
+          { state: 'not_connected' }
+        )
+      );
+    }
+
+    logger.error(`[BCPageConnection] Loading ${childForms.length} child forms...`);
+
+    const allHandlers: Handler[] = [];
+    let callbackId = 0;
+
+    for (const child of childForms) {
+      try {
+        const response = await this.currentClient.invoke({
+          interactionName: 'LoadForm',
+          formId: child.serverId,
+          controlPath: (child as any).controlPath || child.serverId || 'server:',
+          namedParameters: {},
+          openFormIds: this.getAllOpenFormIds(),
+          lastClientAckSequenceNumber: this.lastAckSequence,
+          callbackId: this.nextCallbackId++,
+        } as any);
+
+        if (Array.isArray(response)) {
+          allHandlers.push(...response);
+          logger.error(`[BCPageConnection] ✓ Loaded ${child.serverId}: ${response.length} handlers`);
+        }
+      } catch (error) {
+        // Child form load failures are non-fatal (FactBoxes/Parts require parent record context)
+        logger.error(`[BCPageConnection] ⚠️  Skipped ${child.serverId} (${String(error)}) - continuing without it`);
+      }
+    }
+
+    return ok(allHandlers as readonly Handler[]);
+  }
+
+  // Compatibility methods
+  public isPageOpen(pageId: string): boolean {
+    return this.openForms.has(pageId);
+  }
+
+  public getOpenFormId(pageId: string): string | undefined {
+    return this.openForms.get(pageId);
+  }
+
+  public trackOpenForm(pageId: string, formId: string): void {
+    this.openForms.set(pageId, formId);
+  }
+
+  public getAllOpenFormIds(): string[] {
+    return Array.from(new Set(this.openForms.values()));
+  }
+
+  public getCompanyName(): string | null {
+    return this.currentClient?.getCompanyName() ?? null;
+  }
+
+  public getTenantId(): string {
+    return this.currentClient?.getTenantId() ?? 'default';
+  }
+
+  public isConnected(): boolean {
+    return this.currentClient !== null && this.currentSession !== undefined;
+  }
+
+  public getSession(): BCSession | undefined {
+    return this.currentSession;
+  }
+
+  /**
+   * Closes the connection gracefully.
+   */
+  public async close(): Promise<Result<void, BCError>> {
+    try {
+      if (this.currentClient) {
+        await this.currentClient.disconnect();
+        this.currentClient = null;
+        this.currentSession = undefined;
+        this.currentPageId = null;
+        this.openForms.clear();
+      }
+      return ok(undefined);
+    } catch (error) {
+      return err(
+        new ConnectionError(
+          `Failed to close connection: ${String(error)}`,
+          { error: String(error) }
+        )
+      );
+    }
+  }
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "source": "http",
+    "direction": "request",
+    "timestamp": 1762037006117,
+    "iso": "2025-11-01T22:43:26.117Z",
+    "requestId": "8BDD93CEBF9DB8A6489C2FEDE07617D8",
+    "method": "POST",
+    "url": "http://cronus27/BC/SignIn",
+    "postData": "returnUrl=%2FBC%2F%3Ftenant%3Ddefault%26page%3D22&fromView=true&UserName=sshadows&Password=1234&__RequestVerificationToken=CfDJ8M60JPkSBpNCsKmGsUsodtDifvk4bSwJ_ziYXvateB8tbq6-WWAPnb3LC7C31s-4wYD90NAhdsR97d0TNKuRDDoLWDM1BgvCh41F2NmOWkx59y2Wqo1AgalFWAvR9k7Rc4vR9GGJfEe3OmAYZu-r6Vc",
+    "responseStatus": 200,
+    "responseStatusText": "OK",
+    "responseMimeType": "text/html",
+    "responseBodyText": "\r\n\r\n\r\n<!DOCTYPE html>\r\n<html>\r\n<head>\r\n    <title>Dynamics 365 Business Central</title>\r\n<meta http-equiv=\"X-UA-Compatible\" content=\"IE=Edge\" />\r\n<meta name=\"msapplication-tap-highlight\" content=\"no\" />\r\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />\r\n<meta name=\"format-detection\" content=\"telephone=no\">\r\n\r\n    \r\n<link href=\"/BC/Brand/Images/favicon.ico?t=638976338061441591\" rel=\"shortcut icon\" type=\"image/x-icon\" />\r\n<link href=\"Brand/Images/appletouchicon.png\" rel=\"apple-touch-icon-precomposed\" />\r\n    \r\n    <meta name=\"apple-mobile-web-app-capable\" content=\"yes\" />\r\n    <style>\r\n    @media screen {\r\n        @-ms-viewport {\r\n            width: device-width;\r\n        }\r\n\r\n        @-webkit-viewport {\r\n            width: device-width;\r\n        }\r\n\r\n        @-moz-viewport {\r\n            width: device-width;\r\n        }\r\n\r\n        @-o-viewport {\r\n            width: device-width;\r\n        }\r\n\r\n        @viewport {\r\n            width: device-width;\r\n        }\r\n    }\r\n</style>\r\n\r\n\t\r\n<link rel=\"manifest\" href=\"/BC/onprem.manifest.webmanifest?tenant=default\" />\r\n\r\n    <!-- This allows react devtools to work from within an iframe.\r\n         NOTE: This must be done before react is loaded -->\r\n    <script id=\"boot\" type=\"module\" src=\"/BC/boot/browser/desktop?tenant=default&amp;page=22&amp;signInRedirected=1\"></script>\r\n\t<script id=\"unsupported-browser\" nomodule defer src=\"/BC/js/UnsupportedBrowser.js\" type=\"text/javascript\" data-splashImage-path=\"/Brand/Images/splash_landingpage.png\">\r\n  </script>\r\n\r\n</head>\r\n<body>\r\n    <noscript>\r\n    <div>\r\n        <p>The page is not working properly because the browser prevents scripts from running. Enable scripting in the browser settings, and then refresh the browser.</p>\r\n        <meta http-equiv=\"refresh\" content=\"0;URL=/NotSupported/DisabledJavaScript\"/>\r\n    </div>\r\n</noscript>\r\n    \r\n\r\n\r\n</body>\r\n</html>"
+  },
+  {
+    "source": "http",
+    "direction": "request",
+    "timestamp": 1762037006808,
+    "iso": "2025-11-01T22:43:26.808Z",
+    "requestId": "36508.277",
+    "method": "POST",
+    "url": "http://cronus27/BC/csrf?tenant=default&page=22&signInRedirected=1&startTraceId=131f3ab6adce455a9a86a842b2d6d7fc&tid=undefined&runinframe=1",
+    "postData": null,
+    "responseStatus": 200,
+    "responseStatusText": "OK",
+    "responseMimeType": "application/json",
+    "responseBody": {
+      "csrfToken": "CfDJ8M60JPkSBpNCsKmGsUsodtBCZTGut_nJQTRGojLsQD6lk683BXTowT5Hphcz51l3fE7ooIqNipKP9oyF9xsG_fl_QCLhXNrimnO2sbgUu5v1L18n1psYiTyIO95MjpHYVeJMYDuL_fDeMhFxa5jiwUXsYNdl4OrF8fh0-PRnq0iz_Z6xaVYgZpQ6_QW-iuK1kA"
+    }
+  }
+]

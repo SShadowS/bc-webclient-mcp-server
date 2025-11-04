@@ -1,0 +1,40 @@
+
+> bc-poc@0.1.0 test:mcp:real:client
+> node test-mcp-client-real.mjs
+
+[34m═══════════════════════════════════════════════════════════[0m
+[34m  MCP Server Real BC Integration Tests[0m
+[34m═══════════════════════════════════════════════════════════[0m
+
+Starting MCP server with REAL BC connection...
+[90m(This may take 5-10 seconds to authenticate and connect)[0m
+
+[32m✓ Server started and connected to BC[0m
+
+[34mRunning Real BC Integration Tests[0m
+[36m(These tests use REAL Business Central data)[0m
+
+[33mTesting: Initialize server...[0m[32m ✓ PASS[0m
+[33mTesting: List tools...[0m[32m ✓ PASS[0m
+[33mTesting: Get REAL metadata for Page 21 (Customer Card)...[0m[90m      Caption: "Customer Card"[0m
+[90m      Fields: 137[0m
+[90m      Actions: 174[0m
+[32m ✓ PASS[0m
+[33mTesting: Search for customer pages...[0m[32m ✓ PASS[0m
+[33mTesting: Get REAL metadata for Page 22 (Customer List)...[0m[31m ✗ FAIL[0m
+[31m  Wrong pageId: 21[0m
+[33mTesting: Get REAL metadata for Page 30 (Item Card)...[0m[31m ✗ FAIL[0m
+[31m  Wrong pageId: 21[0m
+[33mTesting: Call invalid tool...[0m[32m ✓ PASS[0m
+[33mTesting: Ping server...[0m[32m ✓ PASS[0m
+
+[34m═══════════════════════════════════════════════════════════[0m
+[34m  Test Results[0m
+[34m═══════════════════════════════════════════════════════════[0m
+
+[32m✓ Passed: 6[0m
+[31m✗ Failed: 2[0m
+
+[36m✨ All tests used REAL Business Central data![0m
+
+Stopping server...

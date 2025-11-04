@@ -1,0 +1,12 @@
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\bin\Release\net6.0\CopilotPatcher.deps.json
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\bin\Release\net6.0\CopilotPatcher.dll
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\bin\Release\net6.0\CopilotPatcher.pdb
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\obj\Release\net6.0\CopilotPatcher.csproj.AssemblyReference.cache
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\obj\Release\net6.0\CopilotPatcher.GeneratedMSBuildEditorConfig.editorconfig
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\obj\Release\net6.0\CopilotPatcher.AssemblyInfoInputs.cache
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\obj\Release\net6.0\CopilotPatcher.AssemblyInfo.cs
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\obj\Release\net6.0\CopilotPatcher.csproj.CoreCompileInputs.cache
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\obj\Release\net6.0\CopilotPatcher.dll
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\obj\Release\net6.0\refint\CopilotPatcher.dll
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\obj\Release\net6.0\CopilotPatcher.pdb
+C:\bc4ubuntu\Decompiled\bc-poc\CopilotPatcher\obj\Release\net6.0\ref\CopilotPatcher.dll

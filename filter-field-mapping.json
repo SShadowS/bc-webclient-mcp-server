@@ -1,0 +1,1278 @@
+{
+  "total": 184,
+  "mapping": {
+    "No.": "18_Customer.1",
+    "Name": "18_Customer.2",
+    "Responsibility Center": "18_Customer.5700.5700",
+    "Location Code": "18_Customer.83.83",
+    "Phone No.": "18_Customer.9",
+    "Contact": "18_Customer.8",
+    "Allow Multiple Posting Groups": "18_Customer.175",
+    "Balance (LCY)": "18_Customer.59",
+    "Balance Due (LCY)": "18_Customer.67",
+    "Sales (LCY)": "18_Customer.62",
+    "Payments (LCY)": "18_Customer.74",
+    "Coupled to Dataverse": "18_Customer.721",
+    "$systemId": "18_Customer.2000000000",
+    "Account Code": "18_Customer.13631",
+    "Address": "18_Customer.5",
+    "Address 2": "18_Customer.6",
+    "Afdeling Kode": "18_Customer.16.16",
+    "Allow Line Disc.": "18_Customer.7001",
+    "Amount": "18_Customer.37",
+    "Application Method": "18_Customer.80",
+    "Balance": "18_Customer.58",
+    "Balance Due": "18_Customer.66",
+    "Base Calendar Code": "18_Customer.7600.7600",
+    "Bill-to Customer No.": "18_Customer.45.45",
+    "Bill-To No. of Blanket Orders": "18_Customer.7183",
+    "Bill-To No. of Credit Memos": "18_Customer.7187",
+    "Bill-To No. of Invoices": "18_Customer.7185",
+    "Bill-To No. of Orders": "18_Customer.7184",
+    "Bill-To No. of Pstd. Cr. Memos": "18_Customer.7191",
+    "Bill-To No. of Pstd. Invoices": "18_Customer.7189",
+    "Bill-To No. of Pstd. Return R.": "18_Customer.7190",
+    "Bill-To No. of Pstd. Shipments": "18_Customer.7188",
+    "Bill-To No. of Quotes": "18_Customer.7182",
+    "Bill-To No. of Return Orders": "18_Customer.7186",
+    "Bill-to No. Of Sales Archived Doc.": "18_Customer.130",
+    "Block Payment Tolerance": "18_Customer.116",
+    "Blocked": "18_Customer.39",
+    "Budgeted Amount": "18_Customer.19",
+    "Cash Flow Payment Terms Code": "18_Customer.840.840",
+    "Chain Name": "18_Customer.18",
+    "City": "18_Customer.7.7",
+    "Collection Method": "18_Customer.36",
+    "Combine Sales Shipments": "18_Customer.87",
+    "Combine Service Shipments": "18_Customer.5930",
+    "Comment": "18_Customer.38",
+    "Contact Graph Id": "18_Customer.9006",
+    "Contact ID": "18_Customer.9005",
+    "Contact Type": "18_Customer.5050",
+    "Contract Gain/Loss Amount": "18_Customer.5902",
+    "Copy Sell-to Addr. to Qte From": "18_Customer.7601",
+    "Country/Region Code": "18_Customer.35.35",
+    "County": "18_Customer.92",
+    "Cr. Memo Amounts": "18_Customer.71",
+    "Cr. Memo Amounts (LCY)": "18_Customer.76",
+    "Credit Amount": "18_Customer.98",
+    "Credit Amount (LCY)": "18_Customer.100",
+    "Credit Limit (LCY)": "18_Customer.20",
+    "Currency Code": "18_Customer.22.22",
+    "Currency Id": "18_Customer.8001.8001",
+    "Customer Disc. Group": "18_Customer.34.34",
+    "Customer Posting Group": "18_Customer.21.21",
+    "Customer Price Group": "18_Customer.23.23",
+    "Customer Since": "18_Customer.52",
+    "Customer Subscription Contracts": "18_Customer.8010",
+    "Debit Amount": "18_Customer.97",
+    "Debit Amount (LCY)": "18_Customer.99",
+    "Debitorgruppe Kode": "18_Customer.17.17",
+    "Default Trans. Type": "18_Customer.4810.4810",
+    "Default Trans. Type - Returns": "18_Customer.4811.4811",
+    "Default Transport Method": "18_Customer.4812.4812",
+    "Disable Search by Name": "18_Customer.160",
+    "Document Sending Profile": "18_Customer.11.11",
+    "Email": "18_Customer.102",
+    "EORI Number": "18_Customer.93",
+    "Exclude from Payment Practices": "18_Customer.134",
+    "Fax No.": "18_Customer.84",
+    "Fin. Charge Memo Amounts (LCY)": "18_Customer.77",
+    "Fin. Charge Terms Code": "18_Customer.28.28",
+    "Finance Charge Memo Amounts": "18_Customer.72",
+    "Format Region": "18_Customer.48.48",
+    "Gen. Bus. Posting Group": "18_Customer.88.88",
+    "GLN": "18_Customer.90",
+    "Home Page": "18_Customer.103",
+    "IC Partner Code": "18_Customer.119.119",
+    "Intrastat Partner Type": "18_Customer.133",
+    "Inv. Amounts (LCY)": "18_Customer.75",
+    "Inv. Discounts (LCY)": "18_Customer.64",
+    "Invoice Amounts": "18_Customer.70",
+    "Invoice Copies": "18_Customer.40",
+    "Invoice Disc. Code": "18_Customer.33.33",
+    "Language Code": "18_Customer.24.24",
+    "Last Date Modified": "18_Customer.54",
+    "Last Modified Date Time": "18_Customer.53",
+    "Last Statement No.": "18_Customer.41",
+    "Mobile Phone No.": "18_Customer.5061",
+    "Name 2": "18_Customer.4",
+    "Net Change": "18_Customer.60",
+    "Net Change (LCY)": "18_Customer.61",
+    "No. of Blanket Orders": "18_Customer.7172",
+    "No. of Credit Memos": "18_Customer.7176",
+    "No. of Invoices": "18_Customer.7174",
+    "No. of Orders": "18_Customer.7173",
+    "No. of Pstd. Credit Memos": "18_Customer.7180",
+    "No. of Pstd. Invoices": "18_Customer.7178",
+    "No. of Pstd. Return Receipts": "18_Customer.7179",
+    "No. of Pstd. Shipments": "18_Customer.7177",
+    "No. of Quotes": "18_Customer.7171",
+    "No. of Return Orders": "18_Customer.7175",
+    "No. of Ship-to Addresses": "18_Customer.7181",
+    "No. Series": "18_Customer.107.107",
+    "Other Amounts": "18_Customer.122",
+    "Other Amounts (LCY)": "18_Customer.123",
+    "Our Account No.": "18_Customer.14",
+    "Outstanding Invoices": "18_Customer.126",
+    "Outstanding Invoices (LCY)": "18_Customer.125",
+    "Outstanding Orders": "18_Customer.78",
+    "Outstanding Orders (LCY)": "18_Customer.113",
+    "Outstanding Serv. Orders (LCY)": "18_Customer.5910",
+    "Outstanding Serv.Invoices(LCY)": "18_Customer.5912",
+    "Partner Type": "18_Customer.132",
+    "Payment Method Code": "18_Customer.47.47",
+    "Payment Method Id": "18_Customer.8004.8004",
+    "Payment Terms Code": "18_Customer.27.27",
+    "Payment Terms Id": "18_Customer.8002.8002",
+    "Payments": "18_Customer.69",
+    "Place of Export": "18_Customer.32",
+    "Pmt. Disc. Tolerance (LCY)": "18_Customer.117",
+    "Pmt. Discounts (LCY)": "18_Customer.65",
+    "Pmt. Tolerance (LCY)": "18_Customer.118",
+    "Post Code": "18_Customer.91.91",
+    "Preferred Bank Account Code": "18_Customer.288.288",
+    "Prepayment %": "18_Customer.124",
+    "Price Calculation Method": "18_Customer.7000",
+    "Prices Including VAT": "18_Customer.82",
+    "Primary Contact No.": "18_Customer.5049.5049",
+    "Print Statements": "18_Customer.42",
+    "Priority": "18_Customer.46",
+    "Privacy Blocked": "18_Customer.150",
+    "Profile Code": "18_Customer.13632.13632",
+    "Profile Code Required": "18_Customer.13633",
+    "Profit (LCY)": "18_Customer.63",
+    "Refunds": "18_Customer.120",
+    "Refunds (LCY)": "18_Customer.121",
+    "Registration No.": "18_Customer.25",
+    "Reminder Amounts": "18_Customer.105",
+    "Reminder Amounts (LCY)": "18_Customer.106",
+    "Reminder Terms Code": "18_Customer.104.104",
+    "Reserve": "18_Customer.115",
+    "Salesperson Code": "18_Customer.29.29",
+    "Search Name": "18_Customer.3",
+    "Sell-to No. Of Sales Archived Doc.": "18_Customer.131",
+    "Serv Shipped Not Invoiced(LCY)": "18_Customer.5911",
+    "Service Zone Code": "18_Customer.5900.5900",
+    "Shipment Method Code": "18_Customer.30.30",
+    "Shipment Method Id": "18_Customer.8003.8003",
+    "Shipped Not Invoiced": "18_Customer.79",
+    "Shipped Not Invoiced (LCY)": "18_Customer.114",
+    "Shipping Advice": "18_Customer.5750",
+    "Shipping Agent Code": "18_Customer.31.31",
+    "Shipping Agent Service Code": "18_Customer.5792.5792",
+    "Shipping Time": "18_Customer.5790",
+    "Ship-to Code": "18_Customer.12.12",
+    "Statistics Group": "18_Customer.26",
+    "Subscriptions": "18_Customer.8011",
+    "SystemCreatedAt": "18_Customer.2000000001",
+    "SystemCreatedBy": "18_Customer.2000000002.2000000002",
+    "SystemModifiedAt": "18_Customer.2000000003",
+    "SystemModifiedBy": "18_Customer.2000000004.2000000004",
+    "Tax Area Code": "18_Customer.108.108",
+    "Tax Area ID": "18_Customer.9003",
+    "Tax Liable": "18_Customer.109",
+    "Telex Answer Back": "18_Customer.85",
+    "Telex No.": "18_Customer.10",
+    "Territory Code": "18_Customer.15.15",
+    "timestamp": "18_Customer.0",
+    "Use GLN in Electronic Documents": "18_Customer.95",
+    "Validate EU VAT Reg. No.": "18_Customer.7602",
+    "VAT Bus. Posting Group": "18_Customer.110.110",
+    "VAT Registration No.": "18_Customer.86",
+    "Afdeling Filter": "18_Customer.56",
+    "Currency Filter": "18_Customer.111",
+    "Date Filter": "18_Customer.55",
+    "Debitorgruppe Filter": "18_Customer.57",
+    "Ship-to Filter": "18_Customer.5903"
+  },
+  "allFields": [
+    {
+      "id": "18_Customer.1",
+      "caption": "No.",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.2",
+      "caption": "Name",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.5700.5700",
+      "caption": "Responsibility Center",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.83.83",
+      "caption": "Location Code",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.9",
+      "caption": "Phone No.",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.8",
+      "caption": "Contact",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.175",
+      "caption": "Allow Multiple Posting Groups",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.59",
+      "caption": "Balance (LCY)",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.67",
+      "caption": "Balance Due (LCY)",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.62",
+      "caption": "Sales (LCY)",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.74",
+      "caption": "Payments (LCY)",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.721",
+      "caption": "Coupled to Dataverse",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.2000000000",
+      "caption": "$systemId",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.13631",
+      "caption": "Account Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5",
+      "caption": "Address",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.6",
+      "caption": "Address 2",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.16.16",
+      "caption": "Afdeling Kode",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7001",
+      "caption": "Allow Line Disc.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.37",
+      "caption": "Amount",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.80",
+      "caption": "Application Method",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.58",
+      "caption": "Balance",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.66",
+      "caption": "Balance Due",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7600.7600",
+      "caption": "Base Calendar Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.45.45",
+      "caption": "Bill-to Customer No.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7183",
+      "caption": "Bill-To No. of Blanket Orders",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7187",
+      "caption": "Bill-To No. of Credit Memos",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7185",
+      "caption": "Bill-To No. of Invoices",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7184",
+      "caption": "Bill-To No. of Orders",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7191",
+      "caption": "Bill-To No. of Pstd. Cr. Memos",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7189",
+      "caption": "Bill-To No. of Pstd. Invoices",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7190",
+      "caption": "Bill-To No. of Pstd. Return R.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7188",
+      "caption": "Bill-To No. of Pstd. Shipments",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7182",
+      "caption": "Bill-To No. of Quotes",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7186",
+      "caption": "Bill-To No. of Return Orders",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.130",
+      "caption": "Bill-to No. Of Sales Archived Doc.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.116",
+      "caption": "Block Payment Tolerance",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.39",
+      "caption": "Blocked",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.19",
+      "caption": "Budgeted Amount",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.840.840",
+      "caption": "Cash Flow Payment Terms Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.18",
+      "caption": "Chain Name",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7.7",
+      "caption": "City",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.36",
+      "caption": "Collection Method",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.87",
+      "caption": "Combine Sales Shipments",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5930",
+      "caption": "Combine Service Shipments",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.38",
+      "caption": "Comment",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.9006",
+      "caption": "Contact Graph Id",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.9005",
+      "caption": "Contact ID",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5050",
+      "caption": "Contact Type",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5902",
+      "caption": "Contract Gain/Loss Amount",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7601",
+      "caption": "Copy Sell-to Addr. to Qte From",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.35.35",
+      "caption": "Country/Region Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.92",
+      "caption": "County",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.71",
+      "caption": "Cr. Memo Amounts",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.76",
+      "caption": "Cr. Memo Amounts (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.98",
+      "caption": "Credit Amount",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.100",
+      "caption": "Credit Amount (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.20",
+      "caption": "Credit Limit (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.22.22",
+      "caption": "Currency Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.8001.8001",
+      "caption": "Currency Id",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.34.34",
+      "caption": "Customer Disc. Group",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.21.21",
+      "caption": "Customer Posting Group",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.23.23",
+      "caption": "Customer Price Group",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.52",
+      "caption": "Customer Since",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.8010",
+      "caption": "Customer Subscription Contracts",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.97",
+      "caption": "Debit Amount",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.99",
+      "caption": "Debit Amount (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.17.17",
+      "caption": "Debitorgruppe Kode",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.4810.4810",
+      "caption": "Default Trans. Type",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.4811.4811",
+      "caption": "Default Trans. Type - Returns",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.4812.4812",
+      "caption": "Default Transport Method",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.160",
+      "caption": "Disable Search by Name",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.11.11",
+      "caption": "Document Sending Profile",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.102",
+      "caption": "Email",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.93",
+      "caption": "EORI Number",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.134",
+      "caption": "Exclude from Payment Practices",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.84",
+      "caption": "Fax No.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.77",
+      "caption": "Fin. Charge Memo Amounts (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.28.28",
+      "caption": "Fin. Charge Terms Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.72",
+      "caption": "Finance Charge Memo Amounts",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.48.48",
+      "caption": "Format Region",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.88.88",
+      "caption": "Gen. Bus. Posting Group",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.90",
+      "caption": "GLN",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.103",
+      "caption": "Home Page",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.119.119",
+      "caption": "IC Partner Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.133",
+      "caption": "Intrastat Partner Type",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.75",
+      "caption": "Inv. Amounts (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.64",
+      "caption": "Inv. Discounts (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.70",
+      "caption": "Invoice Amounts",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.40",
+      "caption": "Invoice Copies",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.33.33",
+      "caption": "Invoice Disc. Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.24.24",
+      "caption": "Language Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.54",
+      "caption": "Last Date Modified",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.53",
+      "caption": "Last Modified Date Time",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.41",
+      "caption": "Last Statement No.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5061",
+      "caption": "Mobile Phone No.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.4",
+      "caption": "Name 2",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.60",
+      "caption": "Net Change",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.61",
+      "caption": "Net Change (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7172",
+      "caption": "No. of Blanket Orders",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7176",
+      "caption": "No. of Credit Memos",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7174",
+      "caption": "No. of Invoices",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7173",
+      "caption": "No. of Orders",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7180",
+      "caption": "No. of Pstd. Credit Memos",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7178",
+      "caption": "No. of Pstd. Invoices",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7179",
+      "caption": "No. of Pstd. Return Receipts",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7177",
+      "caption": "No. of Pstd. Shipments",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7171",
+      "caption": "No. of Quotes",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7175",
+      "caption": "No. of Return Orders",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7181",
+      "caption": "No. of Ship-to Addresses",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.107.107",
+      "caption": "No. Series",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.122",
+      "caption": "Other Amounts",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.123",
+      "caption": "Other Amounts (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.14",
+      "caption": "Our Account No.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.126",
+      "caption": "Outstanding Invoices",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.125",
+      "caption": "Outstanding Invoices (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.78",
+      "caption": "Outstanding Orders",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.113",
+      "caption": "Outstanding Orders (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5910",
+      "caption": "Outstanding Serv. Orders (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5912",
+      "caption": "Outstanding Serv.Invoices(LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.132",
+      "caption": "Partner Type",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.47.47",
+      "caption": "Payment Method Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.8004.8004",
+      "caption": "Payment Method Id",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.27.27",
+      "caption": "Payment Terms Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.8002.8002",
+      "caption": "Payment Terms Id",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.69",
+      "caption": "Payments",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.32",
+      "caption": "Place of Export",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.117",
+      "caption": "Pmt. Disc. Tolerance (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.65",
+      "caption": "Pmt. Discounts (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.118",
+      "caption": "Pmt. Tolerance (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.91.91",
+      "caption": "Post Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.288.288",
+      "caption": "Preferred Bank Account Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.124",
+      "caption": "Prepayment %",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7000",
+      "caption": "Price Calculation Method",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.82",
+      "caption": "Prices Including VAT",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5049.5049",
+      "caption": "Primary Contact No.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.42",
+      "caption": "Print Statements",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.46",
+      "caption": "Priority",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.150",
+      "caption": "Privacy Blocked",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.13632.13632",
+      "caption": "Profile Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.13633",
+      "caption": "Profile Code Required",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.63",
+      "caption": "Profit (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.120",
+      "caption": "Refunds",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.121",
+      "caption": "Refunds (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.25",
+      "caption": "Registration No.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.105",
+      "caption": "Reminder Amounts",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.106",
+      "caption": "Reminder Amounts (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.104.104",
+      "caption": "Reminder Terms Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.115",
+      "caption": "Reserve",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.29.29",
+      "caption": "Salesperson Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.3",
+      "caption": "Search Name",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.131",
+      "caption": "Sell-to No. Of Sales Archived Doc.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5911",
+      "caption": "Serv Shipped Not Invoiced(LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5900.5900",
+      "caption": "Service Zone Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.30.30",
+      "caption": "Shipment Method Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.8003.8003",
+      "caption": "Shipment Method Id",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.79",
+      "caption": "Shipped Not Invoiced",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.114",
+      "caption": "Shipped Not Invoiced (LCY)",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5750",
+      "caption": "Shipping Advice",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.31.31",
+      "caption": "Shipping Agent Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5792.5792",
+      "caption": "Shipping Agent Service Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.5790",
+      "caption": "Shipping Time",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.12.12",
+      "caption": "Ship-to Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.26",
+      "caption": "Statistics Group",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.8011",
+      "caption": "Subscriptions",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.2000000001",
+      "caption": "SystemCreatedAt",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.2000000002.2000000002",
+      "caption": "SystemCreatedBy",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.2000000003",
+      "caption": "SystemModifiedAt",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.2000000004.2000000004",
+      "caption": "SystemModifiedBy",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.108.108",
+      "caption": "Tax Area Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.9003",
+      "caption": "Tax Area ID",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.109",
+      "caption": "Tax Liable",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.85",
+      "caption": "Telex Answer Back",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.10",
+      "caption": "Telex No.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.15.15",
+      "caption": "Territory Code",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.0",
+      "caption": "timestamp",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.95",
+      "caption": "Use GLN in Electronic Documents",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.7602",
+      "caption": "Validate EU VAT Reg. No.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.110.110",
+      "caption": "VAT Bus. Posting Group",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.86",
+      "caption": "VAT Registration No.",
+      "scope": "filter",
+      "submenu": "All"
+    },
+    {
+      "id": "18_Customer.56",
+      "caption": "Afdeling Filter",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.111",
+      "caption": "Currency Filter",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.55",
+      "caption": "Date Filter",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.57",
+      "caption": "Debitorgruppe Filter",
+      "scope": "filter"
+    },
+    {
+      "id": "18_Customer.5903",
+      "caption": "Ship-to Filter",
+      "scope": "filter"
+    }
+  ]
+}

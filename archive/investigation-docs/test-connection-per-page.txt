@@ -1,0 +1,343 @@
+
+> bc-poc@0.1.0 test:mcp:real:client
+> node test-mcp-client-real.mjs
+
+[34m═══════════════════════════════════════════════════════════[0m
+[34m  MCP Server Real BC Integration Tests[0m
+[34m═══════════════════════════════════════════════════════════[0m
+
+Starting MCP server with REAL BC connection...
+[90m(This may take 5-10 seconds to authenticate and connect)[0m
+
+═══════════════════════════════════════════════════════════
+  Business Central MCP Server - Real BC Integration
+  Using REAL BC Server Connection
+═══════════════════════════════════════════════════════════
+
+Step 1: Creating BC page connection...
+  Using connection-per-page architecture to prevent BC caching
+  URL: http://Cronus27/BC/
+  User: default\sshadows
+
+Step 2: Connecting to BC server...
+  (This may take a few seconds...)
+[BCPageConnection] 🔌 Creating NEW WebSocket connection...
+[BCPageConnection] ✓ New connection established
+✓ Connected to BC server successfully
+
+Step 3: Creating MCP server...
+  Registering tools...
+[DEBUG] Tool registered {"toolName":"get_page_metadata","description":"Retrieves metadata for a Business Central page including available fields, actions, and page structure. Use this to understand what data and operations are available on a page before reading or modifying data."}
+[DEBUG] Tool registered {"toolName":"search_pages","description":"Searches for Business Central pages by name or type. Use this to discover available pages before getting their metadata. Returns page IDs that can be used with get_page_metadata."}
+[DEBUG] Tool registered {"toolName":"read_page_data","description":"Reads data records from a Business Central page. Use get_page_metadata first to understand available fields. Supports filtering records by field values."}
+[DEBUG] Tool registered {"toolName":"write_page_data","description":"Creates or updates a record on a Business Central page. Use get_page_metadata first to understand required fields and field types. Provide recordId for updates, omit for creates."}
+  ✓ Registered 4 tools
+
+Step 4: Initializing server...
+[INFO] Initializing MCP server {"tools":4,"resources":0}
+[INFO] MCP server initialized successfully
+✓ Server initialized
+
+Step 5: Starting stdio transport...
+[INFO] Starting stdio transport
+[INFO] Stdio transport started
+✓ Stdio transport started
+
+Step 6: Starting MCP server...
+[INFO] Starting MCP server {"tools":4,"resources":0}
+[INFO] MCP server started successfully
+✓ MCP server started
+
+═══════════════════════════════════════════════════════════
+  Server ready - Connected to REAL BC server!
+  Listening on stdin, responding on stdout
+═══════════════════════════════════════════════════════════
+
+Available tools:
+  - get_page_metadata (pageId) - ✓ REAL BC DATA
+  - search_pages (query, limit?, type?)
+  - read_page_data (pageId, filters?) - Not implemented
+  - write_page_data (pageId, fields, recordId?) - Not implemented
+
+Test with real BC pages:
+  Page 21 - Customer Card
+  Page 22 - Customer List
+  Page 30 - Item Card
+  Page 42 - Sales Order
+
+Example requests:
+  {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"Test","version":"1.0.0"}}}
+  {"jsonrpc":"2.0","id":2,"method":"tools/list"}
+  {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_page_metadata","arguments":{"pageId":"21"}}}
+  {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"search_pages","arguments":{"query":"customer","limit":5}}}
+
+[32m✓ Server started and connected to BC[0m
+
+[34mRunning Real BC Integration Tests[0m
+[36m(These tests use REAL Business Central data)[0m
+
+[33mTesting: Initialize server...[0m[DEBUG] Routing request {"method":"initialize","id":1}
+[INFO] Handling initialize request {"clientName":"Real BC Test Client","clientVersion":"1.0.0","protocolVersion":"2024-11-05"}
+[DEBUG] Initialize response {"protocolVersion":"2024-11-05","serverName":"bc-mcp-server","serverVersion":"1.0.0"}
+[32m ✓ PASS[0m
+[33mTesting: List tools...[0m[DEBUG] Routing request {"method":"tools/list","id":2}
+[DEBUG] Handling tools/list request
+[DEBUG] Returning tools list {"count":4}
+[32m ✓ PASS[0m
+[33mTesting: Get REAL metadata for Page 21 (Customer Card)...[0m[DEBUG] Routing request {"method":"tools/call","id":3}
+[INFO] Handling tools/call request {"toolName":"get_page_metadata"}
+[GetPageMetadataTool] Requesting metadata for BC Page: "21"
+[GetPageMetadataTool] 🆕 Opening new BC Page: "21" (using LoadForm solution)
+[GetPageMetadataTool] 📝 OpenForm query string: tenant=default&company=CRONUS%20Danmark%20A%2FS&page=21&runinframe=1&dc=1761986880191&startTraceId=12703bfd-a6cb-48e7-8499-1cf2787276cd&bookmark=
+[BCPageConnection] 🆕 OpenForm for Page 21 - Creating NEW connection!
+[BCPageConnection] 🔌 Closing previous connection...
+[BCPageConnection] 🔌 Creating NEW WebSocket connection...
+[BCPageConnection] ✓ New connection established
+[BCPageConnection] ✓ Using fresh connection for Page 21
+[BCPageConnection] 📝 Tracking form: Page 21 → formId 42B
+[GetPageMetadataTool] ✓ OpenForm created shell for Page "21"
+[GetPageMetadataTool] ℹ️  Response not compressed, processing raw handlers
+[LoadFormHelpers] Extracted ServerIds: shell=42B, children=11
+[GetPageMetadataTool] ✓ Extracted ServerIds: shell=42B, children=11
+[LoadFormHelpers] Will LoadForm: 420 (Customer Picture)
+[LoadFormHelpers] Skip LoadForm: 421 (Documents) - no DelayedControls or ExpressionProperties
+[LoadFormHelpers] Will LoadForm: 425 (Sell-to Customer Sales History)
+[LoadFormHelpers] Skip LoadForm: 426 (Customer Statistics) - no DelayedControls or ExpressionProperties
+[LoadFormHelpers] Skip LoadForm: 427 (Dimensions) - no DelayedControls or ExpressionProperties
+[LoadFormHelpers] Will LoadForm: 429 (Links)
+[LoadFormHelpers] Will LoadForm: 42A (Notes)
+[GetPageMetadataTool] ✓ Filtered forms to load: 4/11
+[BCPageConnection] Loading 4 child forms...
+[BCPageConnection] ✓ Loaded 420: 3 handlers
+[BCPageConnection] ✓ Loaded 425: 3 handlers
+[BCPageConnection] ✓ Loaded 429: 3 handlers
+[BCPageConnection] ✓ Loaded 42A: 3 handlers
+[GetPageMetadataTool] ✓ Loaded 4 child forms, total handlers: 16
+[PageMetadataParser] ═══ Received 16 handlers ═══
+[PageMetadataParser]   Handler 0: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 1: DN.SessionInitHandler
+[PageMetadataParser]   Handler 2: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 3: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 4: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 5: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 6: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 7: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 8: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 9: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 10: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 11: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 12: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 13: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 14: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 15: DN.LogicalClientChangeHandler
+[HandlerParser] Extracted formId from callback: 42B
+[PageMetadataParser] Extracted formId: 42B
+[HandlerParser] Found 5 FormToShow handlers
+[HandlerParser] FormId for filtering: 42B
+[HandlerParser]   Handler 0: ServerId="42B", Caption="Customer Card"
+[HandlerParser]   Handler 1: ServerId="42B", Caption="Customer Card"
+[HandlerParser]   Handler 2: ServerId="42B", Caption="Customer Card"
+[HandlerParser]   Handler 3: ServerId="42B", Caption="Customer Card"
+[HandlerParser]   Handler 4: ServerId="42B", Caption="Customer Card"
+[HandlerParser]   Checking ServerId="42B" === formId="42B": true
+[HandlerParser] ✓ Matched handler: ServerId="42B", Caption="Customer Card"
+[PageMetadataParser] Selected form - ServerId: 42B Caption: Customer Card
+[GetPageMetadataTool] ✓ Parsed metadata for Page "21": caption="Customer Card", pageId="21"
+[DEBUG] Tool executed successfully {"toolName":"get_page_metadata"}
+[90m      Caption: "Customer Card"[0m
+[90m      Fields: 137[0m
+[90m      Actions: 174[0m
+[32m ✓ PASS[0m
+[33mTesting: Search for customer pages...[0m[DEBUG] Routing request {"method":"tools/call","id":4}
+[INFO] Handling tools/call request {"toolName":"search_pages"}
+[DEBUG] Tool executed successfully {"toolName":"search_pages"}
+[32m ✓ PASS[0m
+[33mTesting: Get REAL metadata for Page 22 (Customer List)...[0m[DEBUG] Routing request {"method":"tools/call","id":5}
+[INFO] Handling tools/call request {"toolName":"get_page_metadata"}
+[GetPageMetadataTool] Requesting metadata for BC Page: "22"
+[GetPageMetadataTool] 🧹 Closing ALL 1 open forms to prevent BC caching
+[GetPageMetadataTool]   ✓ Closed form 42B
+[GetPageMetadataTool] 🆕 Opening new BC Page: "22" (using LoadForm solution)
+[GetPageMetadataTool] 📝 OpenForm query string: tenant=default&company=CRONUS%20Danmark%20A%2FS&page=22&runinframe=1&dc=1761986880384&startTraceId=fd6dad5f-5588-4695-81e7-f800881ade50&bookmark=
+[BCPageConnection] 🆕 OpenForm for Page 22 - Creating NEW connection!
+[BCPageConnection] 🔌 Closing previous connection...
+[BCPageConnection] 🔌 Creating NEW WebSocket connection...
+[BCPageConnection] ✓ New connection established
+[BCPageConnection] ✓ Using fresh connection for Page 22
+[BCPageConnection] 📝 Tracking form: Page 22 → formId 443
+[GetPageMetadataTool] ✓ OpenForm created shell for Page "22"
+[GetPageMetadataTool] ℹ️  Response not compressed, processing raw handlers
+[LoadFormHelpers] Extracted ServerIds: shell=443, children=6
+[GetPageMetadataTool] ✓ Extracted ServerIds: shell=443, children=6
+[LoadFormHelpers] Will LoadForm: 43E (Documents)
+[LoadFormHelpers] Will LoadForm: 43F (Sell-to Customer Sales History)
+[LoadFormHelpers] Skip LoadForm: 440 (Customer Statistics) - no DelayedControls or ExpressionProperties
+[LoadFormHelpers] Will LoadForm: 441 (Links)
+[LoadFormHelpers] Will LoadForm: 442 (Notes)
+[GetPageMetadataTool] ✓ Filtered forms to load: 4/6
+[BCPageConnection] Loading 4 child forms...
+[BCPageConnection] ✓ Loaded 43E: 3 handlers
+[BCPageConnection] ✓ Loaded 43F: 3 handlers
+[BCPageConnection] ✓ Loaded 441: 3 handlers
+[BCPageConnection] ✓ Loaded 442: 3 handlers
+[GetPageMetadataTool] ✓ Loaded 4 child forms, total handlers: 16
+[PageMetadataParser] ═══ Received 16 handlers ═══
+[PageMetadataParser]   Handler 0: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 1: DN.SessionInitHandler
+[PageMetadataParser]   Handler 2: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 3: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 4: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 5: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 6: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 7: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 8: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 9: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 10: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 11: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 12: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 13: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 14: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 15: DN.LogicalClientChangeHandler
+[HandlerParser] Extracted formId from callback: 443
+[PageMetadataParser] Extracted formId: 443
+[HandlerParser] Found 5 FormToShow handlers
+[HandlerParser] FormId for filtering: 443
+[HandlerParser]   Handler 0: ServerId="443", Caption="Customers"
+[HandlerParser]   Handler 1: ServerId="443", Caption="Customers"
+[HandlerParser]   Handler 2: ServerId="443", Caption="Customers"
+[HandlerParser]   Handler 3: ServerId="443", Caption="Customers"
+[HandlerParser]   Handler 4: ServerId="443", Caption="Customers"
+[HandlerParser]   Checking ServerId="443" === formId="443": true
+[HandlerParser] ✓ Matched handler: ServerId="443", Caption="Customers"
+[PageMetadataParser] Selected form - ServerId: 443 Caption: Customers
+[GetPageMetadataTool] ✓ Parsed metadata for Page "22": caption="Customers", pageId="22"
+[DEBUG] Tool executed successfully {"toolName":"get_page_metadata"}
+[90m      Caption: "Customers"[0m
+[90m      Fields: 18[0m
+[32m ✓ PASS[0m
+[33mTesting: Get REAL metadata for Page 30 (Item Card)...[0m[DEBUG] Routing request {"method":"tools/call","id":6}
+[INFO] Handling tools/call request {"toolName":"get_page_metadata"}
+[GetPageMetadataTool] Requesting metadata for BC Page: "30"
+[GetPageMetadataTool] 🧹 Closing ALL 1 open forms to prevent BC caching
+[GetPageMetadataTool]   ✓ Closed form 443
+[GetPageMetadataTool] 🆕 Opening new BC Page: "30" (using LoadForm solution)
+[GetPageMetadataTool] 📝 OpenForm query string: tenant=default&company=CRONUS%20Danmark%20A%2FS&page=30&runinframe=1&dc=1761986880568&startTraceId=89a968e1-25ee-4a24-a72e-45b94fec5bc1&bookmark=
+[BCPageConnection] 🆕 OpenForm for Page 30 - Creating NEW connection!
+[BCPageConnection] 🔌 Closing previous connection...
+[BCPageConnection] 🔌 Creating NEW WebSocket connection...
+[BCPageConnection] ✓ New connection established
+[BCPageConnection] ✓ Using fresh connection for Page 30
+[BCPageConnection] 📝 Tracking form: Page 30 → formId 460
+[GetPageMetadataTool] ✓ OpenForm created shell for Page "30"
+[GetPageMetadataTool] ℹ️  Response not compressed, processing raw handlers
+[LoadFormHelpers] Extracted ServerIds: shell=460, children=11
+[GetPageMetadataTool] ✓ Extracted ServerIds: shell=460, children=11
+[LoadFormHelpers] Skip LoadForm: 455 (Item Picture) - no DelayedControls or ExpressionProperties
+[LoadFormHelpers] Skip LoadForm: 456 (Documents) - no DelayedControls or ExpressionProperties
+[LoadFormHelpers] Will LoadForm: 457 (Entity Text)
+[LoadFormHelpers] Skip LoadForm: 458 (Item Attributes) - no DelayedControls or ExpressionProperties
+[LoadFormHelpers] Will LoadForm: 45A (Forecast)
+[LoadFormHelpers] Skip LoadForm: 45C (Subscription Packages Lines) - no DelayedControls or ExpressionProperties
+[LoadFormHelpers] Will LoadForm: 45D (Links)
+[LoadFormHelpers] Will LoadForm: 45E (Notes)
+[GetPageMetadataTool] ✓ Filtered forms to load: 4/11
+[BCPageConnection] Loading 4 child forms...
+[BCPageConnection] ✓ Loaded 457: 3 handlers
+[BCPageConnection] ✓ Loaded 45A: 3 handlers
+[BCPageConnection] ✓ Loaded 45D: 3 handlers
+[BCPageConnection] ✓ Loaded 45E: 3 handlers
+[GetPageMetadataTool] ✓ Loaded 4 child forms, total handlers: 16
+[PageMetadataParser] ═══ Received 16 handlers ═══
+[PageMetadataParser]   Handler 0: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 1: DN.SessionInitHandler
+[PageMetadataParser]   Handler 2: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 3: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 4: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 5: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 6: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 7: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 8: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 9: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 10: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 11: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 12: DN.LogicalClientChangeHandler
+[PageMetadataParser]   Handler 13: DN.CallbackResponseProperties
+[PageMetadataParser]   Handler 14: DN.LogicalClientEventRaisingHandler
+[PageMetadataParser]     Event: FormToShow
+[PageMetadataParser]   Handler 15: DN.LogicalClientChangeHandler
+[HandlerParser] Extracted formId from callback: 460
+[PageMetadataParser] Extracted formId: 460
+[HandlerParser] Found 5 FormToShow handlers
+[HandlerParser] FormId for filtering: 460
+[HandlerParser]   Handler 0: ServerId="460", Caption="Item Card"
+[HandlerParser]   Handler 1: ServerId="460", Caption="Item Card"
+[HandlerParser]   Handler 2: ServerId="460", Caption="Item Card"
+[HandlerParser]   Handler 3: ServerId="460", Caption="Item Card"
+[HandlerParser]   Handler 4: ServerId="460", Caption="Item Card"
+[HandlerParser]   Checking ServerId="460" === formId="460": true
+[HandlerParser] ✓ Matched handler: ServerId="460", Caption="Item Card"
+[PageMetadataParser] Selected form - ServerId: 460 Caption: Item Card
+[GetPageMetadataTool] ✓ Parsed metadata for Page "30": caption="Item Card", pageId="30"
+[DEBUG] Tool executed successfully {"toolName":"get_page_metadata"}
+[90m      Caption: "Item Card"[0m
+[90m      Fields: 132[0m
+[32m ✓ PASS[0m
+[33mTesting: Call invalid tool...[0m[DEBUG] Routing request {"method":"tools/call","id":7}
+[INFO] Handling tools/call request {"toolName":"invalid_tool"}
+[32m ✓ PASS[0m
+[33mTesting: Ping server...[0m[DEBUG] Routing request {"method":"ping","id":8}
+[32m ✓ PASS[0m
+
+[34m═══════════════════════════════════════════════════════════[0m
+[34m  Test Results[0m
+[34m═══════════════════════════════════════════════════════════[0m
+
+[32m✓ Passed: 8[0m
+
+[36m✨ All tests used REAL Business Central data![0m
+
+Stopping server...
+[INFO] Stdin closed, stopping transport
+[INFO] Stopping stdio transport
+[INFO] Stdio transport stopped
+node:events:496
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: EPIPE: broken pipe, write
+    at Socket._write (node:internal/net:63:18)
+    at writeOrBuffer (node:internal/streams/writable:572:12)
+    at _write (node:internal/streams/writable:501:10)
+    at Writable.write (node:internal/streams/writable:510:10)
+    at console.value (node:internal/console/constructor:298:16)
+    at console.log (node:internal/console/constructor:384:26)
+    at WebSocket.<anonymous> (C:\bc4ubuntu\Decompiled\bc-poc\src\BCRawWebSocketClient.ts:200:19)
+    at WebSocket.emit (node:events:518:28)
+    at Receiver.receiverOnMessage (C:\bc4ubuntu\Decompiled\bc-poc\node_modules\ws\lib\websocket.js:1220:20)
+    at Receiver.emit (node:events:518:28)
+Emitted 'error' event on Socket instance at:
+    at Socket.onerror (node:internal/streams/readable:1028:14)
+    at Socket.emit (node:events:518:28)
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  errno: -4047,
+  syscall: 'write',
+  code: 'EPIPE'
+}
+
+Node.js v22.14.0

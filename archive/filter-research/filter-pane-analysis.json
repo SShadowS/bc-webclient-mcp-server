@@ -1,0 +1,196 @@
+{
+  "summary": {
+    "totalMessages": 37,
+    "sentInteractions": 9,
+    "interactionTypes": [
+      "InvokeSessionAction",
+      "LoadForm",
+      "Filter",
+      "SaveValue"
+    ]
+  },
+  "interactionsByType": {
+    "InvokeSessionAction": [
+      {
+        "timestamp": "2025-11-01T23:47:54.474Z",
+        "messageMethod": "Invoke",
+        "interactionName": "InvokeSessionAction",
+        "skipExtendingSessionLifetime": false,
+        "namedParameters": "{\"systemAction\":670}",
+        "callbackId": "1"
+      },
+      {
+        "timestamp": "2025-11-01T23:47:54.474Z",
+        "messageMethod": "Invoke",
+        "interactionName": "InvokeSessionAction",
+        "skipExtendingSessionLifetime": false,
+        "namedParameters": "{\"systemAction\":640,\"data\":{\"resource\":\"https://api.businesscentral.dynamics.com\",\"scenario\":\"FTWSE\",\"operationId\":\"6b4b0d92-d1a5-4045-b32e-2cf7849cf1a6\",\"Host type\":\"Browser\",\"Device category\":\"Desktop\",\"ApplicationId\":\"FIN\",\"SpaInstanceId\":\"mhgxn3qj\",\"PlatformVersion\":\"27.0.41689.0\",\"EnvironmentType\":1,\"CompanyName\":\"CRONUS Danmark A/S\",\"Session Key\":\"sr63897641273920781282\",\"URL pageId\":\"22\",\"BusyPhase\":\"NotBusy\",\"Hardware\":{\"cores\":32,\"downlink\":1.5,\"rtt\":100},\"Multitask Window ID\":\"mhgxn3uz\",\"Multitask Is Child\":false,\"Multitask Is Host\":false}}",
+        "callbackId": "2"
+      }
+    ],
+    "LoadForm": [
+      {
+        "timestamp": "2025-11-01T23:47:54.490Z",
+        "messageMethod": "Invoke",
+        "interactionName": "LoadForm",
+        "skipExtendingSessionLifetime": false,
+        "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+        "controlPath": "server:",
+        "formId": "67C",
+        "callbackId": "3"
+      },
+      {
+        "timestamp": "2025-11-01T23:47:54.534Z",
+        "messageMethod": "Invoke",
+        "interactionName": "LoadForm",
+        "skipExtendingSessionLifetime": false,
+        "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+        "controlPath": "server:",
+        "formId": "67D",
+        "callbackId": "4"
+      },
+      {
+        "timestamp": "2025-11-01T23:47:54.572Z",
+        "messageMethod": "Invoke",
+        "interactionName": "LoadForm",
+        "skipExtendingSessionLifetime": false,
+        "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+        "controlPath": "server:",
+        "formId": "67B",
+        "callbackId": "5"
+      },
+      {
+        "timestamp": "2025-11-01T23:47:54.631Z",
+        "messageMethod": "Invoke",
+        "interactionName": "LoadForm",
+        "skipExtendingSessionLifetime": false,
+        "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+        "controlPath": "server:",
+        "formId": "67E",
+        "callbackId": "6"
+      },
+      {
+        "timestamp": "2025-11-01T23:47:54.669Z",
+        "messageMethod": "Invoke",
+        "interactionName": "LoadForm",
+        "skipExtendingSessionLifetime": false,
+        "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+        "controlPath": "server:",
+        "formId": "67F",
+        "callbackId": "7"
+      }
+    ],
+    "Filter": [
+      {
+        "timestamp": "2025-11-01T23:47:59.114Z",
+        "messageMethod": "Invoke",
+        "interactionName": "Filter",
+        "skipExtendingSessionLifetime": false,
+        "namedParameters": "{\"filterOperation\":1,\"filterColumnId\":\"18_Customer.2\"}",
+        "controlPath": "server:c[2]",
+        "formId": "680",
+        "callbackId": "8"
+      }
+    ],
+    "SaveValue": [
+      {
+        "timestamp": "2025-11-01T23:48:02.339Z",
+        "messageMethod": "Invoke",
+        "interactionName": "SaveValue",
+        "skipExtendingSessionLifetime": false,
+        "namedParameters": "{\"key\":null,\"newValue\":\"Adatum\",\"alwaysCommitChange\":true,\"ignoreForSavingState\":true,\"notifyBusy\":1,\"telemetry\":{\"Control name\":\"Name\",\"QueuedTime\":\"2025-11-01T23:48:02.330Z\"}}",
+        "controlPath": "server:c[2]/c[2]/c[1]",
+        "formId": "680",
+        "callbackId": "9"
+      }
+    ]
+  },
+  "allSentInteractions": [
+    {
+      "timestamp": "2025-11-01T23:47:54.474Z",
+      "messageMethod": "Invoke",
+      "interactionName": "InvokeSessionAction",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"systemAction\":670}",
+      "callbackId": "1"
+    },
+    {
+      "timestamp": "2025-11-01T23:47:54.474Z",
+      "messageMethod": "Invoke",
+      "interactionName": "InvokeSessionAction",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"systemAction\":640,\"data\":{\"resource\":\"https://api.businesscentral.dynamics.com\",\"scenario\":\"FTWSE\",\"operationId\":\"6b4b0d92-d1a5-4045-b32e-2cf7849cf1a6\",\"Host type\":\"Browser\",\"Device category\":\"Desktop\",\"ApplicationId\":\"FIN\",\"SpaInstanceId\":\"mhgxn3qj\",\"PlatformVersion\":\"27.0.41689.0\",\"EnvironmentType\":1,\"CompanyName\":\"CRONUS Danmark A/S\",\"Session Key\":\"sr63897641273920781282\",\"URL pageId\":\"22\",\"BusyPhase\":\"NotBusy\",\"Hardware\":{\"cores\":32,\"downlink\":1.5,\"rtt\":100},\"Multitask Window ID\":\"mhgxn3uz\",\"Multitask Is Child\":false,\"Multitask Is Host\":false}}",
+      "callbackId": "2"
+    },
+    {
+      "timestamp": "2025-11-01T23:47:54.490Z",
+      "messageMethod": "Invoke",
+      "interactionName": "LoadForm",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+      "controlPath": "server:",
+      "formId": "67C",
+      "callbackId": "3"
+    },
+    {
+      "timestamp": "2025-11-01T23:47:54.534Z",
+      "messageMethod": "Invoke",
+      "interactionName": "LoadForm",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+      "controlPath": "server:",
+      "formId": "67D",
+      "callbackId": "4"
+    },
+    {
+      "timestamp": "2025-11-01T23:47:54.572Z",
+      "messageMethod": "Invoke",
+      "interactionName": "LoadForm",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+      "controlPath": "server:",
+      "formId": "67B",
+      "callbackId": "5"
+    },
+    {
+      "timestamp": "2025-11-01T23:47:54.631Z",
+      "messageMethod": "Invoke",
+      "interactionName": "LoadForm",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+      "controlPath": "server:",
+      "formId": "67E",
+      "callbackId": "6"
+    },
+    {
+      "timestamp": "2025-11-01T23:47:54.669Z",
+      "messageMethod": "Invoke",
+      "interactionName": "LoadForm",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"delayed\":true,\"openForm\":true,\"loadData\":true}",
+      "controlPath": "server:",
+      "formId": "67F",
+      "callbackId": "7"
+    },
+    {
+      "timestamp": "2025-11-01T23:47:59.114Z",
+      "messageMethod": "Invoke",
+      "interactionName": "Filter",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"filterOperation\":1,\"filterColumnId\":\"18_Customer.2\"}",
+      "controlPath": "server:c[2]",
+      "formId": "680",
+      "callbackId": "8"
+    },
+    {
+      "timestamp": "2025-11-01T23:48:02.339Z",
+      "messageMethod": "Invoke",
+      "interactionName": "SaveValue",
+      "skipExtendingSessionLifetime": false,
+      "namedParameters": "{\"key\":null,\"newValue\":\"Adatum\",\"alwaysCommitChange\":true,\"ignoreForSavingState\":true,\"notifyBusy\":1,\"telemetry\":{\"Control name\":\"Name\",\"QueuedTime\":\"2025-11-01T23:48:02.330Z\"}}",
+      "controlPath": "server:c[2]/c[2]/c[1]",
+      "formId": "680",
+      "callbackId": "9"
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+═══════════════════════════════════════════════════════════
+OUR MCP BC INTERACTIONS
+═══════════════════════════════════════════════════════════
+
+
+1. GET_PAGE_METADATA Request: Page 21
+   Result: "Customer Card"
+───────────────────────────────────────────────────────────
+
+   1.1 OpenForm
+       openFormIds: []
+       tracked forms: 0
+       → returned formId: 1AE
+       → tracked as: Page 21 → formId 1AE
+
+
+2. GET_PAGE_METADATA Request: Page 22
+   Result: "Customer Card"
+───────────────────────────────────────────────────────────
+
+   2.1 OpenForm
+       openFormIds: [1AE]
+       tracked forms: 1
+       → returned formId: 1AE
+       → tracked as: Page 22 → formId 1AE
+
+
+3. GET_PAGE_METADATA Request: Page 30
+   Result: "Customer Card"
+───────────────────────────────────────────────────────────
+
+   3.1 OpenForm
+       openFormIds: [1AE, 1AE]
+       tracked forms: 2
+       → returned formId: 1AE
+       → tracked as: Page 30 → formId 1AE
+
+
+═══════════════════════════════════════════════════════════
+SUMMARY
+═══════════════════════════════════════════════════════════
+
+Total page requests: 3
+Total BC interactions: 3
+
+Interaction breakdown:
+  OpenForm: 3
