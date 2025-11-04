@@ -167,18 +167,29 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
 
 The MCP server provides the following tools for AI interaction:
 
-| Tool | Description | Status |
-|------|-------------|--------|
-| **`search_pages`** | Search for pages using Tell Me (Alt+Q) functionality | ✅ Complete |
-| **`filter_list`** | Filter list pages by column values | ✅ Complete |
-| **`get_page_metadata`** | Get page structure, fields, and actions | ✅ Complete |
-| **`read_page_data`** | Read data from a page | ✅ Complete |
-| **`write_page_data`** | Write data to a page via OData API | ✅ Complete |
-| **`create_record`** | Create new records | ✅ Complete |
-| **`update_record`** | Update existing records | ✅ Complete |
-| **`find_record`** | Find records by criteria | ✅ Complete |
-| **`execute_action`** | Execute page actions (New, Edit, Post, etc.) | ✅ Complete |
-| **`update_field`** | Update individual field values | ✅ Complete |
+| Tool | Description | Level | Status |
+|------|-------------|-------|--------|
+| **`search_pages`** | Search for pages using Tell Me (Alt+Q) | Discovery | ✅ Complete |
+| **`get_page_metadata`** | Get page structure, fields, and actions | Discovery | ✅ Complete |
+| **`read_page_data`** | Read data from a page | Read | ✅ Complete |
+| **`filter_list`** | Filter list pages by column values | Read | ✅ Complete |
+| **`find_record`** | Find records by criteria | Read | ✅ Complete |
+| **`write_page_data`** | Write field values with validation (low-level) | Write | ✅ Complete |
+| **`create_record`** | Create new records | Write | ✅ Complete |
+| **`update_record`** | Update records with auto Edit/Save (high-level) | Write | ✅ Complete |
+| **`execute_action`** | Execute page actions (New, Edit, Post, etc.) | Action | ✅ Complete |
+
+### Tool Architecture
+
+The MCP server provides **two levels of tools** for maximum flexibility:
+
+**🔧 Low-Level Tools** - Precise control, explicit parameters:
+- `write_page_data` - Write fields with immediate validation, controlPath support, stopOnError options
+
+**🎯 High-Level Tools** - Convenience wrappers that orchestrate multiple operations:
+- `update_record` - Opens page → Executes Edit → Writes fields → Executes Save (all automatic)
+
+This two-tier design gives LLMs both **precision** (low-level) and **convenience** (high-level) while keeping the API simple and predictable.
 
 ### Example Usage
 
@@ -190,22 +201,29 @@ Claude: [Uses search_pages tool]
 Found 21 customer pages:
 - Page 21: Customer Card
 - Page 22: Customer List
-- Page 23: Customer Statistics
 ...
 
 You: "Show me customers where balance is over 10000"
-Claude: [Uses filter_list tool on Customer List]
+Claude: [Uses filter_list + read_page_data tools]
 Found 5 customers with balance > 10000:
 1. Contoso Ltd - Balance: 15,234.50
 2. Fabrikam Inc - Balance: 12,890.00
 ...
 
-You: "Create a new customer named 'Acme Corp'"
-Claude: [Uses create_record tool]
-Created new customer:
-- No.: CUST-001234
-- Name: Acme Corp
-- Status: Active
+You: "Update customer 'Contoso Ltd' to set credit limit to 50000"
+Claude: [Uses update_record tool - handles everything automatically]
+Updated customer successfully:
+- Opened Customer Card
+- Switched to Edit mode
+- Updated Credit Limit: 50,000.00
+- Saved changes
+✓ Record saved
+
+You: "Set just the phone number field on the current customer"
+Claude: [Uses write_page_data for precise control]
+Updated field successfully:
+- Phone No.: +45 12345678
+✓ Validation passed
 ```
 
 ---

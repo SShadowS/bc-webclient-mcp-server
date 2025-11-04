@@ -101,9 +101,11 @@ export interface WritePageDataInput {
     keys?: Record<string, unknown>;
     useCurrent?: boolean;
   };
-  readonly fields: Record<string, unknown>;
+  readonly fields: Record<string, { value: unknown; controlPath?: string }>;
   readonly save?: boolean; // Default: false
   readonly autoEdit?: boolean; // Auto-switch to edit mode if needed
+  readonly stopOnError?: boolean; // Stop on first validation error (default: true)
+  readonly immediateValidation?: boolean; // Parse handlers for validation errors (default: true)
 }
 
 export interface ExecuteActionInput {

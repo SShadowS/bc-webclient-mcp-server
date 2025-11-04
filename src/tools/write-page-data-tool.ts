@@ -36,12 +36,11 @@ export class WritePageDataTool extends BaseMCPTool {
   public readonly name = 'write_page_data';
 
   public readonly description =
-    'Sets field values on a Business Central record. Requires pageContextId from get_page_metadata. ' +
+    'Sets field values on a Business Central record with immediate validation. Requires pageContextId from get_page_metadata. ' +
     'Prerequisites: Record must be in edit mode (use execute_action with "Edit" or "New"). ' +
-    'Supports recordSelector: {systemId} | {keys:{...}} | {useCurrent:true}. ' +
-    'Supports fieldPath for subpages: "SalesLines[No=\'1000\'].Quantity". ' +
-    'Parameters: save (default false), autoEdit (auto-switch to edit mode). ' +
-    'Returns: {record, validationMessages, saved}. For batch updates (vs update_field for single).';
+    'Supports simple fields map OR array with controlPath: [{name, value, controlPath?}]. ' +
+    'Options: stopOnError (default true), immediateValidation (default true). ' +
+    'Returns: {updatedFields, failedFields with validation messages, saved}. Use for batch field updates.';
 
   public readonly inputSchema = {
     type: 'object',
@@ -60,19 +59,36 @@ export class WritePageDataTool extends BaseMCPTool {
         },
       },
       fields: {
-        type: 'object',
-        description: 'Field names and values to set (e.g., {"Name": "Test", "Credit Limit (LCY)": 5000})',
-        additionalProperties: true,
+        oneOf: [
+          {
+            type: 'object',
+            description: 'Simple map: field name → value (e.g., {"Name": "Test", "Credit Limit (LCY)": 5000})',
+            additionalProperties: true,
+          },
+          {
+            type: 'array',
+            description: 'Advanced: array with controlPath support [{name, value, controlPath?}]',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                value: { type: ['string', 'number', 'boolean'] },
+                controlPath: { type: 'string' },
+              },
+              required: ['name', 'value'],
+            },
+          },
+        ],
       },
-      save: {
+      stopOnError: {
         type: 'boolean',
-        description: 'Whether to save changes immediately (default: false)',
-        default: false,
+        description: 'Stop on first validation error (default: true)',
+        default: true,
       },
-      autoEdit: {
+      immediateValidation: {
         type: 'boolean',
-        description: 'Auto-switch to edit mode if needed (default: false)',
-        default: false,
+        description: 'Parse BC handlers for validation errors (default: true)',
+        default: true,
       },
     },
     required: ['pageContextId', 'fields'],
@@ -111,42 +127,87 @@ export class WritePageDataTool extends BaseMCPTool {
       return recordSelectorResult as Result<never, BCError>;
     }
 
-    // Extract required fields object
-    const fieldsResult = this.getOptionalObject(input, 'fields');
-    if (!isOk(fieldsResult)) {
-      return fieldsResult as Result<never, BCError>;
-    }
-
-    if (!fieldsResult.value) {
+    // Extract required fields (object or array)
+    const fieldsValue = (input as Record<string, unknown>).fields;
+    if (!fieldsValue) {
       return err(
         new InputValidationError(
           'fields parameter is required',
           'fields',
-          ['Must provide an object with field name-value pairs']
+          ['Must provide fields as object or array']
         )
       ) as Result<never, BCError>;
     }
 
-    const fields = fieldsResult.value;
+    // Normalize fields to internal format
+    let fields: Record<string, { value: unknown; controlPath?: string }>;
 
-    // Validate fields object is not empty
-    if (Object.keys(fields).length === 0) {
+    if (Array.isArray(fieldsValue)) {
+      // Array format: [{name, value, controlPath?}]
+      if (fieldsValue.length === 0) {
+        return err(
+          new InputValidationError(
+            'fields array cannot be empty',
+            'fields',
+            ['Must provide at least one field to update']
+          )
+        ) as Result<never, BCError>;
+      }
+
+      fields = {};
+      for (const field of fieldsValue) {
+        if (typeof field !== 'object' || !field || !('name' in field) || !('value' in field)) {
+          return err(
+            new InputValidationError(
+              'Invalid field format in array',
+              'fields',
+              ['Each field must have {name, value, controlPath?}']
+            )
+          ) as Result<never, BCError>;
+        }
+
+        const { name, value, controlPath } = field as { name: string; value: unknown; controlPath?: string };
+        fields[name] = { value, controlPath };
+      }
+    } else if (typeof fieldsValue === 'object') {
+      // Object format: {fieldName: value}
+      const fieldObj = fieldsValue as Record<string, unknown>;
+      if (Object.keys(fieldObj).length === 0) {
+        return err(
+          new InputValidationError(
+            'fields object cannot be empty',
+            'fields',
+            ['Must provide at least one field to update']
+          )
+        ) as Result<never, BCError>;
+      }
+
+      fields = {};
+      for (const [name, value] of Object.entries(fieldObj)) {
+        fields[name] = { value };
+      }
+    } else {
       return err(
         new InputValidationError(
-          'fields object cannot be empty',
+          'fields must be object or array',
           'fields',
-          ['Must provide at least one field to update']
+          ['Expected object or array format']
         )
       ) as Result<never, BCError>;
     }
 
-    // Extract optional save flag
+    // Extract optional flags
     const saveValue = (input as Record<string, unknown>).save;
     const save = typeof saveValue === 'boolean' ? saveValue : false;
 
-    // Extract optional autoEdit flag
     const autoEditValue = (input as Record<string, unknown>).autoEdit;
     const autoEdit = typeof autoEditValue === 'boolean' ? autoEditValue : false;
+
+    const stopOnErrorValue = (input as Record<string, unknown>).stopOnError;
+    const stopOnError = typeof stopOnErrorValue === 'boolean' ? stopOnErrorValue : true;
+
+    const immediateValidationValue = (input as Record<string, unknown>).immediateValidation;
+    const immediateValidation = typeof immediateValidationValue === 'boolean' ? immediateValidationValue : true;
 
     return ok({
       pageContextId: pageContextIdResult.value,
@@ -154,6 +215,8 @@ export class WritePageDataTool extends BaseMCPTool {
       fields,
       save,
       autoEdit,
+      stopOnError,
+      immediateValidation,
     });
   }
 
@@ -170,12 +233,12 @@ export class WritePageDataTool extends BaseMCPTool {
       return validatedInput as Result<never, BCError>;
     }
 
-    const { pageContextId, fields, save, autoEdit } = validatedInput.value;
+    const { pageContextId, fields, save, autoEdit, stopOnError, immediateValidation } = validatedInput.value;
     const fieldNames = Object.keys(fields);
 
     logger.info(`Writing ${fieldNames.length} fields using pageContext: "${pageContextId}"`);
     logger.info(`Fields: ${fieldNames.join(', ')}`);
-    logger.info(`Options: save=${save}, autoEdit=${autoEdit}`);
+    logger.info(`Options: save=${save}, autoEdit=${autoEdit}, stopOnError=${stopOnError}, immediateValidation=${immediateValidation}`);
 
     const manager = ConnectionManager.getInstance();
     let connection: IBCConnection;
@@ -248,20 +311,39 @@ export class WritePageDataTool extends BaseMCPTool {
 
     // Set each field value using SaveValue interaction
     const updatedFields: string[] = [];
-    const failedFields: Array<{ field: string; error: string }> = [];
+    const failedFields: Array<{ field: string; error: string; validationMessage?: string }> = [];
 
-    for (const [fieldName, fieldValue] of Object.entries(fields)) {
-      logger.info(`Setting field "${fieldName}" = "${fieldValue}"...`);
+    for (const [fieldName, fieldSpec] of Object.entries(fields)) {
+      const { value: fieldValue, controlPath } = fieldSpec;
+      logger.info(`Setting field "${fieldName}" = "${fieldValue}"${controlPath ? ` (controlPath: ${controlPath})` : ''}...`);
 
-      const result = await this.setFieldValue(connection, formId, fieldName, fieldValue);
+      const result = await this.setFieldValue(
+        connection,
+        formId,
+        fieldName,
+        fieldValue,
+        controlPath,
+        immediateValidation
+      );
 
       if (isOk(result)) {
         updatedFields.push(fieldName);
         logger.info(`✓ Field "${fieldName}" updated successfully`);
       } else {
         const errorMsg = result.error.message;
-        failedFields.push({ field: fieldName, error: errorMsg });
+        const validationMsg = (result.error as any).context?.validationMessage;
+        failedFields.push({
+          field: fieldName,
+          error: errorMsg,
+          validationMessage: validationMsg,
+        });
         logger.info(`✗ Field "${fieldName}" failed: ${errorMsg}`);
+
+        // Stop on first error if stopOnError is true
+        if (stopOnError) {
+          logger.info(`⚠️  Stopping on first error (stopOnError=true)`);
+          break;
+        }
       }
     }
 
@@ -299,12 +381,15 @@ export class WritePageDataTool extends BaseMCPTool {
   /**
    * Sets a field value using the SaveValue interaction.
    * Uses the real BC protocol captured from traffic.
+   * Optionally inspects handlers for validation errors.
    */
   private async setFieldValue(
     connection: IBCConnection,
     formId: string,
     fieldName: string,
-    value: unknown
+    value: unknown,
+    controlPath?: string,
+    immediateValidation: boolean = true
   ): Promise<Result<void, BCError>> {
     // Validate value type
     if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
@@ -333,7 +418,7 @@ export class WritePageDataTool extends BaseMCPTool {
         },
       }),
       callbackId: '', // Will be set by connection
-      controlPath: undefined, // BC will find the control by field name
+      controlPath: controlPath || undefined, // Use provided controlPath or let BC find it
       formId,
     };
 
@@ -344,9 +429,48 @@ export class WritePageDataTool extends BaseMCPTool {
       return err(
         new ProtocolError(
           `Failed to set field "${fieldName}": ${result.error.message}`,
-          { fieldName, value, formId, originalError: result.error }
+          { fieldName, value, formId, controlPath, originalError: result.error }
         )
       );
+    }
+
+    // If immediateValidation is enabled, inspect handlers for errors
+    if (immediateValidation) {
+      const handlers = result.value;
+
+      // Check for BC error messages
+      const errorHandler = handlers.find(
+        (h: any) => h.handlerType === 'DN.ErrorMessageProperties' || h.handlerType === 'DN.ErrorDialogProperties'
+      );
+
+      if (errorHandler) {
+        const errorParams = (errorHandler as any).parameters?.[0];
+        const errorMessage = errorParams?.Message || errorParams?.ErrorMessage || 'Unknown error';
+
+        return err(
+          new ProtocolError(
+            `BC error: ${errorMessage}`,
+            { fieldName, value, formId, controlPath, errorHandler, validationMessage: errorMessage }
+          )
+        );
+      }
+
+      // Check for validation errors
+      const validationHandler = handlers.find(
+        (h: any) => h.handlerType === 'DN.ValidationMessageProperties'
+      );
+
+      if (validationHandler) {
+        const validationParams = (validationHandler as any).parameters?.[0];
+        const validationMessage = validationParams?.Message || 'Validation failed';
+
+        return err(
+          new ProtocolError(
+            `BC validation error: ${validationMessage}`,
+            { fieldName, value, formId, controlPath, validationHandler, validationMessage }
+          )
+        );
+      }
     }
 
     // Success - field value saved

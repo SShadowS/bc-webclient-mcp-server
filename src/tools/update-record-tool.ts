@@ -21,6 +21,7 @@ import type {
 } from '../types/mcp-types.js';
 import { GetPageMetadataTool } from './get-page-metadata-tool.js';
 import { WritePageDataTool } from './write-page-data-tool.js';
+import { ExecuteActionTool } from './execute-action-tool.js';
 import { ensurePageIdentifiers } from '../utils/pageContext.js';
 import { createToolLogger } from '../core/logger.js';
 
@@ -33,11 +34,11 @@ export class UpdateRecordTool extends BaseMCPTool {
   public readonly name = 'update_record';
 
   public readonly description =
-    'Updates an existing Business Central record. Convenience helper that ensures edit mode and applies fields. ' +
-    'Inputs: pageId|pageName OR pageContextId, recordSelector|filter, fields, autoEdit (default TRUE), save (default TRUE). ' +
-    'Behavior: Opens page if needed, finds record, switches to Edit mode automatically, applies all fields, saves. ' +
-    'Returns: {record, saved: boolean} indicating update success. ' +
-    'Handles Edit mode automatically unlike write_page_data which requires manual execute_action("Edit").';
+    'Updates an existing Business Central record. High-level convenience wrapper that orchestrates page opening, edit mode, field updates, and saving. ' +
+    'Inputs: pageId, fields, autoEdit (default TRUE), save (default TRUE), stopOnError (default TRUE). ' +
+    'Behavior: Opens page if needed, executes Edit action if autoEdit=true, applies all fields, executes Save action if save=true. ' +
+    'Returns: {success, updatedFields, failedFields, saved}. ' +
+    'Use this for simple "update a record" workflows. Use write_page_data for more control.';
 
   public readonly inputSchema = {
     type: 'object',
@@ -57,6 +58,7 @@ export class UpdateRecordTool extends BaseMCPTool {
 
   private readonly getPageMetadataTool: GetPageMetadataTool;
   private readonly writePageDataTool: WritePageDataTool;
+  private readonly executeActionTool: ExecuteActionTool;
 
   public constructor(
     private readonly connection: IBCConnection,
@@ -72,6 +74,7 @@ export class UpdateRecordTool extends BaseMCPTool {
     // Create tool instances for composition
     this.getPageMetadataTool = new GetPageMetadataTool(connection, bcConfig);
     this.writePageDataTool = new WritePageDataTool(connection, bcConfig);
+    this.executeActionTool = new ExecuteActionTool(connection, bcConfig);
   }
 
   /**
@@ -129,12 +132,17 @@ export class UpdateRecordTool extends BaseMCPTool {
     }
 
     const { fields, pageId } = validatedInput.value;
+    // Extract options from input
+    const autoEdit = (input as any).autoEdit !== false; // Default: true
+    const save = (input as any).save !== false; // Default: true
+    const stopOnError = (input as any).stopOnError !== false; // Default: true
 
     logger.info(`Updating record on Page ${pageId}...`);
+    logger.info(`Options: autoEdit=${autoEdit}, save=${save}, stopOnError=${stopOnError}`);
 
     try {
       // Step 1: Open page (get metadata) to establish session and open form
-      logger.info(`Opening page ${pageId}...`);
+      logger.info(`Step 1: Opening page ${pageId}...`);
 
       const metadataResult = await this.getPageMetadataTool.execute({
         pageId,
@@ -144,36 +152,79 @@ export class UpdateRecordTool extends BaseMCPTool {
         return err(metadataResult.error);
       }
 
-      // Extract sessionId from pageContextId (format: sessionId:page:pageId:timestamp)
       const pageContextId = (metadataResult.value as GetPageMetadataOutput).pageContextId;
-      const [actualSessionId] = pageContextId.split(':');
-      logger.info(`✓ Page opened, sessionId: ${actualSessionId}`);
+      logger.info(`✓ Page opened with context: ${pageContextId}`);
 
-      // Step 2: Write field values
-      logger.info(`Updating ${Object.keys(fields).length} field(s)...`);
+      // Step 2: Execute Edit action if autoEdit is enabled
+      if (autoEdit) {
+        logger.info(`Step 2: Executing Edit action...`);
+
+        const editResult = await this.executeActionTool.execute({
+          pageId,
+          actionName: 'Edit',
+        });
+
+        if (!isOk(editResult)) {
+          logger.info(`⚠️  Edit action failed: ${editResult.error.message}`);
+          // Don't fail - page might already be in edit mode
+        } else {
+          logger.info(`✓ Edit mode activated`);
+        }
+      }
+
+      // Step 3: Write field values
+      logger.info(`Step 3: Updating ${Object.keys(fields).length} field(s)...`);
+
+      // Convert simple fields map to internal format expected by write_page_data
+      const fieldsForWrite: Record<string, { value: unknown; controlPath?: string }> = {};
+      for (const [name, value] of Object.entries(fields)) {
+        fieldsForWrite[name] = { value };
+      }
 
       const writeResult = await this.writePageDataTool.execute({
-        pageId,
-        sessionId: actualSessionId,
-        fields,
+        pageContextId,
+        fields: fieldsForWrite,
+        stopOnError,
+        immediateValidation: true,
       });
 
       if (!isOk(writeResult)) {
         return err(writeResult.error);
       }
 
-      logger.info(`✓ Record updated successfully`);
-
       const writeOutput = writeResult.value as WritePageDataOutput;
+      logger.info(`✓ Fields updated: ${writeOutput.updatedFields?.length || 0} succeeded, ${writeOutput.failedFields?.length || 0} failed`);
+
+      // Step 4: Execute Save action if save is enabled and fields were updated
+      let saved = false;
+      if (save && writeOutput.success) {
+        logger.info(`Step 4: Executing Save action...`);
+
+        const saveResult = await this.executeActionTool.execute({
+          pageId,
+          actionName: 'Save',
+        });
+
+        if (!isOk(saveResult)) {
+          logger.info(`⚠️  Save action failed: ${saveResult.error.message}`);
+          // Don't fail completely - fields were updated
+        } else {
+          saved = true;
+          logger.info(`✓ Changes saved`);
+        }
+      }
+
+      logger.info(`✓ Record update completed`);
+
       return ok({
         success: writeOutput.success,
         pageContextId: writeOutput.pageContextId,
         pageId: String(pageId),
         record: writeOutput.record,
-        saved: writeOutput.saved,
+        saved,
         updatedFields: writeOutput.updatedFields || Object.keys(fields),
         failedFields: writeOutput.failedFields,
-        message: `Successfully updated ${Object.keys(fields).length} field(s) on page ${pageId}`,
+        message: `Successfully updated ${writeOutput.updatedFields?.length || Object.keys(fields).length} field(s) on page ${pageId}${saved ? ' (saved)' : ''}`,
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);

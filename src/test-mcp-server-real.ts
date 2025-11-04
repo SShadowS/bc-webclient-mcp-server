@@ -17,11 +17,11 @@ import {
   ReadPageDataTool,
   WritePageDataTool,
   ExecuteActionTool,
-  UpdateFieldTool,
   FilterListTool,
   CreateRecordTool,
   UpdateRecordTool,
   FindRecordTool,
+  // UpdateFieldTool removed - merged into write_page_data
   // HandleDialogTool removed - was stub implementation
 } from './tools/index.js';
 // Use BCPageConnection for connection-per-page architecture (fixes BC caching issue)
@@ -129,14 +129,14 @@ async function main() {
   server.registerTool(new ReadPageDataTool(connection, bcConfig));
   server.registerTool(new WritePageDataTool(connection, bcConfig));
   server.registerTool(new ExecuteActionTool(connection, bcConfig));
-  server.registerTool(new UpdateFieldTool(connection));
   server.registerTool(new FilterListTool(connection, bcConfig));
   // Convenience helpers (ConnectionManager-based)
   server.registerTool(new CreateRecordTool(connection, bcConfig));
   server.registerTool(new UpdateRecordTool(connection, bcConfig));
   server.registerTool(new FindRecordTool(connection, bcConfig));
+  // UpdateFieldTool removed - functionality merged into write_page_data
   // HandleDialogTool removed - was stub/placeholder implementation violating NO STUBS policy
-  logger.error('  ✓ Registered 10 tools (7 core + 3 convenience helpers)');
+  logger.error('  ✓ Registered 9 tools (6 core + 3 convenience helpers)');
   logger.error('');
 
   // Initialize server
