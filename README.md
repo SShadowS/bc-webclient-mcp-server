@@ -1,8 +1,8 @@
 <div align="center">
 
-# 🚀 Business Central MCP Server
+# 🚀 Business Central AI Agent 3rd Party MCP Server
 
-**AI-powered integration for Microsoft Dynamics 365 Business Central**
+**AI-powered integration for Microsoft Dynamics 365 Business Central WebUI**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue?logo=typescript)](https://www.typescriptlang.org/)
