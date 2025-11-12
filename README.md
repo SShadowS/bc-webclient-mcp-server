@@ -1,8 +1,8 @@
 <div align="center">
 
-# 🚀 Business Central AI Agent 3rd Party MCP Server
+# 🚀 BC WebClient MCP
 
-**AI-powered integration for Microsoft Dynamics 365 Business Central WebUI**
+**Model Context Protocol server for Microsoft Dynamics 365 Business Central via WebUI protocol**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue?logo=typescript)](https://www.typescriptlang.org/)
@@ -17,7 +17,7 @@
 
 ## 📖 Overview
 
-**bc-mcp-server** is a Model Context Protocol (MCP) server that enables AI assistants like Claude to interact with Microsoft Dynamics 365 Business Central through a clean, intuitive interface. Built on BC's native WebSocket protocol, it provides real-time access to ERP data, business logic, and operations.
+**BC WebClient MCP** is a Model Context Protocol (MCP) server that enables AI assistants like Claude to interact with Microsoft Dynamics 365 Business Central through a clean, intuitive interface. Built by reverse-engineering BC's WebUI WebSocket protocol, it provides real-time access to ERP data, business logic, and operations.
 
 ### What is MCP?
 
@@ -25,7 +25,7 @@ The [Model Context Protocol](https://modelcontextprotocol.io/) is an open standa
 
 ### Why This Matters
 
-Business Central's web client uses an undocumented WebSocket protocol for all UI operations. This project reverse-engineers that protocol to:
+Business Central's web client uses an undocumented WebSocket protocol for all UI operations. This project reverse-engineers the **WebUI protocol** (not official APIs) to:
 
 - ✅ **Enable AI-driven ERP automation** - Let Claude interact with BC data naturally
 - ✅ **No custom extensions required** - Works with vanilla BC installations
@@ -565,7 +565,7 @@ This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) 
 
 <div align="center">
 
-**[⬆ back to top](#-business-central-mcp-server)**
+**[⬆ back to top](#-bc-webclient-mcp)**
 
 Made with ❤️ for the Business Central community
 

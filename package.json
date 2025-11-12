@@ -1,7 +1,7 @@
 {
-  "name": "bc-poc",
+  "name": "bc-webclient-mcp",
   "version": "0.1.0",
-  "description": "Business Central WebSocket PoC - Connect and retrieve role center metadata",
+  "description": "BC WebClient MCP - Model Context Protocol server for Microsoft Dynamics 365 Business Central via WebUI protocol",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {

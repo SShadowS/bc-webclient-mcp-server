@@ -336,7 +336,7 @@ export class MCPServer implements IMCPServer {
           resources: this.resources.size > 0 ? {} : undefined,
         },
         serverInfo: {
-          name: 'bc-mcp-server',
+          name: 'bc-webclient-mcp',
           version: '1.0.0',
         },
       };

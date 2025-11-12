@@ -30,7 +30,7 @@ function getConfig(): LoggerConfig {
   return {
     level: logLevel as LogLevel,
     pretty: isDevelopment,
-    name: 'bc-mcp-server',
+    name: 'bc-webclient-mcp',
   };
 }
 

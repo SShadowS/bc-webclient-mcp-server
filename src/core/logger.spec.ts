@@ -40,7 +40,7 @@ describe('logger', () => {
     it('has a name property', () => {
       // Pino logger has bindings that include the name
       expect(logger.bindings()).toHaveProperty('name');
-      expect(logger.bindings().name).toBe('bc-mcp-server');
+      expect(logger.bindings().name).toBe('bc-webclient-mcp');
     });
 
     it('has a level property', () => {
@@ -72,7 +72,7 @@ describe('logger', () => {
 
       // Assert
       expect(childLogger.level).toBe(logger.level);
-      expect(childLogger.bindings().name).toBe('bc-mcp-server');
+      expect(childLogger.bindings().name).toBe('bc-webclient-mcp');
     });
 
     it('handles empty context', () => {
