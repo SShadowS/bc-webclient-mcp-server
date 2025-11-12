@@ -13,6 +13,8 @@
  */
 
 import * as readline from 'node:readline';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import type { Result } from '../core/result.js';
 import { ok, err, isOk } from '../core/result.js';
 import type { BCError } from '../core/errors.js';
@@ -62,6 +64,8 @@ export class StdioTransport {
   private readonly reader: readline.Interface;
   private running = false;
   private stdoutClosed = false;
+  private stdioLogStream?: fs.WriteStream;
+  private messageCounter = 0;
 
   public constructor(
     private readonly server: MCPServer,
@@ -72,6 +76,9 @@ export class StdioTransport {
       output: undefined, // Don't echo input
       terminal: false,
     });
+
+    // Initialize STDIO logging if enabled via environment variable
+    this.initializeStdioLogging();
 
     // Handle stdout errors (EPIPE when client disconnects)
     process.stdout.on('error', (error: NodeJS.ErrnoException) => {
@@ -90,6 +97,61 @@ export class StdioTransport {
       this.stdoutClosed = true;
       void this.stop();
     });
+  }
+
+  /**
+   * Initializes STDIO logging to file if MCP_STDIO_LOG_FILE environment variable is set.
+   * @private
+   */
+  private initializeStdioLogging(): void {
+    const logFile = process.env.MCP_STDIO_LOG_FILE;
+    if (!logFile) {
+      return;
+    }
+
+    try {
+      // Ensure directory exists
+      const logDir = path.dirname(logFile);
+      if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true });
+      }
+
+      // Create write stream (append mode)
+      this.stdioLogStream = fs.createWriteStream(logFile, { flags: 'a' });
+
+      // Write session start marker
+      const startTime = new Date().toISOString();
+      this.stdioLogStream.write(`\n${'='.repeat(80)}\n`);
+      this.stdioLogStream.write(`MCP STDIO Session Started: ${startTime}\n`);
+      this.stdioLogStream.write(`${'='.repeat(80)}\n\n`);
+
+      this.options.logger?.info('STDIO logging enabled', { logFile });
+    } catch (error) {
+      this.options.logger?.error('Failed to initialize STDIO logging', error, { logFile });
+    }
+  }
+
+  /**
+   * Logs a message to the STDIO log file.
+   * @private
+   */
+  private logStdioMessage(direction: 'RECV' | 'SEND', message: string | object): void {
+    if (!this.stdioLogStream) {
+      return;
+    }
+
+    try {
+      this.messageCounter++;
+      const timestamp = new Date().toISOString();
+      const messageStr = typeof message === 'string' ? message : JSON.stringify(message, null, 2);
+
+      this.stdioLogStream.write(`[${this.messageCounter}] ${timestamp} ${direction}\n`);
+      this.stdioLogStream.write(`${'-'.repeat(80)}\n`);
+      this.stdioLogStream.write(`${messageStr}\n`);
+      this.stdioLogStream.write(`\n`);
+    } catch (error) {
+      this.options.logger?.error('Failed to write STDIO log', error);
+    }
   }
 
   /**
@@ -162,6 +224,21 @@ export class StdioTransport {
       this.running = false;
       this.reader.close();
 
+      // Close STDIO log stream if open
+      if (this.stdioLogStream) {
+        try {
+          const endTime = new Date().toISOString();
+          this.stdioLogStream.write(`\n${'='.repeat(80)}\n`);
+          this.stdioLogStream.write(`MCP STDIO Session Ended: ${endTime}\n`);
+          this.stdioLogStream.write(`Total Messages: ${this.messageCounter}\n`);
+          this.stdioLogStream.write(`${'='.repeat(80)}\n\n`);
+          this.stdioLogStream.end();
+          this.stdioLogStream = undefined;
+        } catch (error) {
+          this.options.logger?.error('Failed to close STDIO log stream', error);
+        }
+      }
+
       this.options.logger?.info('Stdio transport stopped');
 
       return ok(undefined);
@@ -196,6 +273,9 @@ export class StdioTransport {
     try {
       // Parse JSON-RPC request
       const request = JSON.parse(line) as JSONRPCRequest;
+
+      // Log incoming request
+      this.logStdioMessage('RECV', request);
 
       // Validate JSON-RPC format
       if (request.jsonrpc !== '2.0') {
@@ -247,8 +327,15 @@ export class StdioTransport {
           break;
 
         case 'initialized':
+        case 'notifications/initialized':
           // Notification, no response needed
           this.options.logger?.debug('Received initialized notification');
+          break;
+
+        case 'notifications/cancelled':
+        case '$/cancelRequest':
+          // Notification, no response needed
+          this.options.logger?.debug('Received cancellation notification');
           break;
 
         case 'tools/list':
@@ -267,28 +354,43 @@ export class StdioTransport {
           await this.handleResourceRead(request);
           break;
 
+        case 'prompts/list':
+          // Not implemented yet - return empty list
+          await this.sendSuccess(request.id, { prompts: [] });
+          break;
+
         case 'ping':
           await this.handlePing(request);
           break;
 
         default:
-          this.options.logger?.warn('Unknown method', { method: request.method });
-          await this.sendError(
-            request.id,
-            JSON_RPC_ERROR_CODES.METHOD_NOT_FOUND,
-            `Method not found: ${request.method}`
-          );
+          // Check if this is a notification (no id) or a request (has id)
+          if (request.id === undefined) {
+            // Notification - do not respond (JSON-RPC 2.0 spec)
+            this.options.logger?.debug('Unknown notification', { method: request.method });
+          } else {
+            // Request - send error response
+            this.options.logger?.warn('Unknown method', { method: request.method });
+            await this.sendError(
+              request.id,
+              JSON_RPC_ERROR_CODES.METHOD_NOT_FOUND,
+              `Method not found: ${request.method}`
+            );
+          }
       }
     } catch (error) {
       this.options.logger?.error('Request routing failed', error, {
         method: request.method,
       });
-      await this.sendError(
-        request.id,
-        JSON_RPC_ERROR_CODES.INTERNAL_ERROR,
-        'Internal error',
-        { error: String(error) }
-      );
+      // Only send error for requests (not notifications)
+      if (request.id !== undefined) {
+        await this.sendError(
+          request.id,
+          JSON_RPC_ERROR_CODES.INTERNAL_ERROR,
+          'Internal error',
+          { error: String(error) }
+        );
+      }
     }
   }
 
@@ -445,6 +547,9 @@ export class StdioTransport {
       if (this.options.enableDebugLogging) {
         this.options.logger?.debug('Sending response', { response });
       }
+
+      // Log outgoing response
+      this.logStdioMessage('SEND', response);
 
       // Write to stdout with newline
       process.stdout.write(json + '\n');

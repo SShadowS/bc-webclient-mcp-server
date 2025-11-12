@@ -99,6 +99,24 @@ export interface IBCConnection {
     container: any;
     form: any;
   }>): Promise<Result<readonly Handler[], BCError>>;
+
+  /**
+   * Waits for handlers that match a predicate.
+   * Used for event-driven pattern to capture asynchronous BC responses.
+   * @param predicate - Function to test if handlers match the desired criteria, returns { matched: boolean, data?: T }
+   * @param options - Optional configuration with timeoutMs and signal
+   * @returns Promise that resolves with the data from the predicate
+   */
+  waitForHandlers<T>(
+    predicate: (handlers: any[]) => { matched: boolean; data?: T },
+    options?: { timeoutMs?: number; signal?: AbortSignal }
+  ): Promise<T>;
+
+  /**
+   * Gets the underlying raw WebSocket client (for advanced operations).
+   * Returns null if not connected.
+   */
+  getRawClient(): any | null;
 }
 
 /**
@@ -456,6 +474,28 @@ export interface IMCPTool {
    * JSON schema for tool input.
    */
   readonly inputSchema: unknown;
+
+  /**
+   * Whether this tool requires explicit user consent before execution.
+   * Set to true for write operations and dangerous actions.
+   * Default: false (no consent required for read-only operations)
+   */
+  readonly requiresConsent?: boolean;
+
+  /**
+   * Human-readable consent prompt shown to user in approval dialog.
+   * Supports template variables like {{pageId}}, {{actionName}}.
+   * Only relevant if requiresConsent is true.
+   */
+  readonly consentPrompt?: string;
+
+  /**
+   * Risk classification for UI styling and warnings.
+   * - low: Read-only operations (no consent needed)
+   * - medium: Write operations (consent required, reversible)
+   * - high: Dangerous operations (consent required, may be irreversible)
+   */
+  readonly sensitivityLevel?: 'low' | 'medium' | 'high';
 
   /**
    * Executes the tool.

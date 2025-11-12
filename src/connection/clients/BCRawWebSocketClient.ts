@@ -45,6 +45,7 @@ export class BCRawWebSocketClient {
   private serverSessionId: string | null = null;
   private sessionKey: string | null = null;
   private companyName: string | null = null;
+  private roleCenterFormId: string | null = null; // Role center form ID from OpenSession
 
   // Session state tracking (required for Tell Me and other features)
   private clientSequenceCounter = 0;
@@ -92,6 +93,13 @@ export class BCRawWebSocketClient {
    */
   getTenantId(): string {
     return this.tenantId || 'default';
+  }
+
+  /**
+   * Get the role center form ID (for use with InvokeSessionAction)
+   */
+  getRoleCenterFormId(): string | null {
+    return this.roleCenterFormId;
   }
 
   /**
@@ -313,12 +321,12 @@ export class BCRawWebSocketClient {
             }
           }
 
-          // Handle compressed result
-          if (response.compressedResult) {
+          // Helper to decompress and process handler arrays
+          const processCompressedHandlers = (base64: string) => {
             logger.info('  Decompressing gzip response...');
 
             // Base64 decode
-            const compressed = Buffer.from(response.compressedResult, 'base64');
+            const compressed = Buffer.from(base64, 'base64');
 
             // Gunzip decompress
             const decompressed = gunzipSync(compressed);
@@ -332,6 +340,7 @@ export class BCRawWebSocketClient {
             // Emit to all handler listeners (for event-driven waits)
             // Do this BEFORE resolving pending request to ensure listeners can process it
             if (Array.isArray(actualResponse)) {
+              logger.info(`[Handlers] Emitting ${actualResponse.length} handlers to ${this.handlerListeners.length} listeners`);
               this.handlerListeners.forEach(listener => {
                 try {
                   listener(actualResponse);
@@ -348,18 +357,36 @@ export class BCRawWebSocketClient {
               this.pendingRequests.delete(requestId);
               pending.resolve(actualResponse);
             }
+          };
+
+          // Handle compressed result in various formats
+          // 1) Async Message envelope with nested compressedResult (most common for Tell Me)
+          if (response.method === 'Message' && response.params?.[0]?.compressedResult) {
+            processCompressedHandlers(response.params[0].compressedResult);
           }
-          // Handle uncompressed JSON-RPC response
+          // 1b) Async Message envelope with compressedData (LoadForm async responses)
+          else if (response.method === 'Message' && response.params?.[0]?.compressedData) {
+            processCompressedHandlers(response.params[0].compressedData);
+          }
+          // 2) Top-level compressedResult
+          else if (response.compressedResult) {
+            processCompressedHandlers(response.compressedResult);
+          }
+          // 3) JSON-RPC result with compressedResult
           else if (response.jsonrpc) {
-            const pending = this.pendingRequests.get(response.id);
+            if (response.result?.compressedResult) {
+              processCompressedHandlers(response.result.compressedResult);
+            } else {
+              const pending = this.pendingRequests.get(response.id);
 
-            if (pending) {
-              this.pendingRequests.delete(response.id);
+              if (pending) {
+                this.pendingRequests.delete(response.id);
 
-              if (response.error) {
-                pending.reject(new Error(`RPC Error: ${response.error.message}`));
-              } else {
-                pending.resolve(response.result);
+                if (response.error) {
+                  pending.reject(new Error(`RPC Error: ${response.error.message}`));
+                } else {
+                  pending.resolve(response.result);
+                }
               }
             }
           }
@@ -485,6 +512,9 @@ export class BCRawWebSocketClient {
 
     const sessionId = uuidv4();
 
+    // Set spaInstanceId for the session (used in sequenceNo and navigationContext)
+    this.spaInstanceId = sessionId.substring(0, 8);
+
     const result = await this.sendRpcRequest('OpenSession', [
       {
         openFormIds: [],
@@ -496,7 +526,7 @@ export class BCRawWebSocketClient {
         navigationContext: {
           applicationId: 'FIN',
           deviceCategory: 0,
-          spaInstanceId: sessionId.substring(0, 8)
+          spaInstanceId: this.spaInstanceId
         },
         supportedExtensions: JSON.stringify([
           { Name: 'Microsoft.Dynamics.Nav.Client.PageNotifier' },
@@ -599,6 +629,17 @@ export class BCRawWebSocketClient {
         }
       }
 
+      // Extract role center formId from FormToShow event
+      const formHandler = handlers.find((h: any) =>
+        h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+        h.parameters?.[0] === 'FormToShow' &&
+        h.parameters?.[1]?.ServerId
+      );
+      if (formHandler) {
+        this.roleCenterFormId = formHandler.parameters[1].ServerId;
+        logger.info(`  Role Center Form ID: ${this.roleCenterFormId}`);
+      }
+
       logger.info(`  Session ID: ${this.serverSessionId?.substring(0, 40)}...`);
       logger.info(`  Session Key: ${this.sessionKey}`);
       logger.info(`  Company: ${this.companyName}`);
@@ -672,7 +713,7 @@ export class BCRawWebSocketClient {
       navigationContext: {
         applicationId: 'FIN',
         deviceCategory: 0,
-        spaInstanceId: uuidv4().substring(0, 8)
+        spaInstanceId: this.spaInstanceId
       },
       supportedExtensions: null,
       interactionsToInvoke: [

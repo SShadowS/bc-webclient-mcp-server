@@ -25,6 +25,7 @@ import type {
 } from '../types/mcp-types.js';
 import { ConnectionManager } from '../connection/connection-manager.js';
 import { createToolLogger } from '../core/logger.js';
+import type { AuditLogger } from '../services/audit-logger.js';
 
 /**
  * MCP Tool: handle_dialog
@@ -73,6 +74,12 @@ export class HandleDialogTool extends BaseMCPTool {
     required: ['action'],
   };
 
+  // Consent configuration - Medium risk (can confirm dangerous operations)
+  public readonly requiresConsent = true;
+  public readonly sensitivityLevel = 'medium' as const;
+  public readonly consentPrompt =
+    'Interact with a Business Central dialog window? This may confirm operations or bypass safety prompts.';
+
   public constructor(
     private readonly connection: IBCConnection,
     private readonly bcConfig?: {
@@ -80,9 +87,10 @@ export class HandleDialogTool extends BaseMCPTool {
       username: string;
       password: string;
       tenantId: string;
-    }
+    },
+    auditLogger?: AuditLogger
   ) {
-    super();
+    super({ auditLogger });
   }
 
   /**

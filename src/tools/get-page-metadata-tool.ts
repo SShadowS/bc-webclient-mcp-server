@@ -23,15 +23,12 @@ import type {
 } from '../types/mcp-types.js';
 import type { Handler } from '../types/bc-types.js';
 import { PageMetadataParser } from '../parsers/page-metadata-parser.js';
-import {
-  decompressResponse,
-  extractServerIds,
-  filterFormsToLoad,
-} from '../util/loadform-helpers.js';
+import { decompressResponse, extractServerIds, filterFormsToLoad, createLoadFormInteraction } from '../util/loadform-helpers.js';
 import { ConnectionManager } from '../connection/connection-manager.js';
 import { ProtocolError } from '../core/errors.js';
 import { newId } from '../core/id.js';
 import { createToolLogger } from '../core/logger.js';
+import { PageContextCache } from '../services/page-context-cache.js';
 import { z } from 'zod';
 import { PageIdSchema, PageContextIdSchema } from '../validation/schemas.js';
 
@@ -75,6 +72,10 @@ export class GetPageMetadataTool extends BaseMCPTool {
     },
     required: ['pageId'],
   };
+
+  // Consent configuration - Read-only metadata operation, no consent needed
+  public readonly requiresConsent = false;
+  public readonly sensitivityLevel = 'low' as const;
 
   public constructor(
     private readonly connection: IBCConnection,
@@ -171,42 +172,10 @@ export class GetPageMetadataTool extends BaseMCPTool {
     let allHandlers: Handler[] = [];
     const pageIdStr = String(pageId); // Ensure pageId is always a string
 
-    // ALWAYS close ALL forms before opening a new page to prevent BC caching
-    // This ensures BC creates a fresh form for each page request
-    const allOpenForms = connection.getAllOpenFormIds();
-    if (allOpenForms.length > 0) {
-      logger.info(`🧹 Closing ALL ${allOpenForms.length} open forms to prevent BC caching`);
-      for (const formId of allOpenForms) {
-        try {
-          await connection.invoke({
-            interactionName: 'CloseForm',
-            namedParameters: {
-              FormId: formId,
-            },
-            controlPath: 'server:',
-            callbackId: '0',
-          });
-          logger.info(`  ✓ Closed form ${formId}`);
-          // Untrack the form
-          connection.getAllOpenFormIds().forEach(id => {
-            if (id === formId) {
-              // Clear tracking for this form
-              for (const [pageId] of (connection as any).openForms?.entries() || []) {
-                if ((connection as any).openForms?.get(pageId) === formId) {
-                  (connection as any).openForms?.delete(pageId);
-                }
-              }
-            }
-          });
-        } catch (error) {
-          logger.info(`  ⚠️  Failed to close form ${formId}: ${String(error)}`);
-        }
-      }
-      // Clear all form tracking after closing
-      if ((connection as any).openForms) {
-        (connection as any).openForms.clear();
-      }
-    }
+    // REMOVED: Aggressive form closing logic was causing OpenForm failures for Pages 22 & 30
+    // BC can handle multiple open forms - let it manage form lifecycle naturally
+    // The close logic with manual tracking manipulation was corrupting session state
+    logger.info(`ℹ️  Skipping form close - BC will manage form lifecycle`);
 
     // Always open fresh forms to avoid BC caching issues
     logger.info(`🆕 Opening new BC Page: "${pageIdStr}" (using LoadForm solution)`);
@@ -256,42 +225,69 @@ export class GetPageMetadataTool extends BaseMCPTool {
     // Use decompressed data if available, otherwise use original response (which is already an array of handlers)
     const dataToProcess = decompressed || (shellResult.value as unknown[]);
 
+    // Step 3: Extract child forms and call LoadForm for list pages
+    // Based on WebSocket capture: web client calls LoadForm with loadData:true after OpenForm
+    // This triggers BC to send list data via async Message events
     try {
-      // Step 3: Extract ServerIds from form structure
-      const { shellFormId, childFormIds } = extractServerIds(dataToProcess as any[]);
-      logger.info(`✓ Extracted ServerIds: shell=${shellFormId}, children=${childFormIds.length}`);
-
-      // Step 4: Filter child forms by LoadForm criteria (100% validated pattern)
+      const { childFormIds } = extractServerIds(allHandlers);
       const formsToLoad = filterFormsToLoad(childFormIds);
-      logger.info(`✓ Filtered forms to load: ${formsToLoad.length}/${childFormIds.length}`);
 
-      // Track the shell form
-      if (shellFormId) {
-        connection.trackOpenForm(pageIdStr, shellFormId);
-      }
-
-      // Step 5: LoadForm each child form
       if (formsToLoad.length > 0) {
-        const childHandlersResult = await connection.loadChildForms(formsToLoad);
+        logger.info(`📋 Found ${formsToLoad.length} child form(s) requiring LoadForm`);
 
-        if (isOk(childHandlersResult)) {
-          // Accumulate child form handlers
-          allHandlers.push(...(Array.from(childHandlersResult.value) as Handler[]));
-          logger.info(`✓ Loaded ${formsToLoad.length} child forms, total handlers: ${allHandlers.length}`);
-        } else {
-          logger.info(`⚠️  LoadForm failed for child forms: ${childHandlersResult.error.message}`);
-          // Continue with shell handlers only
+        // Set up listener for async Message events BEFORE calling LoadForm
+        // BC sends list data in Message events, not in LoadForm responses
+        const hasListData = (handlers: Handler[]): { matched: boolean; data?: Handler[] } => {
+          const matched = handlers.some((h: any) =>
+            h.handlerType === 'DN.LogicalClientChangeHandler' &&
+            Array.isArray(h.parameters?.[1]) &&
+            h.parameters[1].some((change: any) =>
+              change.t === 'DataRefreshChange' && Array.isArray(change.RowChanges)
+            )
+          );
+          return matched ? { matched: true, data: handlers } : { matched: false };
+        };
+
+        const asyncHandlersPromise = connection.waitForHandlers(hasListData, { timeoutMs: 5000 });
+
+        // Call LoadForm for each child form (web client pattern)
+        for (let i = 0; i < formsToLoad.length; i++) {
+          const child = formsToLoad[i];
+          const interaction = createLoadFormInteraction(child.serverId, String(i));
+
+          logger.info(`📤 Calling LoadForm for: ${child.serverId}`);
+          const loadResult = await connection.invoke(interaction);
+
+          if (!isOk(loadResult)) {
+            logger.info(`⚠️  LoadForm failed for ${child.serverId}: ${loadResult.error.message}`);
+            continue;
+          }
+
+          logger.info(`✓ LoadForm sent for: ${child.serverId}`);
+        }
+
+        // Wait for async data (if LoadForm was called)
+        if (formsToLoad.length > 0) {
+          try {
+            const asyncHandlers = await asyncHandlersPromise;
+            if (asyncHandlers && Array.isArray(asyncHandlers)) {
+              logger.info(`✓ Received ${asyncHandlers.length} async handlers with list data`);
+              allHandlers.push(...asyncHandlers);
+            } else {
+              logger.info(`ℹ️  No async list data received (predicate returned no data)`);
+            }
+          } catch (err) {
+            logger.info(`ℹ️  No async list data received (timeout or no data): ${String(err)}`);
+          }
         }
       } else {
-        logger.info(`ℹ️  No child forms to load for Page "${pageIdStr}"`);
+        logger.info(`ℹ️  No child forms requiring LoadForm (Card page or no delayed controls)`);
       }
-    } catch (error) {
-      logger.info(`⚠️  ServerIds extraction failed: ${String(error)}`);
-      logger.info(`ℹ️  Continuing with shell handlers only`);
-      // Continue with shell handlers
+    } catch (err) {
+      logger.info(`⚠️  LoadForm extraction/call failed: ${String(err)} - continuing with OpenForm data only`);
     }
 
-    // Parse metadata from accumulated handlers
+    // Parse metadata from accumulated handlers (now includes LoadForm data if available)
     const metadataResult = this.metadataParser.parse(allHandlers);
 
     if (!isOk(metadataResult)) {
@@ -303,34 +299,39 @@ export class GetPageMetadataTool extends BaseMCPTool {
     // Generate unique pageContextId that combines session + form instance
     const pageContextId = `${actualSessionId}:page:${metadata.pageId}:${Date.now()}`;
 
-    // Store page context in ConnectionManager for later retrieval
+    // Determine page type from ViewMode/FormStyle (accurate) or caption (fallback)
+    const pageType = this.inferPageType(allHandlers, metadata.caption);
+
+    // Extract LogicalForm from handlers for caching
+    const logicalForm = this.extractLogicalFormFromHandlers(allHandlers);
+
+    // Prepare page context data
+    const pageContextData = {
+      sessionId: actualSessionId,
+      pageId: metadata.pageId,
+      formIds: connection.getAllOpenFormIds(),
+      openedAt: Date.now(),
+      pageType, // Cache page type
+      logicalForm, // Cache LogicalForm for read_page_data
+      handlers: allHandlers, // Cache all handlers (including LoadForm data) for list extraction
+    };
+
+    // Store page context in memory (ConnectionManager)
     if ((connection as any).pageContexts) {
-      (connection as any).pageContexts.set(pageContextId, {
-        sessionId: actualSessionId,
-        pageId: metadata.pageId,
-        formIds: connection.getAllOpenFormIds(),
-        openedAt: Date.now(),
-      });
+      (connection as any).pageContexts.set(pageContextId, pageContextData);
     } else {
       (connection as any).pageContexts = new Map();
-      (connection as any).pageContexts.set(pageContextId, {
-        sessionId: actualSessionId,
-        pageId: metadata.pageId,
-        formIds: connection.getAllOpenFormIds(),
-        openedAt: Date.now(),
-      });
+      (connection as any).pageContexts.set(pageContextId, pageContextData);
     }
 
-    // Determine page type from metadata
-    let pageType: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report' = 'Card';
-    if (metadata.caption?.toLowerCase().includes('list')) {
-      pageType = 'List';
-    } else if (metadata.caption?.toLowerCase().includes('document')) {
-      pageType = 'Document';
-    } else if (metadata.caption?.toLowerCase().includes('worksheet')) {
-      pageType = 'Worksheet';
-    } else if (metadata.caption?.toLowerCase().includes('report')) {
-      pageType = 'Report';
+    // 💾 PERSIST to disk (survives MCP server restarts)
+    try {
+      const cache = PageContextCache.getInstance();
+      await cache.save(pageContextId, pageContextData);
+      logger.debug(`💾 Persisted pageContext to cache: ${pageContextId}`);
+    } catch (error) {
+      // Non-fatal: continue even if cache save fails
+      logger.error(`⚠️  Failed to persist pageContext: ${error}`);
     }
 
     // Format output for Claude
@@ -432,5 +433,73 @@ export class GetPageMetadataTool extends BaseMCPTool {
     const firstInteraction = completedInteractions[0] as Record<string, unknown> | undefined;
     const result = firstInteraction?.Result as { reason?: number; value?: string } | undefined;
     return result?.value;
+  }
+
+  /**
+   * Infers page type from BC metadata.
+   *
+   * Uses ViewMode and FormStyle from LogicalForm (most accurate).
+   * Falls back to caption heuristics if metadata unavailable.
+   *
+   * ViewMode values:
+   * - 1 = List/Worksheet (multiple records)
+   * - 2 = Card/Document (single record)
+   *
+   * FormStyle values (when ViewMode=2):
+   * - 1 = Document
+   * - undefined/absent = Card
+   */
+  private inferPageType(
+    handlers: readonly Handler[],
+    caption: string
+  ): 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report' {
+    // Extract LogicalForm from handlers
+    const logicalForm = this.extractLogicalFormFromHandlers(handlers);
+    const viewMode = logicalForm?.ViewMode;
+    const formStyle = logicalForm?.FormStyle;
+
+    // Primary detection: Use BC's ViewMode and FormStyle metadata
+    if (viewMode !== undefined) {
+      if (viewMode === 1) {
+        // List-style pages (multiple records)
+        const lower = caption.toLowerCase();
+        if (lower.includes('worksheet') || lower.includes('journal')) {
+          return 'Worksheet';
+        }
+        return 'List';
+      }
+
+      if (viewMode === 2) {
+        // Detail-style pages (single record)
+        if (formStyle === 1) {
+          return 'Document';
+        }
+        return 'Card';
+      }
+    }
+
+    // Fallback: Heuristic detection (less reliable)
+    const lower = caption.toLowerCase();
+    if (lower.includes('list')) return 'List';
+    if (lower.includes('document')) return 'Document';
+    if (lower.includes('worksheet')) return 'Worksheet';
+    if (lower.includes('report')) return 'Report';
+
+    return 'Card';
+  }
+
+  /**
+   * Extracts LogicalForm from handlers (finds FormToShow handler).
+   */
+  private extractLogicalFormFromHandlers(handlers: readonly Handler[]): any | null {
+    for (const handler of handlers) {
+      if (
+        handler.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+        handler.parameters?.[0] === 'FormToShow'
+      ) {
+        return handler.parameters[1]; // LogicalForm object
+      }
+    }
+    return null;
   }
 }

@@ -150,6 +150,23 @@ class MCPRealTestClient {
   }
 
   /**
+   * Parses MCP tool call response (unwraps content[0].text JSON).
+   */
+  parseToolResult(response) {
+    if (response.error) {
+      return null;
+    }
+    if (!response.result || !response.result.content || !response.result.content[0]) {
+      return null;
+    }
+    try {
+      return JSON.parse(response.result.content[0].text);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
    * Runs all tests with real BC.
    */
   async runAllTests() {
@@ -181,23 +198,30 @@ class MCPRealTestClient {
       this.assert(!response.error, `Tools list failed: ${response.error?.message}`);
       this.assert(response.result, 'No result returned');
       this.assert(response.result.tools, 'No tools array returned');
-      // We have 7 core tools + 3 convenience tools = 10 total
-      // handle_dialog removed - was stub implementation violating NO STUBS policy
-      this.assert(response.result.tools.length === 10, `Expected 10 tools, got ${response.result.tools.length}`);
+      // Consolidated from 9 tools to 5 core tools (44% context reduction)
+      // See Refactor1.md for analysis and rationale
+      this.assert(response.result.tools.length === 5, `Expected 5 tools, got ${response.result.tools.length}`);
 
-      // Verify core tools exist
+      // Verify 5 core tools exist
       const toolNames = response.result.tools.map(t => t.name);
-      const coreTools = ['search_pages', 'get_page_metadata', 'read_page_data',
-                         'write_page_data', 'execute_action', 'update_field', 'filter_list'];
-      const convenienceTools = ['update_record', 'create_record', 'find_record'];
-      // handle_dialog removed - no backward compatibility since not released
+      const coreTools = [
+        'search_pages',
+        'get_page_metadata',
+        'read_page_data',     // Now includes filtering (filter_list merged)
+        'write_page_data',
+        'execute_action'
+      ];
 
       coreTools.forEach(tool => {
         this.assert(toolNames.includes(tool), `Missing core tool: ${tool}`);
       });
-      convenienceTools.forEach(tool => {
-        this.assert(toolNames.includes(tool), `Missing convenience tool: ${tool}`);
-      });
+
+      // Removed tools (consolidated):
+      // - filter_list: Functionality merged into read_page_data.filters
+      // - find_record: Thin wrapper - users compose read_page_data + filters
+      // - create_record, update_record: Moved to optional/ (not in default registry)
+      // - update_field: Merged into write_page_data
+      // - handle_dialog: Was stub implementation
     });
 
     // Test 3: REAL Get Page Metadata for Page 21 (Customer Card)
@@ -210,24 +234,27 @@ class MCPRealTestClient {
 
       this.assert(!response.error, `Tool call failed: ${response.error?.message}`);
       this.assert(response.result, 'No result returned');
-      this.assert(response.result.pageId === '21', `Wrong pageId: ${response.result.pageId}`);
-      this.assert(response.result.pageContextId, 'No pageContextId returned');
-      this.assert(response.result.pageContextId.includes(':page:21:'),
-                  `Invalid pageContextId format: ${response.result.pageContextId}`);
+
+      const result = this.parseToolResult(response);
+      this.assert(result, 'Failed to parse tool result');
+      this.assert(result.pageId === '21', `Wrong pageId: ${result.pageId}`);
+      this.assert(result.pageContextId, 'No pageContextId returned');
+      this.assert(result.pageContextId.includes(':page:21:'),
+                  `Invalid pageContextId format: ${result.pageContextId}`);
       // sessionId removed - no longer part of the API
-      this.assert(response.result.caption, 'No caption returned');
-      this.assert(response.result.fields, 'No fields returned');
-      this.assert(response.result.fields.length > 0, 'No fields in result');
-      this.assert(response.result.actions, 'No actions returned');
+      this.assert(result.caption, 'No caption returned');
+      this.assert(result.fields, 'No fields returned');
+      this.assert(result.fields.length > 0, 'No fields in result');
+      this.assert(result.actions, 'No actions returned');
 
       // Store pageContextId for later tests
-      pageContextId21 = response.result.pageContextId;
+      pageContextId21 = result.pageContextId;
 
       // Log sample of real data
-      console.log(colors.gray + `      Caption: "${response.result.caption}"` + colors.reset);
-      console.log(colors.gray + `      PageContextId: ${response.result.pageContextId}` + colors.reset);
-      console.log(colors.gray + `      Fields: ${response.result.fields.length}` + colors.reset);
-      console.log(colors.gray + `      Actions: ${response.result.actions.length}` + colors.reset);
+      console.log(colors.gray + `      Caption: "${result.caption}"` + colors.reset);
+      console.log(colors.gray + `      PageContextId: ${result.pageContextId}` + colors.reset);
+      console.log(colors.gray + `      Fields: ${result.fields.length}` + colors.reset);
+      console.log(colors.gray + `      Actions: ${result.actions.length}` + colors.reset);
     });
 
     // Test 4: Search Pages
@@ -239,8 +266,17 @@ class MCPRealTestClient {
 
       this.assert(!response.error, `Tool call failed: ${response.error?.message}`);
       this.assert(response.result, 'No result returned');
-      this.assert(response.result.pages, 'No pages returned');
-      this.assert(response.result.pages.length > 0, 'No pages found');
+
+      const result = this.parseToolResult(response);
+      this.assert(result, 'Failed to parse tool result');
+      this.assert(result.pages, 'No pages returned');
+      this.assert(result.pages.length > 0, 'No pages found');
+
+      // Log sample of real data
+      console.log(colors.gray + `      Found ${result.pages.length} pages` + colors.reset);
+      if (result.pages.length > 0) {
+        console.log(colors.gray + `      First result: ${result.pages[0].caption} (${result.pages[0].type})` + colors.reset);
+      }
     });
 
     // Test 5: REAL Get Page Metadata for Page 22 (Customer List)
@@ -252,17 +288,20 @@ class MCPRealTestClient {
 
       this.assert(!response.error, `Tool call failed: ${response.error?.message}`);
       this.assert(response.result, 'No result returned');
-      this.assert(response.result.pageId === '22', `Wrong pageId: ${response.result.pageId}`);
-      this.assert(response.result.pageContextId, 'No pageContextId returned');
-      this.assert(response.result.pageContextId.includes(':page:22:'),
-                  `Invalid pageContextId format: ${response.result.pageContextId}`);
-      // sessionId removed - no longer part of the API
-      this.assert(response.result.fields.length > 0, 'No fields in result');
-      this.assert(response.result.pageType, 'No pageType returned');
 
-      console.log(colors.gray + `      Caption: "${response.result.caption}"` + colors.reset);
-      console.log(colors.gray + `      PageType: ${response.result.pageType}` + colors.reset);
-      console.log(colors.gray + `      Fields: ${response.result.fields.length}` + colors.reset);
+      const result = this.parseToolResult(response);
+      this.assert(result, 'Failed to parse tool result');
+      this.assert(result.pageId === '22', `Wrong pageId: ${result.pageId}`);
+      this.assert(result.pageContextId, 'No pageContextId returned');
+      this.assert(result.pageContextId.includes(':page:22:'),
+                  `Invalid pageContextId format: ${result.pageContextId}`);
+      // sessionId removed - no longer part of the API
+      this.assert(result.fields.length > 0, 'No fields in result');
+      this.assert(result.pageType, 'No pageType returned');
+
+      console.log(colors.gray + `      Caption: "${result.caption}"` + colors.reset);
+      console.log(colors.gray + `      PageType: ${result.pageType}` + colors.reset);
+      console.log(colors.gray + `      Fields: ${result.fields.length}` + colors.reset);
     });
 
     // Test 6: REAL Get Page Metadata for Page 30 (Item Card)
@@ -274,17 +313,20 @@ class MCPRealTestClient {
 
       this.assert(!response.error, `Tool call failed: ${response.error?.message}`);
       this.assert(response.result, 'No result returned');
-      this.assert(response.result.pageId === '30', `Wrong pageId: ${response.result.pageId}`);
-      this.assert(response.result.pageContextId, 'No pageContextId returned');
-      this.assert(response.result.pageContextId.includes(':page:30:'),
-                  `Invalid pageContextId format: ${response.result.pageContextId}`);
-      // sessionId removed - no longer part of the API
-      this.assert(response.result.fields.length > 0, 'No fields in result');
-      this.assert(response.result.pageType, 'No pageType returned');
 
-      console.log(colors.gray + `      Caption: "${response.result.caption}"` + colors.reset);
-      console.log(colors.gray + `      PageType: ${response.result.pageType}` + colors.reset);
-      console.log(colors.gray + `      Fields: ${response.result.fields.length}` + colors.reset);
+      const result = this.parseToolResult(response);
+      this.assert(result, 'Failed to parse tool result');
+      this.assert(result.pageId === '30', `Wrong pageId: ${result.pageId}`);
+      this.assert(result.pageContextId, 'No pageContextId returned');
+      this.assert(result.pageContextId.includes(':page:30:'),
+                  `Invalid pageContextId format: ${result.pageContextId}`);
+      // sessionId removed - no longer part of the API
+      this.assert(result.fields.length > 0, 'No fields in result');
+      this.assert(result.pageType, 'No pageType returned');
+
+      console.log(colors.gray + `      Caption: "${result.caption}"` + colors.reset);
+      console.log(colors.gray + `      PageType: ${result.pageType}` + colors.reset);
+      console.log(colors.gray + `      Fields: ${result.fields.length}` + colors.reset);
     });
 
     // Test 7: Read Page Data using pageContextId

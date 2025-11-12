@@ -65,7 +65,7 @@ class Config {
         password: process.env.BC_PASSWORD || '1234',
         tenantId: process.env.BC_TENANT_ID || 'default',
         timeout: this.getNumberEnv('BC_TIMEOUT', 30000),
-        searchTimingWindowMs: this.getNumberEnv('BC_SEARCH_TIMING_WINDOW_MS', 3000),
+        searchTimingWindowMs: this.getNumberEnv('BC_SEARCH_TIMING_WINDOW_MS', 15000),
       },
     };
   }
@@ -102,7 +102,7 @@ class Config {
     }
     const parsed = parseInt(value, 10);
     if (isNaN(parsed)) {
-      console.warn(`Invalid number for ${key}="${value}", using default: ${defaultValue}`);
+      console.error(`Invalid number for ${key}="${value}", using default: ${defaultValue}`);
       return defaultValue;
     }
     return parsed;
@@ -134,7 +134,7 @@ class Config {
 
     // Password can be empty for some environments
     if (this.config.bc.password === '') {
-      console.warn('BC_PASSWORD is empty - authentication may fail');
+      console.error('BC_PASSWORD is empty - authentication may fail');
     }
 
     // Validate URL format
@@ -144,9 +144,9 @@ class Config {
       throw new Error(`Invalid BC_BASE_URL: ${this.config.bc.baseUrl}`);
     }
 
-    // Log configuration (without sensitive data) - use console during initialization
+    // Log configuration (without sensitive data) - use console.error to write to stderr for MCP stdio compatibility
     if (process.env.NODE_ENV !== 'test') {
-      console.log('Configuration loaded:', {
+      console.error('Configuration loaded:', {
         nodeEnv: this.config.nodeEnv,
         logLevel: this.config.logLevel,
         bcBaseUrl: this.config.bc.baseUrl,

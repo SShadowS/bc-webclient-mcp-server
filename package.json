@@ -19,6 +19,7 @@
     "test:open-page": "tsx test-open-page.ts",
     "test:mcp": "tsx src/test-mcp-server-real.ts",
     "test:mcp:client": "node test-mcp-client-real.mjs",
+    "test:integration": "node test-integration-workflows.mjs",
     "typecheck": "tsc --noEmit",
     "find:endpoint": "node find-endpoint.js"
   },

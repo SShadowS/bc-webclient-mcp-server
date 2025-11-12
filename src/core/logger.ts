@@ -65,12 +65,14 @@ function createLogger(): PinoLogger {
           translateTime: 'HH:MM:ss.l',
           ignore: 'pid,hostname',
           singleLine: false,
+          destination: 2, // Write to stderr (fd 2) to avoid corrupting stdio MCP transport
         },
       },
     });
   }
 
-  return pino(pinoConfig);
+  // Write to stderr for MCP stdio transport compatibility
+  return pino(pinoConfig, pino.destination(2));
 }
 
 /**

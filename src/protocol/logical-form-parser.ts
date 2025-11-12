@@ -33,6 +33,8 @@ export interface TellMeSearchResultRow {
   key: string;
   /** Optional contextual description */
   context?: string;
+  /** Optional tooltip/description */
+  tooltip?: string;
   /** Optional action type */
   action?: string;
   /** Optional action key (GUID) */
@@ -49,18 +51,33 @@ export interface TellMeSearchResultRow {
  * @returns Array of search result rows
  */
 export function extractTellMeResults(
-  logicalForm: any
+  handlersOrForm: any
 ): Result<TellMeSearchResultRow[], BCError> {
   try {
-    // Navigate to repeater control: LogicalForm.Children[1] or LogicalForm.Controls[1]
-    const form = logicalForm?.LogicalForm;
-    if (!form) {
-      return err(
-        new LogicalFormParseError(
-          'Response does not contain LogicalForm',
-          { logicalForm }
-        )
-      );
+    // Handle both array of handlers and single form object
+    let form: any;
+    const isArrayInput = Array.isArray(handlersOrForm);
+
+    if (isArrayInput) {
+      // Search for handler with LogicalForm
+      const handler = handlersOrForm.find((h: any) => h?.LogicalForm);
+      form = handler?.LogicalForm;
+
+      if (!form) {
+        return ok([]); // No legacy format found in array, return empty (not an error)
+      }
+    } else {
+      // Single object with LogicalForm property (legacy format for single object input)
+      form = handlersOrForm?.LogicalForm;
+
+      if (!form) {
+        return err(
+          new LogicalFormParseError(
+            'Response does not contain LogicalForm',
+            { logicalForm: handlersOrForm }
+          )
+        );
+      }
     }
 
     // BC uses either "Children" or "Controls" depending on context
@@ -102,12 +119,12 @@ export function extractTellMeResults(
 
     // Parse each result row
     const results: TellMeSearchResultRow[] = resultsArray.map((row: any[]) => ({
-      name: row[0] || '',
-      category: row[1] || '',
-      objectId: row[2] || '',
-      objectType: row[3] || '',
-      key: row[4] || '',
-      context: row[5],
+      name: String(row[0] || ''),
+      category: String(row[1] || ''),
+      objectId: String(row[2] || ''),
+      objectType: String(row[3] || ''),
+      key: String(row[4] || ''),
+      context: row[5] || undefined,
       action: row[6],
       actionKey: row[7],
     }));
@@ -134,6 +151,7 @@ export function convertToPageSearchResults(
 ): PageSearchResult[] {
   return tellMeResults
     .filter(result => result.objectType === 'Page') // Only include pages (not reports)
+    .filter(result => result.objectId && result.objectId.trim() !== '') // Exclude actions from "On current page" (empty pageId)
     .map(result => ({
       pageId: result.objectId,
       caption: result.name,
@@ -192,8 +210,8 @@ export function getSearchQuery(logicalForm: any): string | undefined {
 /**
  * Extracts Tell Me search results from BC27+ LogicalClientChangeHandler format.
  *
- * In BC27+, search results are sent as DataRefreshChange updates instead of
- * being embedded in the LogicalForm's Value property.
+ * In BC27+, search results are sent as DataRefreshChange, InitializeChange, or
+ * ControlAddChange updates instead of being embedded in the LogicalForm's Value property.
  *
  * @param handlers - Array of handlers from decompressed response
  * @returns Array of search result rows
@@ -223,10 +241,10 @@ export function extractTellMeResultsFromChangeHandler(
       return ok([]); // No changes
     }
 
-    // Find DataRefreshChange for pages repeater (c[1])
+    // Find change for pages repeater (c[1]) - can be DataRefreshChange, InitializeChange, or ControlAddChange
     const pagesDataChange = changes.find(
       (c: any) =>
-        c.t === 'DataRefreshChange' &&
+        (c.t === 'DataRefreshChange' || c.t === 'InitializeChange' || c.t === 'ControlAddChange') &&
         c.ControlReference?.controlPath === 'server:c[1]'
     );
 
@@ -266,6 +284,7 @@ export function extractTellMeResultsFromChangeHandler(
           objectType: 'Page',
           key,
           context: cells.DepartmentPath?.stringValue,
+          tooltip: cells.Description?.stringValue,
           action: undefined,
           actionKey: undefined,
         };

@@ -228,6 +228,77 @@ Updated field successfully:
 
 ---
 
+## 🔐 Security & User Consent
+
+### User Consent Flow
+
+This MCP server implements the **MCP 2025 user consent requirement** to ensure users maintain control over all data-modifying operations.
+
+#### How It Works
+
+1. **Tool Classification**: Each tool is classified by risk level:
+   - 🟢 **Low Risk** (read-only) - No consent required
+   - 🟡 **Medium Risk** (writes) - User approval required
+   - 🔴 **High Risk** (irreversible) - User approval + warning
+
+2. **Consent Enforcement**: Claude Desktop shows approval dialog before executing write operations:
+   ```
+   ⚠️  Tool Execution Request
+
+   Claude wants to execute: create_record
+
+   Create a new record in Business Central?
+   This will add data to your Business Central database.
+
+   [Deny]  [Allow]
+   ```
+
+3. **Audit Trail**: All approved operations are logged with:
+   - Timestamp
+   - Tool name
+   - Input summary (sanitized)
+   - Execution result
+
+#### Tool Consent Requirements
+
+| Tool | Requires Consent | Risk Level | Reason |
+|------|------------------|------------|--------|
+| search_pages | ❌ No | Low | Read-only discovery |
+| get_page_metadata | ❌ No | Low | Read metadata only |
+| read_page_data | ❌ No | Low | Read-only data access |
+| find_record | ❌ No | Low | Search/filter only |
+| filter_list | ❌ No | Low | Read-only filtering |
+| create_record | ✅ Yes | Medium | Creates new data |
+| update_record | ✅ Yes | Medium | Modifies existing data |
+| write_page_data | ✅ Yes | Medium | Direct field writes |
+| handle_dialog | ✅ Yes | Medium | Can bypass safety prompts |
+| execute_action | ✅ Yes | High | Can trigger Post/Delete |
+
+#### Audit Log Access
+
+Audit logs are available via structured logging (Pino). Example log entry:
+
+```json
+{
+  "level": "info",
+  "msg": "Tool execution audit",
+  "toolName": "create_record",
+  "userApproved": true,
+  "result": "success",
+  "timestamp": "2025-11-08T10:30:45.123Z",
+  "inputSummary": {
+    "pageId": "21",
+    "fields": "[Object]"
+  }
+}
+```
+
+**Sensitive Data Protection**: The audit logger automatically redacts passwords, tokens, API keys, secrets, and other credential fields.
+
+For more details, see [docs/TOOL-CONSENT-CLASSIFICATION.md](./docs/TOOL-CONSENT-CLASSIFICATION.md) and [docs/USER-CONSENT-GUIDE.md](./docs/USER-CONSENT-GUIDE.md).
+
+---
+
 ## 🏗️ Architecture
 
 ### Protocol Stack

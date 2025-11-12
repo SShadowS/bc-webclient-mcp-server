@@ -69,9 +69,9 @@ export class TellMeParser {
    */
   private transformResult(result: any): TellMePage {
     return {
-      id: String(result.id || result.PageId || ''),
-      caption: String(result.caption || result.Caption || ''),
-      tooltip: result.tooltip || result.Tooltip,
+      id: String(result.objectId || result.id || result.PageId || ''),
+      caption: String(result.name || result.caption || result.Caption || ''),
+      tooltip: result.tooltip || result.context || result.Tooltip,
       badges: result.badges || result.Badges,
     };
   }

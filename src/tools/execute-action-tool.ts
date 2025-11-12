@@ -15,12 +15,14 @@ import type { IBCConnection } from '../core/interfaces.js';
 import { BaseMCPTool } from './base-tool.js';
 import { ConnectionManager } from '../connection/connection-manager.js';
 import { createToolLogger } from '../core/logger.js';
+import type { AuditLogger } from '../services/audit-logger.js';
 
 /**
  * Input parameters for execute_action tool.
  */
 export interface ExecuteActionInput {
-  readonly pageId: string;
+  readonly pageContextId?: string; // Preferred: from get_page_metadata
+  readonly pageId?: string; // Fallback: stateless execution
   readonly actionName: string;
   readonly controlPath?: string; // Optional - will be looked up if not provided
 }
@@ -55,9 +57,13 @@ export class ExecuteActionTool extends BaseMCPTool {
   public readonly inputSchema = {
     type: 'object',
     properties: {
+      pageContextId: {
+        type: 'string',
+        description: 'Recommended: Page context ID from get_page_metadata. Ensures action targets the correct page instance when multiple pages are open.',
+      },
       pageId: {
         type: ['string', 'number'],
-        description: 'The BC page ID (e.g., "21" for Customer Card)',
+        description: 'Fallback: BC page ID (e.g., "21" for Customer Card). Ambiguous if multiple instances of the same page are open. Use pageContextId instead.',
       },
       actionName: {
         type: 'string',
@@ -68,8 +74,18 @@ export class ExecuteActionTool extends BaseMCPTool {
         description: 'Optional: The control path for the action button. If not provided, will attempt lookup.',
       },
     },
-    required: ['pageId', 'actionName'],
+    required: ['actionName'],
+    oneOf: [
+      { required: ['pageContextId', 'actionName'] },
+      { required: ['pageId', 'actionName'] },
+    ],
   };
+
+  // Consent configuration - High risk operation (can trigger Post, Delete, etc.)
+  public readonly requiresConsent = true;
+  public readonly sensitivityLevel = 'high' as const;
+  public readonly consentPrompt =
+    'Execute an action in Business Central? WARNING: Some actions like Post or Delete may be irreversible and cannot be undone.';
 
   public constructor(
     private readonly connection: IBCConnection,
@@ -78,9 +94,10 @@ export class ExecuteActionTool extends BaseMCPTool {
       username: string;
       password: string;
       tenantId: string;
-    }
+    },
+    auditLogger?: AuditLogger
   ) {
-    super();
+    super({ auditLogger });
   }
 
   /**
@@ -93,15 +110,32 @@ export class ExecuteActionTool extends BaseMCPTool {
       return baseResult as Result<ExecuteActionInput, BCError>;
     }
 
-    // Get required fields
-    const pageIdResult = this.getRequiredString(input, 'pageId');
-    if (!pageIdResult.ok) {
-      return pageIdResult as Result<ExecuteActionInput, BCError>;
-    }
-
+    // Get actionName (required)
     const actionNameResult = this.getRequiredString(input, 'actionName');
     if (!actionNameResult.ok) {
       return actionNameResult as Result<ExecuteActionInput, BCError>;
+    }
+
+    // Get either pageContextId or pageId (at least one required)
+    const pageContextIdResult = this.getOptionalString(input, 'pageContextId');
+    const pageIdResult = this.getOptionalString(input, 'pageId');
+
+    if (!isOk(pageContextIdResult) || !isOk(pageIdResult)) {
+      return err(
+        new InputValidationError('Failed to parse input parameters')
+      );
+    }
+
+    const pageContextId = pageContextIdResult.value;
+    const pageId = pageIdResult.value;
+
+    // At least one must be provided
+    if (!pageContextId && !pageId) {
+      return err(
+        new InputValidationError(
+          'Either pageContextId or pageId must be provided'
+        )
+      );
     }
 
     // Get optional fields
@@ -111,7 +145,8 @@ export class ExecuteActionTool extends BaseMCPTool {
     }
 
     return ok({
-      pageId: String(pageIdResult.value),
+      pageContextId,
+      pageId: pageId ? String(pageId) : undefined,
       actionName: actionNameResult.value,
       controlPath: controlPathResult.value,
     });
@@ -127,61 +162,135 @@ export class ExecuteActionTool extends BaseMCPTool {
       return validationResult as Result<ExecuteActionOutput, BCError>;
     }
 
-    const { pageId, actionName, controlPath } = validationResult.value;
-
-    logger.info(`Executing action "${actionName}" on page ${pageId}...`);
+    const { pageContextId, pageId, actionName, controlPath } = validationResult.value;
 
     const manager = ConnectionManager.getInstance();
     let connection: IBCConnection;
     let actualSessionId: string;
+    let actualPageId: string;
+    let formId: string;
 
-    // Get or create session using BC config
-    if (!this.bcConfig) {
-      if (!this.connection) {
+    // Preferred path: Use pageContextId for precise targeting
+    if (pageContextId) {
+      logger.info(`Executing action "${actionName}" using pageContext: ${pageContextId}`);
+
+      // Parse pageContextId (format: sessionId:page:pageId:timestamp)
+      const contextParts = pageContextId.split(':');
+      if (contextParts.length < 3) {
         return err(
           new ProtocolError(
-            `No BC config or fallback connection available`,
+            `Invalid pageContextId format: ${pageContextId}`,
+            { pageContextId, actionName }
+          )
+        );
+      }
+
+      actualSessionId = contextParts[0];
+      actualPageId = contextParts[2];
+
+      // Get connection from session
+      const existing = manager.getSession(actualSessionId);
+      if (!existing) {
+        return err(
+          new ProtocolError(
+            `Session ${actualSessionId} from pageContext not found. Page may have been closed. Call get_page_metadata again.`,
+            { pageContextId, actionName, sessionId: actualSessionId }
+          )
+        );
+      }
+
+      connection = existing;
+      logger.info(`♻️  Reusing session from pageContext: ${actualSessionId}`);
+
+      // Get pageContext to access formId
+      const pageContext = (connection as any).pageContexts?.get(pageContextId);
+      if (!pageContext) {
+        return err(
+          new ProtocolError(
+            `Page context ${pageContextId} not found. Page may have been closed. Call get_page_metadata again.`,
+            { pageContextId, actionName }
+          )
+        );
+      }
+
+      // Use formId from pageContext
+      const formIds = pageContext.formIds || [];
+      if (formIds.length === 0) {
+        return err(
+          new ProtocolError(
+            `No formId found in page context. Page may not be properly opened.`,
+            { pageContextId, actionName }
+          )
+        );
+      }
+
+      formId = formIds[0]; // Use first formId (main form)
+      logger.info(`Using formId from pageContext: ${formId}`);
+    }
+    // Fallback path: Use pageId only (less precise)
+    else if (pageId) {
+      logger.info(`Executing action "${actionName}" on page ${pageId}...`);
+      logger.warn(`⚠️  Using pageId without pageContextId may be ambiguous if multiple page instances are open. Recommend using pageContextId from get_page_metadata.`);
+
+      actualPageId = pageId;
+
+      // Get or create session using BC config
+      if (!this.bcConfig) {
+        if (!this.connection) {
+          return err(
+            new ProtocolError(
+              `No BC config or fallback connection available`,
+              { pageId, actionName }
+            )
+          );
+        }
+        logger.info(`⚠️  No BC config, using injected connection`);
+        connection = this.connection;
+        actualSessionId = 'legacy-session';
+      } else {
+        const sessionResult = await manager.getOrCreateSession(this.bcConfig);
+        if (sessionResult.ok === false) {
+          return err(sessionResult.error);
+        }
+        connection = sessionResult.value.connection;
+        actualSessionId = sessionResult.value.sessionId;
+        console.error(
+          `[ExecuteActionTool] ${sessionResult.value.isNewSession ? '🆕 New' : '♻️  Reused'} session: ${actualSessionId}`
+        );
+      }
+
+      // Check if page is open
+      if (!connection.isPageOpen(pageId)) {
+        return err(
+          new ProtocolError(
+            `Page ${pageId} is not open in session ${actualSessionId}. Call get_page_metadata first to open the page.`,
+            { pageId, actionName, sessionId: actualSessionId }
+          )
+        );
+      }
+
+      // Get formId for this page
+      const foundFormId = connection.getOpenFormId(pageId);
+      if (!foundFormId) {
+        return err(
+          new ProtocolError(
+            `No formId found for page ${pageId}. Page may not be properly opened.`,
             { pageId, actionName }
           )
         );
       }
-      logger.info(`⚠️  No BC config, using injected connection`);
-      connection = this.connection;
-      actualSessionId = 'legacy-session';
+
+      formId = foundFormId;
+      logger.info(`Using formId: ${formId}`);
     } else {
-      const sessionResult = await manager.getOrCreateSession(this.bcConfig);
-      if (sessionResult.ok === false) {
-        return err(sessionResult.error);
-      }
-      connection = sessionResult.value.connection;
-      actualSessionId = sessionResult.value.sessionId;
-      console.error(
-        `[ExecuteActionTool] ${sessionResult.value.isNewSession ? '🆕 New' : '♻️  Reused'} session: ${actualSessionId}`
-      );
-    }
-
-    // Check if page is open
-    if (!connection.isPageOpen(pageId)) {
+      // Should never reach here due to validation, but TypeScript needs this
       return err(
         new ProtocolError(
-          `Page ${pageId} is not open in session ${actualSessionId}. Call get_page_metadata first to open the page.`,
-          { pageId, actionName, sessionId: actualSessionId }
+          `Either pageContextId or pageId must be provided`,
+          { actionName }
         )
       );
     }
-
-    // Get formId for this page
-    const formId = connection.getOpenFormId(pageId);
-    if (!formId) {
-      return err(
-        new ProtocolError(
-          `No formId found for page ${pageId}. Page may not be properly opened.`,
-          { pageId, actionName }
-        )
-      );
-    }
-
-    logger.info(`Using formId: ${formId}`);
 
     // Build InvokeAction interaction (real BC protocol)
     // BC requires namedParameters as JSON STRING, not object
@@ -208,7 +317,7 @@ export class ExecuteActionTool extends BaseMCPTool {
       return err(
         new ProtocolError(
           `Failed to execute action "${actionName}": ${result.error.message}`,
-          { pageId, actionName, formId, sessionId: actualSessionId, originalError: result.error }
+          { pageId: actualPageId, actionName, formId, sessionId: actualSessionId, originalError: result.error }
         )
       );
     }
@@ -228,7 +337,7 @@ export class ExecuteActionTool extends BaseMCPTool {
       return err(
         new ProtocolError(
           `BC returned error: ${errorMessage}`,
-          { pageId, actionName, formId, sessionId: actualSessionId, errorHandler }
+          { pageId: actualPageId, actionName, formId, sessionId: actualSessionId, errorHandler }
         )
       );
     }
@@ -236,9 +345,9 @@ export class ExecuteActionTool extends BaseMCPTool {
     return ok({
       success: true,
       actionName,
-      pageId,
+      pageId: actualPageId,
       formId,
-      message: `Successfully executed action "${actionName}" on page ${pageId}`,
+      message: `Successfully executed action "${actionName}" on page ${actualPageId}`,
       handlers,
     });
   }

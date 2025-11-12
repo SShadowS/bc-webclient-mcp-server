@@ -141,12 +141,17 @@ export class IntelligentMetadataParser {
     // Use base parser to extract raw metadata
     const rawResult = this.baseParser.parse(handlers);
 
+    // Extract ViewMode and FormStyle from LogicalForm for accurate page type detection
+    const logicalForm = this.extractLogicalFormFromHandlers(handlers);
+    const viewMode = logicalForm?.ViewMode;
+    const formStyle = logicalForm?.FormStyle;
+
     // Transform to optimized format
     return andThen(rawResult, raw => {
       const optimized: OptimizedPageMetadata = {
         pageId: raw.pageId,
         title: raw.caption,
-        summary: this.generateSummary(raw),
+        summary: this.generateSummary(raw, viewMode, formStyle),
         fields: this.optimizeFields(raw.fields),
         actions: this.optimizeActions(raw.actions),
         stats: {
@@ -292,12 +297,31 @@ export class IntelligentMetadataParser {
   // ============================================================================
 
   /**
+   * Extracts LogicalForm from handlers (finds FormToShow handler).
+   */
+  private extractLogicalFormFromHandlers(handlers: readonly Handler[]): any | null {
+    for (const handler of handlers) {
+      if (
+        handler.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+        handler.parameters?.[0] === 'FormToShow'
+      ) {
+        return handler.parameters[1]; // LogicalForm object
+      }
+    }
+    return null;
+  }
+
+  /**
    * Generates semantic summary of the page.
    * Helps LLMs understand the page's purpose and capabilities.
    */
-  private generateSummary(metadata: PageMetadata): PageSummary {
-    // Infer page type from caption and ID
-    const pageType = this.inferPageType(metadata.caption, metadata.pageId);
+  private generateSummary(
+    metadata: PageMetadata,
+    viewMode?: number,
+    formStyle?: number
+  ): PageSummary {
+    // Infer page type using ViewMode/FormStyle (accurate) or fallback to heuristics
+    const pageType = this.inferPageType(metadata.caption, metadata.pageId, viewMode, formStyle);
 
     // Get capabilities for this page type
     const capabilities = PAGE_CAPABILITIES[pageType] || ['read', 'update'];
@@ -317,9 +341,49 @@ export class IntelligentMetadataParser {
   }
 
   /**
-   * Infers page type from caption and ID.
+   * Infers page type from BC metadata.
+   *
+   * Uses ViewMode and FormStyle from LogicalForm (most accurate).
+   * Falls back to caption/ID heuristics if metadata unavailable.
+   *
+   * ViewMode values:
+   * - 1 = List/Worksheet (multiple records)
+   * - 2 = Card/Document (single record)
+   *
+   * FormStyle values (when ViewMode=2):
+   * - 1 = Document
+   * - undefined/absent = Card
    */
-  private inferPageType(caption: string, pageId: string): string {
+  private inferPageType(
+    caption: string,
+    pageId: string,
+    viewMode?: number,
+    formStyle?: number
+  ): string {
+    // Primary detection: Use BC's ViewMode and FormStyle metadata
+    if (viewMode !== undefined) {
+      if (viewMode === 1) {
+        // List-style pages (multiple records)
+        // Both List and Worksheet have ViewMode=1
+        // Use caption to differentiate if needed
+        const lower = caption.toLowerCase();
+        if (lower.includes('worksheet') || lower.includes('journal')) {
+          return 'Worksheet';
+        }
+        return 'List';
+      }
+
+      if (viewMode === 2) {
+        // Detail-style pages (single record)
+        // FormStyle differentiates Document from Card
+        if (formStyle === 1) {
+          return 'Document';
+        }
+        return 'Card';
+      }
+    }
+
+    // Fallback: Heuristic detection (less reliable)
     const lower = caption.toLowerCase();
 
     if (lower.includes('card')) return 'Card';
@@ -327,12 +391,8 @@ export class IntelligentMetadataParser {
     if (lower.includes('document') || lower.includes('order') || lower.includes('invoice')) return 'Document';
     if (lower.includes('worksheet') || lower.includes('journal')) return 'Worksheet';
 
-    // Infer from page ID ranges (BC convention)
-    const id = parseInt(pageId, 10);
-    if (id >= 20 && id < 50) return 'Card';
-    if (id >= 1 && id < 20) return 'List';
-
-    return 'Card'; // Default
+    // Default fallback
+    return 'Card';
   }
 
   /**

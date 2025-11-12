@@ -17,6 +17,7 @@ import { ok, err, isOk } from '../core/result.js';
 import type { BCError } from '../core/errors.js';
 import { InternalError } from '../core/errors.js';
 import type { IMCPServer, IMCPTool, IMCPResource, ILogger } from '../core/interfaces.js';
+import { PageContextCache } from './page-context-cache.js';
 
 // ============================================================================
 // MCP Protocol Types
@@ -96,6 +97,11 @@ export interface ToolListItem {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: unknown;
+  readonly annotations?: {
+    readonly requiresConsent?: boolean;
+    readonly consentPrompt?: string;
+    readonly sensitivityLevel?: 'low' | 'medium' | 'high';
+  };
 }
 
 /**
@@ -231,6 +237,16 @@ export class MCPServer implements IMCPServer {
         resources: this.resources.size,
       });
 
+      // 💾 Initialize persistent pageContext cache
+      try {
+        const cache = PageContextCache.getInstance();
+        await cache.initialize();
+        this.logger?.info('✓ PageContext cache initialized');
+      } catch (error) {
+        this.logger?.error(`Failed to initialize PageContext cache: ${error}`);
+        // Non-fatal: continue without persistent cache
+      }
+
       this.running = true;
 
       // Note: Actual stdio processing handled by stdio-transport.ts
@@ -314,7 +330,7 @@ export class MCPServer implements IMCPServer {
       this.clientInfo = params.clientInfo;
 
       const result: InitializeResult = {
-        protocolVersion: '2024-11-05',
+        protocolVersion: '2024-11-05', // MCP protocol version (Claude Desktop supports 2025-06-18)
         capabilities: {
           tools: this.tools.size > 0 ? {} : undefined,
           resources: this.resources.size > 0 ? {} : undefined,
@@ -344,6 +360,7 @@ export class MCPServer implements IMCPServer {
 
   /**
    * Handles tools/list request.
+   * Includes consent metadata via annotations for MCP 2025 compliance.
    */
   public async handleToolsList(): Promise<Result<{ tools: readonly ToolListItem[] }, BCError>> {
     try {
@@ -353,9 +370,20 @@ export class MCPServer implements IMCPServer {
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
+
+        // Include consent metadata in MCP response
+        // MCP spec uses "annotations" for metadata extensions
+        annotations: {
+          requiresConsent: tool.requiresConsent ?? false,
+          consentPrompt: tool.consentPrompt,
+          sensitivityLevel: tool.sensitivityLevel ?? 'medium',
+        },
       }));
 
-      this.logger?.debug('Returning tools list', { count: toolsList.length });
+      this.logger?.debug('Returning tools list', {
+        count: toolsList.length,
+        withConsent: toolsList.filter(t => t.annotations?.requiresConsent).length,
+      });
 
       return ok({ tools: toolsList });
     } catch (error) {
@@ -403,7 +431,21 @@ export class MCPServer implements IMCPServer {
         toolName: params.name,
       });
 
-      return result;
+      // Wrap result in MCP content format
+      // According to MCP specification (2025-06-18):
+      // - structuredContent: provides raw JSON for proper client rendering
+      // - content (text): provides stringified JSON for backwards compatibility
+      const mcpResponse = {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(result.value, null, 2),
+          },
+        ],
+        structuredContent: result.value,
+      };
+
+      return ok(mcpResponse);
     } catch (error) {
       return err(
         new InternalError(

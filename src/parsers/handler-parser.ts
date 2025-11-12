@@ -126,6 +126,31 @@ export class HandlerParser implements IHandlerParser {
     );
 
     if (formToShowHandlers.length === 0) {
+      // Check if there's a DialogToShow event instead (indicates page requires setup/configuration)
+      const dialogHandler = handlers.find(
+        (h): h is LogicalClientEventRaisingHandler =>
+          h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+          h.parameters?.[0] === 'DialogToShow'
+      );
+
+      if (dialogHandler) {
+        const dialogData = dialogHandler.parameters?.[1];
+        const message = dialogData?.Message || dialogData?.message || 'Unknown dialog';
+        const caption = dialogData?.Caption || dialogData?.caption || 'Dialog';
+
+        return err(
+          new LogicalFormParseError(
+            `Page cannot be opened: ${caption} - ${message}`,
+            {
+              handlerCount: handlers.length,
+              handlerTypes: handlers.map(h => h.handlerType),
+              dialogCaption: caption,
+              dialogMessage: message,
+            }
+          )
+        );
+      }
+
       return err(
         new LogicalFormParseError('No FormToShow event found in handlers', {
           handlerCount: handlers.length,

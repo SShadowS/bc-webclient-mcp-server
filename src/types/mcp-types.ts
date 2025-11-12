@@ -96,14 +96,7 @@ export interface ReadPageDataInput {
 
 export interface WritePageDataInput {
   readonly pageContextId: string; // Required: must have open page
-  readonly recordSelector?: {
-    systemId?: string;
-    keys?: Record<string, unknown>;
-    useCurrent?: boolean;
-  };
   readonly fields: Record<string, { value: unknown; controlPath?: string }>;
-  readonly save?: boolean; // Default: false
-  readonly autoEdit?: boolean; // Auto-switch to edit mode if needed
   readonly stopOnError?: boolean; // Stop on first validation error (default: true)
   readonly immediateValidation?: boolean; // Parse handlers for validation errors (default: true)
 }
@@ -142,7 +135,7 @@ export interface HandleDialogInput {
 
 export interface UpdateRecordInput {
   readonly pageId?: string; // Optional if pageContextId provided
-  readonly pageContextId?: string; // Optional: reuse existing page context
+  readonly pageContextId?: string; // Optional: reuse existing page context to skip opening
   readonly recordSelector?: {
     systemId?: string;
     keys?: Record<string, unknown>;
@@ -234,11 +227,11 @@ export interface PageFieldValue {
 export interface WritePageDataOutput {
   readonly success: boolean;
   readonly pageContextId: string; // Current page context (opaque - do not parse)
-  readonly record?: PageDataRecord; // Updated record if save=true
-  readonly saved: boolean; // Whether changes were saved
+  readonly record?: PageDataRecord; // Updated record if caller invokes Save
+  readonly saved: boolean; // Whether changes were saved (always false for this low-level tool)
   readonly message?: string;
   readonly updatedFields?: string[];
-  readonly failedFields?: string[];
+  readonly failedFields?: Array<{ field: string; error: string; validationMessage?: string }>; // Structured validation errors
 }
 
 export interface ExecuteActionOutput {
@@ -289,7 +282,7 @@ export interface UpdateRecordOutput {
   readonly record?: PageDataRecord; // Updated record
   readonly saved: boolean; // Whether changes were saved
   readonly updatedFields?: readonly string[];
-  readonly failedFields?: readonly string[];
+  readonly failedFields?: ReadonlyArray<{ field: string; error: string; validationMessage?: string }>; // Structured validation errors
   readonly message?: string;
 }
 
@@ -300,7 +293,7 @@ export interface CreateRecordOutput {
   readonly record?: PageDataRecord; // Created record with systemId
   readonly saved: boolean; // Whether record was saved
   readonly setFields?: readonly string[];
-  readonly failedFields?: readonly string[];
+  readonly failedFields?: ReadonlyArray<{ field: string; error: string; validationMessage?: string }>; // Structured validation errors
   readonly message?: string;
 }
 

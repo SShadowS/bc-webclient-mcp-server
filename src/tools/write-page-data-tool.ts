@@ -22,6 +22,10 @@ import type {
 import { InputValidationError, ProtocolError } from '../core/errors.js';
 import { ConnectionManager } from '../connection/connection-manager.js';
 import { createToolLogger } from '../core/logger.js';
+import type { AuditLogger } from '../services/audit-logger.js';
+import { ControlParser } from '../parsers/control-parser.js';
+import type { LogicalForm, FieldMetadata } from '../types/bc-types.js';
+import { PageContextCache } from '../services/page-context-cache.js';
 
 /**
  * MCP Tool: write_page_data
@@ -49,15 +53,6 @@ export class WritePageDataTool extends BaseMCPTool {
         type: 'string',
         description: 'Required page context ID from get_page_metadata',
       },
-      recordSelector: {
-        type: 'object',
-        description: 'Optional record selector: {systemId} | {keys:{...}} | {useCurrent:true}',
-        properties: {
-          systemId: { type: 'string' },
-          keys: { type: 'object' },
-          useCurrent: { type: 'boolean' },
-        },
-      },
       fields: {
         oneOf: [
           {
@@ -72,7 +67,7 @@ export class WritePageDataTool extends BaseMCPTool {
               type: 'object',
               properties: {
                 name: { type: 'string' },
-                value: { type: ['string', 'number', 'boolean'] },
+                value: { type: ['string', 'number', 'boolean', 'null'], description: 'Field value (null to clear)' },
                 controlPath: { type: 'string' },
               },
               required: ['name', 'value'],
@@ -94,6 +89,12 @@ export class WritePageDataTool extends BaseMCPTool {
     required: ['pageContextId', 'fields'],
   };
 
+  // Consent configuration - Write operation requiring user approval
+  public readonly requiresConsent = true;
+  public readonly sensitivityLevel = 'medium' as const;
+  public readonly consentPrompt =
+    'Write field values to a Business Central record? This will modify data in your Business Central database.';
+
   public constructor(
     private readonly connection: IBCConnection,
     private readonly bcConfig?: {
@@ -101,9 +102,124 @@ export class WritePageDataTool extends BaseMCPTool {
       username: string;
       password: string;
       tenantId: string;
-    }
+    },
+    auditLogger?: AuditLogger
   ) {
-    super();
+    super({ auditLogger });
+  }
+
+  /**
+   * Builds a map of field names to metadata from cached LogicalForm.
+   * Uses ControlParser to extract all fields from the control tree.
+   *
+   * @param logicalForm - Cached LogicalForm from pageContext
+   * @returns Map of field name → FieldMetadata (case-insensitive keys)
+   */
+  private buildFieldMap(logicalForm: LogicalForm): Map<string, FieldMetadata> {
+    const parser = new ControlParser();
+    const controls = parser.walkControls(logicalForm);
+    const fields = parser.extractFields(controls);
+
+    const fieldMap = new Map<string, FieldMetadata>();
+
+    for (const field of fields) {
+      // Add field by all possible names (case-insensitive)
+      const names = [
+        field.name,
+        field.caption,
+        field.controlId,
+      ].filter((n): n is string => !!n);
+
+      for (const name of names) {
+        const key = name.toLowerCase().trim();
+        if (!fieldMap.has(key)) {
+          fieldMap.set(key, field);
+        }
+      }
+    }
+
+    return fieldMap;
+  }
+
+  /**
+   * Validates that a field exists and is editable using cached metadata.
+   * Provides helpful error messages for common issues.
+   *
+   * @param fieldName - Field name to validate
+   * @param fieldMap - Map of available fields from buildFieldMap()
+   * @returns Result with field metadata or validation error
+   */
+  private validateFieldExists(
+    fieldName: string,
+    fieldMap: Map<string, FieldMetadata>
+  ): Result<FieldMetadata, BCError> {
+    const key = fieldName.toLowerCase().trim();
+    const field = fieldMap.get(key);
+
+    if (!field) {
+      // Field doesn't exist - provide helpful error
+      const availableFields = Array.from(new Set(
+        Array.from(fieldMap.values())
+          .map(f => f.caption || f.name)
+          .filter((n): n is string => !!n)
+      )).slice(0, 10);
+
+      return err(
+        new InputValidationError(
+          `Field "${fieldName}" not found on page`,
+          fieldName,
+          [
+            `Field "${fieldName}" does not exist on this page.`,
+            `Available fields: ${availableFields.join(', ')}${fieldMap.size > 10 ? ', ...' : ''}`,
+            `Hint: Field names are case-insensitive. Check spelling and use caption or name.`
+          ]
+        )
+      );
+    }
+
+    // Check if field is visible
+    if (!field.visible) {
+      return err(
+        new InputValidationError(
+          `Field "${fieldName}" is not visible`,
+          fieldName,
+          [
+            `Field "${fieldName}" exists but is not visible on the page.`,
+            `Hidden fields cannot be edited.`
+          ]
+        )
+      );
+    }
+
+    // Check if field is enabled
+    if (!field.enabled) {
+      return err(
+        new InputValidationError(
+          `Field "${fieldName}" is disabled`,
+          fieldName,
+          [
+            `Field "${fieldName}" exists but is disabled.`,
+            `Disabled fields cannot be edited.`
+          ]
+        )
+      );
+    }
+
+    // Check if field is readonly
+    if (field.readonly) {
+      return err(
+        new InputValidationError(
+          `Field "${fieldName}" is read-only`,
+          fieldName,
+          [
+            `Field "${fieldName}" is marked as read-only.`,
+            `Read-only fields cannot be modified.`
+          ]
+        )
+      );
+    }
+
+    return ok(field);
   }
 
   /**
@@ -119,12 +235,6 @@ export class WritePageDataTool extends BaseMCPTool {
     const pageContextIdResult = this.getRequiredString(input, 'pageContextId');
     if (!isOk(pageContextIdResult)) {
       return pageContextIdResult as Result<never, BCError>;
-    }
-
-    // Extract optional recordSelector
-    const recordSelectorResult = this.getOptionalObject(input, 'recordSelector');
-    if (!isOk(recordSelectorResult)) {
-      return recordSelectorResult as Result<never, BCError>;
     }
 
     // Extract required fields (object or array)
@@ -197,12 +307,6 @@ export class WritePageDataTool extends BaseMCPTool {
     }
 
     // Extract optional flags
-    const saveValue = (input as Record<string, unknown>).save;
-    const save = typeof saveValue === 'boolean' ? saveValue : false;
-
-    const autoEditValue = (input as Record<string, unknown>).autoEdit;
-    const autoEdit = typeof autoEditValue === 'boolean' ? autoEditValue : false;
-
     const stopOnErrorValue = (input as Record<string, unknown>).stopOnError;
     const stopOnError = typeof stopOnErrorValue === 'boolean' ? stopOnErrorValue : true;
 
@@ -211,10 +315,7 @@ export class WritePageDataTool extends BaseMCPTool {
 
     return ok({
       pageContextId: pageContextIdResult.value,
-      recordSelector: recordSelectorResult.value,
       fields,
-      save,
-      autoEdit,
       stopOnError,
       immediateValidation,
     });
@@ -233,12 +334,12 @@ export class WritePageDataTool extends BaseMCPTool {
       return validatedInput as Result<never, BCError>;
     }
 
-    const { pageContextId, fields, save, autoEdit, stopOnError, immediateValidation } = validatedInput.value;
+    const { pageContextId, fields, stopOnError, immediateValidation } = validatedInput.value;
     const fieldNames = Object.keys(fields);
 
     logger.info(`Writing ${fieldNames.length} fields using pageContext: "${pageContextId}"`);
     logger.info(`Fields: ${fieldNames.join(', ')}`);
-    logger.info(`Options: save=${save}, autoEdit=${autoEdit}, stopOnError=${stopOnError}, immediateValidation=${immediateValidation}`);
+    logger.info(`Options: stopOnError=${stopOnError}, immediateValidation=${immediateValidation}`);
 
     const manager = ConnectionManager.getInstance();
     let connection: IBCConnection;
@@ -266,10 +367,33 @@ export class WritePageDataTool extends BaseMCPTool {
       connection = existing;
       actualSessionId = sessionId;
 
-      // Check if the page context is still valid
-      const pageContext = (connection as any).pageContexts?.get(pageContextId);
+      // Check if the page context is still valid in memory
+      let pageContext = (connection as any).pageContexts?.get(pageContextId);
+
+      // 💾 If not in memory, try restoring from persistent cache
       if (!pageContext) {
-        logger.info(`⚠️  Page context not found, page may have been closed`);
+        logger.info(`⚠️  Page context not in memory, checking persistent cache...`);
+        try {
+          const cache = PageContextCache.getInstance();
+          const cachedContext = await cache.load(pageContextId);
+
+          if (cachedContext) {
+            logger.info(`✓ Restored pageContext from cache: ${pageContextId}`);
+            // Restore to memory
+            if (!(connection as any).pageContexts) {
+              (connection as any).pageContexts = new Map();
+            }
+            (connection as any).pageContexts.set(pageContextId, cachedContext);
+            pageContext = cachedContext;
+          }
+        } catch (error) {
+          logger.error(`Failed to load from cache: ${error}`);
+        }
+      }
+
+      // If still not found, return error
+      if (!pageContext) {
+        logger.info(`❌ Page context not found in memory or cache`);
         return err(
           new ProtocolError(
             `Page context ${pageContextId} not found. Page may have been closed. Please call get_page_metadata again.`,
@@ -308,6 +432,29 @@ export class WritePageDataTool extends BaseMCPTool {
     }
 
     logger.info(`Using formId: ${formId}`);
+
+    // 🎯 OPTIMIZATION: Use cached LogicalForm for client-side field validation
+    // This follows the caching pattern: extract metadata once in get_page_metadata, reuse here
+    const pageContext = (connection as any).pageContexts?.get(pageContextId);
+    let fieldMap: Map<string, FieldMetadata> | null = null;
+
+    if (pageContext?.logicalForm) {
+      logger.info(`✓ Using cached LogicalForm for client-side field validation`);
+      fieldMap = this.buildFieldMap(pageContext.logicalForm);
+      logger.info(`  Field map contains ${fieldMap.size} field entries`);
+
+      // Pre-validate all fields before making BC API calls
+      for (const fieldName of fieldNames) {
+        const validationResult = this.validateFieldExists(fieldName, fieldMap);
+        if (!isOk(validationResult)) {
+          logger.info(`✗ Pre-validation failed for field "${fieldName}": ${validationResult.error.message}`);
+          return validationResult as Result<never, BCError>;
+        }
+        logger.info(`✓ Pre-validated field "${fieldName}"`);
+      }
+    } else {
+      logger.info(`⚠️  No cached LogicalForm available, skipping client-side validation`);
+    }
 
     // Set each field value using SaveValue interaction
     const updatedFields: string[] = [];
@@ -353,7 +500,7 @@ export class WritePageDataTool extends BaseMCPTool {
       return ok({
         success: true,
         pageContextId,
-        saved: save || false, // Indicates whether changes were saved
+        saved: false, // This tool never saves - caller must use execute_action("Save")
         message: `Successfully updated ${updatedFields.length} field(s): ${updatedFields.join(', ')}`,
         updatedFields,
       });
@@ -362,10 +509,10 @@ export class WritePageDataTool extends BaseMCPTool {
       return ok({
         success: false,
         pageContextId,
-        saved: false, // Partial updates are not saved
+        saved: false, // This tool never saves
         message: `Partially updated ${updatedFields.length} field(s). Failed: ${failedFields.map(f => f.field).join(', ')}`,
         updatedFields,
-        failedFields: failedFields.map(f => `${f.field}: ${f.error}`),
+        failedFields, // Structured: [{ field, error, validationMessage? }]
       });
     } else {
       // Complete failure
@@ -382,6 +529,8 @@ export class WritePageDataTool extends BaseMCPTool {
    * Sets a field value using the SaveValue interaction.
    * Uses the real BC protocol captured from traffic.
    * Optionally inspects handlers for validation errors.
+   *
+   * Supports null values for clearing fields (converted to empty string).
    */
   private async setFieldValue(
     connection: IBCConnection,
@@ -391,13 +540,18 @@ export class WritePageDataTool extends BaseMCPTool {
     controlPath?: string,
     immediateValidation: boolean = true
   ): Promise<Result<void, BCError>> {
-    // Validate value type
-    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+    // Handle null values (clear field)
+    let actualValue: string | number | boolean;
+    if (value === null || value === undefined) {
+      actualValue = ''; // Clear field by setting to empty string
+    } else if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+      actualValue = value;
+    } else {
       return err(
         new InputValidationError(
-          `Field '${fieldName}' value must be a string, number, or boolean`,
+          `Field '${fieldName}' value must be a string, number, boolean, or null`,
           fieldName,
-          [`Expected string|number|boolean, got ${typeof value}`]
+          [`Expected string|number|boolean|null, got ${typeof value}`]
         )
       );
     }
@@ -409,7 +563,7 @@ export class WritePageDataTool extends BaseMCPTool {
       skipExtendingSessionLifetime: false,
       namedParameters: JSON.stringify({
         key: null,
-        newValue: value,
+        newValue: actualValue,
         alwaysCommitChange: true,
         notifyBusy: 1,
         telemetry: {
@@ -434,11 +588,11 @@ export class WritePageDataTool extends BaseMCPTool {
       );
     }
 
-    // If immediateValidation is enabled, inspect handlers for errors
+    // If immediateValidation is enabled, inspect handlers for errors and other messages
     if (immediateValidation) {
       const handlers = result.value;
 
-      // Check for BC error messages
+      // Check for BC error messages (blocking errors)
       const errorHandler = handlers.find(
         (h: any) => h.handlerType === 'DN.ErrorMessageProperties' || h.handlerType === 'DN.ErrorDialogProperties'
       );
@@ -450,12 +604,12 @@ export class WritePageDataTool extends BaseMCPTool {
         return err(
           new ProtocolError(
             `BC error: ${errorMessage}`,
-            { fieldName, value, formId, controlPath, errorHandler, validationMessage: errorMessage }
+            { fieldName, value, formId, controlPath, errorHandler, validationMessage: errorMessage, handlerType: 'error' }
           )
         );
       }
 
-      // Check for validation errors
+      // Check for validation errors (blocking validation)
       const validationHandler = handlers.find(
         (h: any) => h.handlerType === 'DN.ValidationMessageProperties'
       );
@@ -467,10 +621,30 @@ export class WritePageDataTool extends BaseMCPTool {
         return err(
           new ProtocolError(
             `BC validation error: ${validationMessage}`,
-            { fieldName, value, formId, controlPath, validationHandler, validationMessage }
+            { fieldName, value, formId, controlPath, validationHandler, validationMessage, handlerType: 'validation' }
           )
         );
       }
+
+      // Check for confirmation dialogs (require user interaction)
+      const confirmHandler = handlers.find(
+        (h: any) => h.handlerType === 'DN.ConfirmDialogProperties' || h.handlerType === 'DN.YesNoDialogProperties'
+      );
+
+      if (confirmHandler) {
+        const confirmParams = (confirmHandler as any).parameters?.[0];
+        const confirmMessage = confirmParams?.Message || confirmParams?.ConfirmText || 'Confirmation required';
+
+        return err(
+          new ProtocolError(
+            `BC confirmation required: ${confirmMessage}`,
+            { fieldName, value, formId, controlPath, confirmHandler, validationMessage: confirmMessage, handlerType: 'confirm' }
+          )
+        );
+      }
+
+      // Note: Info messages and busy states are non-blocking, so we don't fail on them
+      // They're available in the raw handlers if caller needs them
     }
 
     // Success - field value saved

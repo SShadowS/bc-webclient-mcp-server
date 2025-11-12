@@ -32,3 +32,5 @@ yarn-error.log*
 # Cache
 .cache/
 .msal-cache/
+.serena/
+captures/

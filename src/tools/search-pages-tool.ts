@@ -30,11 +30,17 @@ import {
   convertToPageSearchResults,
 } from '../protocol/logical-form-parser.js';
 import { bcConfig } from '../core/config.js';
+import type { BCConnectionPool } from '../services/connection-pool.js';
+import type { CacheManager } from '../services/cache-manager.js';
 
 /**
  * MCP Tool: search_pages
  *
  * Searches for BC pages by name, caption, or type.
+ *
+ * NOTE: Unlike other tools, this creates its own BCRawWebSocketClient per invocation
+ * because it requires low-level Tell Me protocol access not available through BCPageConnection.
+ * Each search creates a new session, performs the search, and closes.
  */
 export class SearchPagesTool extends BaseMCPTool {
   public readonly name = 'search_pages';
@@ -44,6 +50,25 @@ export class SearchPagesTool extends BaseMCPTool {
     'Type parameter accepts: List, Card, Document, Worksheet, or Report (enum values only). ' +
     'Returns array of pages with: pageId, pageName, type, and description. ' +
     'Use returned pageIds with get_page_metadata to open and interact with the page.';
+
+  /**
+   * Constructor.
+   * SearchPagesTool can optionally use a connection pool and cache for improved performance.
+   * If no pool is provided, falls back to creating a new connection per search.
+   * If no cache is provided, skips caching (direct execution).
+   */
+  public constructor(
+    private readonly config?: {
+      readonly baseUrl?: string;
+      readonly username?: string;
+      readonly password?: string;
+      readonly tenantId?: string;
+    },
+    private readonly connectionPool?: BCConnectionPool,
+    private readonly cache?: CacheManager
+  ) {
+    super();
+  }
 
   public readonly inputSchema = {
     type: 'object',
@@ -66,6 +91,10 @@ export class SearchPagesTool extends BaseMCPTool {
     },
     required: ['query'],
   };
+
+  // Consent configuration - Read-only operation, no consent needed
+  public readonly requiresConsent = false;
+  public readonly sensitivityLevel = 'low' as const;
 
   /**
    * Validates and extracts input.
@@ -116,71 +145,123 @@ export class SearchPagesTool extends BaseMCPTool {
 
     const { query, limit = 10, type } = validatedInput.value;
 
-    // Get BC credentials from centralized config
-    const { baseUrl, username, password, tenantId } = bcConfig;
+    // Build cache key
+    const cacheKey = `search:${query}:${type || 'all'}:${limit}`;
+
+    // Use cache if available
+    if (this.cache) {
+      try {
+        return await this.cache.getOrCompute(
+          cacheKey,
+          async () => {
+            return await this.performSearch(query, limit, type);
+          },
+          300000 // 5 minute TTL for search results
+        );
+      } catch (error) {
+        // If cache operation fails, fall back to direct execution
+        return await this.performSearch(query, limit, type);
+      }
+    }
+
+    // No cache - execute directly
+    return await this.performSearch(query, limit, type);
+  }
+
+  /**
+   * Perform the actual Tell Me search (called by executeInternal)
+   * @private
+   */
+  private async performSearch(
+    query: string,
+    limit: number,
+    type?: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report'
+  ): Promise<Result<SearchPagesOutput, BCError>> {
+
+    // Get BC credentials from passed config or fall back to centralized config
+    const baseUrl = this.config?.baseUrl || bcConfig.baseUrl;
+    const username = this.config?.username || bcConfig.username;
+    const password = this.config?.password || bcConfig.password;
+    const tenantId = this.config?.tenantId || bcConfig.tenantId;
+
+    // Connection tracking (declared outside try block for error cleanup)
+    let client: BCRawWebSocketClient | null = null;
+    let pooledConnection: any = null;
+    let shouldDisconnect = true;
 
     try {
-      // Create client
-      const client = new BCRawWebSocketClient(
-        { baseUrl } as any,
-        username,
-        password,
-        tenantId
-      );
+      // Use connection pool if available, otherwise create new connection
+      if (this.connectionPool) {
+        // Acquire connection from pool
+        pooledConnection = await this.connectionPool.acquire();
+        client = pooledConnection.client;
+        shouldDisconnect = false; // Pool manages disconnection
+      } else {
+        // Legacy path: Create new client
+        client = new BCRawWebSocketClient(
+          { baseUrl } as any,
+          username,
+          password,
+          tenantId
+        );
 
-      // Authenticate
-      await client.authenticateWeb();
+        // Authenticate
+        await client.authenticateWeb();
 
-      // Connect WebSocket
-      await client.connect();
+        // Connect WebSocket
+        await client.connect();
 
-      // Open session
-      await client.openSession({
-        clientType: 'WebClient',
-        clientVersion: '27.0.0.0',
-        clientCulture: 'en-US',
-        clientTimeZone: 'UTC',
-      });
+        // Open session
+        await client.openSession({
+          clientType: 'WebClient',
+          clientVersion: '27.0.0.0',
+          clientCulture: 'en-US',
+          clientTimeZone: 'UTC',
+        });
+      }
 
-      // Extract role center form from OpenSession
-      const fs = await import('fs/promises');
-      const openSessionData = JSON.parse(
-        await fs.readFile('opensession-response.json', 'utf-8')
-      );
+      // Client should always be set at this point
+      if (!client) {
+        throw new ConnectionError('Failed to initialize BC client');
+      }
 
-      const formHandler = openSessionData.find((h: any) =>
-        h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-        h.parameters?.[0] === 'FormToShow'
-      );
+      // Get role center form ID from the connection (not from file - avoids race condition with pool)
+      const ownerFormId = client.getRoleCenterFormId();
 
-      if (!formHandler) {
+      if (!ownerFormId) {
         await client.disconnect();
         return err(
           new ProtocolError('No role center form found in session', {})
         );
       }
 
-      const ownerFormId = formHandler.parameters[1].ServerId;
-
       // Define predicate to detect Tell Me dialog (handles both BC27+ and legacy formats)
       const isTellMeDialogOpen = (handlers: any[]) => {
+        // Log all handlers for debugging
+        console.error(`[Tell Me Debug] Received ${handlers.length} handlers:`);
+        handlers.forEach((h, i) => {
+          console.error(`  [${i}] ${h.handlerType}`, h.parameters?.[0] || '');
+        });
+
         // Try legacy FormToShow format first
+        // TODO: Find language-independent way to identify Tell Me dialog
         const legacy = handlers.find((h: any) =>
           h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
           h.parameters?.[0] === 'FormToShow' &&
           h.parameters?.[1]?.ServerId
         );
         if (legacy) {
+          console.error(`[Tell Me Debug] Found FormToShow dialog: ServerId=${legacy.parameters[1].ServerId}, Caption="${legacy.parameters[1].Caption}"`);
           return { matched: true, data: legacy.parameters[1].ServerId };
         }
 
-        // Try BC27+ DataRefreshChange format
+        // Try BC27+ ChangeHandler format (DataRefreshChange or InitializeChange)
         const change = handlers.find((h: any) =>
           h.handlerType === 'DN.LogicalClientChangeHandler' &&
-          h.parameters?.[0]?.Type === 'DataRefreshChange'
+          (h.parameters?.[0]?.Type === 'DataRefreshChange' || h.parameters?.[0]?.Type === 'InitializeChange')
         );
         if (change) {
-          // Try to extract form ID from DataRefreshChange
+          // Try to extract form ID from change handler
           const updates = change.parameters?.[0]?.Updates;
           if (Array.isArray(updates)) {
             for (const update of updates) {
@@ -309,9 +390,6 @@ export class SearchPagesTool extends BaseMCPTool {
         );
       }
 
-      // Close connection
-      await client.disconnect();
-
       // Convert to page results
       let pages = convertToPageSearchResults(searchResults);
 
@@ -323,11 +401,36 @@ export class SearchPagesTool extends BaseMCPTool {
       // Apply limit
       pages = pages.slice(0, limit);
 
+      // Clean up connection
+      if (pooledConnection) {
+        // Release back to pool
+        await this.connectionPool!.release(pooledConnection);
+      } else if (shouldDisconnect) {
+        // Close new connection
+        await client.disconnect();
+      }
+
       return ok({
         pages,
         totalCount: pages.length,
       });
     } catch (error) {
+      // Ensure connection cleanup on error
+      if (pooledConnection && this.connectionPool) {
+        try {
+          await this.connectionPool.release(pooledConnection);
+        } catch (releaseError) {
+          // Log but don't throw - original error is more important
+        }
+      } else if (client && shouldDisconnect) {
+        // Clean up non-pooled connection
+        try {
+          await client.disconnect();
+        } catch (disconnectError) {
+          // Log but don't throw - original error is more important
+        }
+      }
+
       return err(
         new ConnectionError(
           `Tell Me search failed: ${error instanceof Error ? error.message : String(error)}`,

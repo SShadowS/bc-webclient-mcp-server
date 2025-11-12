@@ -622,14 +622,9 @@ describe('Partition Functions', () => {
 
 describe('Result Integration', () => {
   it('should chain multiple operations', () => {
-    const result = ok(5)
-      |> (r => map(r, n => n * 2))
-      |> (r => andThen(r, n => n > 5 ? ok(n) : err(new Error('too small'))))
-      |> (r => map(r, n => n + 1));
-
-    // Using pipeline operator syntax (if available)
-    // Otherwise use nested calls
-    const resultNested = map(
+    // Pipeline operator syntax is not yet supported by esbuild
+    // Using nested calls instead
+    const result = map(
       andThen(
         map(ok(5), n => n * 2),
         n => n > 5 ? ok(n) : err(new Error('too small'))
@@ -637,9 +632,9 @@ describe('Result Integration', () => {
       n => n + 1
     );
 
-    expect(isOk(resultNested)).toBe(true);
-    if (isOk(resultNested)) {
-      expect(resultNested.value).toBe(11);
+    expect(isOk(result)).toBe(true);
+    if (isOk(result)) {
+      expect(result.value).toBe(11);
     }
   });
 

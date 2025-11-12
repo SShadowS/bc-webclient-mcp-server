@@ -7,24 +7,25 @@
  * This is a composite tool that simplifies common workflows.
  */
 
-import { BaseMCPTool } from './base-tool.js';
-import type { Result } from '../core/result.js';
-import { ok, err, isOk } from '../core/result.js';
-import type { BCError } from '../core/errors.js';
-import { ProtocolError } from '../core/errors.js';
-import type { IBCConnection } from '../core/interfaces.js';
+import { BaseMCPTool } from '../base-tool.js';
+import type { Result } from '../../core/result.js';
+import { ok, err, isOk } from '../../core/result.js';
+import type { BCError } from '../../core/errors.js';
+import { ProtocolError } from '../../core/errors.js';
+import type { IBCConnection } from '../../core/interfaces.js';
 import type {
   CreateRecordInput,
   CreateRecordOutput,
   GetPageMetadataOutput,
   ExecuteActionOutput,
   WritePageDataOutput,
-} from '../types/mcp-types.js';
-import { GetPageMetadataTool } from './get-page-metadata-tool.js';
-import { ExecuteActionTool } from './execute-action-tool.js';
-import { WritePageDataTool } from './write-page-data-tool.js';
-import { ensurePageIdentifiers } from '../utils/pageContext.js';
-import { createToolLogger } from '../core/logger.js';
+} from '../../types/mcp-types.js';
+import { GetPageMetadataTool } from '../get-page-metadata-tool.js';
+import { ExecuteActionTool } from '../execute-action-tool.js';
+import { WritePageDataTool } from '../write-page-data-tool.js';
+import { ensurePageIdentifiers } from '../../utils/pageContext.js';
+import { createToolLogger } from '../../core/logger.js';
+import type { AuditLogger } from '../../services/audit-logger.js';
 
 /**
  * MCP Tool: create_record
@@ -57,6 +58,12 @@ export class CreateRecordTool extends BaseMCPTool {
     required: ['pageId', 'fields'],
   };
 
+  // Consent configuration - Write operation requiring user approval
+  public readonly requiresConsent = true;
+  public readonly sensitivityLevel = 'medium' as const;
+  public readonly consentPrompt =
+    'Create a new record in Business Central? This will add data to your Business Central database.';
+
   private readonly getPageMetadataTool: GetPageMetadataTool;
   private readonly executeActionTool: ExecuteActionTool;
   private readonly writePageDataTool: WritePageDataTool;
@@ -68,14 +75,16 @@ export class CreateRecordTool extends BaseMCPTool {
       username: string;
       password: string;
       tenantId: string;
-    }
+    },
+    auditLogger?: AuditLogger
   ) {
-    super();
+    super({ auditLogger });
 
     // Create tool instances for composition
+    // Pass audit logger to write operations
     this.getPageMetadataTool = new GetPageMetadataTool(connection, bcConfig);
-    this.executeActionTool = new ExecuteActionTool(connection, bcConfig);
-    this.writePageDataTool = new WritePageDataTool(connection, bcConfig);
+    this.executeActionTool = new ExecuteActionTool(connection, bcConfig, auditLogger);
+    this.writePageDataTool = new WritePageDataTool(connection, bcConfig, auditLogger);
   }
 
   /**

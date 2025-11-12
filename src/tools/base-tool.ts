@@ -13,6 +13,7 @@ import { err } from '../core/result.js';
 import type { BCError } from '../core/errors.js';
 import { InputValidationError } from '../core/errors.js';
 import type { ZodTypeAny, ZodError } from 'zod';
+import type { AuditLogger } from '../services/audit-logger.js';
 
 /**
  * Options for BaseMCPTool constructor.
@@ -24,6 +25,12 @@ export interface BaseMCPToolOptions {
    * Otherwise, falls back to legacy validation helpers.
    */
   inputZod?: ZodTypeAny;
+
+  /**
+   * Optional audit logger for tracking tool executions.
+   * If provided and requiresConsent is true, all executions will be logged.
+   */
+  auditLogger?: AuditLogger;
 }
 
 /**
@@ -45,11 +52,20 @@ export abstract class BaseMCPTool implements IMCPTool {
   protected readonly inputZod?: ZodTypeAny;
 
   /**
-   * Constructor that optionally accepts a Zod schema.
+   * Optional audit logger for tracking tool executions.
+   * Used to log all consent-required tool invocations.
+   */
+  protected readonly auditLogger?: AuditLogger;
+
+  /**
+   * Constructor that optionally accepts a Zod schema and audit logger.
    */
   constructor(opts?: BaseMCPToolOptions) {
     if (opts?.inputZod) {
       this.inputZod = opts.inputZod;
+    }
+    if (opts?.auditLogger) {
+      this.auditLogger = opts.auditLogger;
     }
   }
 
@@ -116,6 +132,10 @@ export abstract class BaseMCPTool implements IMCPTool {
   /**
    * Executes the tool.
    * Validates input and calls executeInternal.
+   *
+   * CRITICAL FIX: Audit logging happens AFTER execution completes,
+   * with the actual result status. This prevents contradictory audit
+   * entries where "success" is logged but the operation fails.
    */
   public async execute(input: unknown): Promise<Result<unknown, BCError>> {
     // Validate input
@@ -125,7 +145,50 @@ export abstract class BaseMCPTool implements IMCPTool {
     }
 
     // Execute tool logic
-    return this.executeInternal(validationResult.value);
+    const result = await this.executeInternal(validationResult.value);
+
+    // Log audit event AFTER execution for consent-required tools
+    // This ensures we log the actual result (success/error), not a prediction
+    // Access requiresConsent through property lookup since it's defined by subclasses
+    const requiresConsent = (this as IMCPTool).requiresConsent;
+    if (requiresConsent && this.auditLogger) {
+      this.auditLogger.logToolExecution({
+        toolName: this.name,
+        userApproved: true, // If we reach here, user approved (host enforces)
+        inputSummary: this.getInputSummary(validationResult.value),
+        result: result.ok ? 'success' : 'error',
+        errorMessage: result.ok ? undefined : result.error.message,
+      });
+    }
+
+    return result;
+  }
+
+  /**
+   * Get a safe summary of input for audit logging.
+   * Subclasses can override to customize what gets logged.
+   *
+   * Default implementation extracts key fields and truncates complex values.
+   */
+  protected getInputSummary(input: unknown): Record<string, unknown> {
+    if (typeof input === 'object' && input !== null) {
+      const summary: Record<string, unknown> = {};
+
+      // Extract key fields (limit to avoid huge logs)
+      for (const [key, value] of Object.entries(input)) {
+        if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+          summary[key] = '[Object]';
+        } else if (Array.isArray(value)) {
+          summary[key] = `[Array(${value.length})]`;
+        } else {
+          summary[key] = value;
+        }
+      }
+
+      return summary;
+    }
+
+    return { input: String(input) };
   }
 
   /**
