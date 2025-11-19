@@ -11,10 +11,8 @@ import { ok, err, isOk } from '../core/result.js';
 import type { BCError } from '../core/errors.js';
 import { ProtocolError } from '../core/errors.js';
 import type { IBCConnection } from '../core/interfaces.js';
-import type {
-  ReadPageDataInput,
-  ReadPageDataOutput,
-} from '../types/mcp-types.js';
+import type { ReadPageDataOutput } from '../types/mcp-types.js';
+import { ReadPageDataInputSchema, type ReadPageDataInput } from '../validation/schemas.js';
 import { PageDataExtractor } from '../parsers/page-data-extractor.js';
 import { HandlerParser } from '../parsers/handler-parser.js';
 import { decompressResponse } from '../util/loadform-helpers.js';
@@ -80,49 +78,7 @@ export class ReadPageDataTool extends BaseMCPTool {
     private readonly dataExtractor: PageDataExtractor = new PageDataExtractor(),
     private readonly handlerParser: HandlerParser = new HandlerParser()
   ) {
-    super();
-  }
-
-  /**
-   * Validates and extracts input.
-   */
-  protected override validateInput(input: unknown): Result<ReadPageDataInput, BCError> {
-    const baseResult = super.validateInput(input);
-    if (!isOk(baseResult)) {
-      return baseResult;
-    }
-
-    // Extract required pageContextId
-    const pageContextIdResult = this.getRequiredString(input, 'pageContextId');
-    if (!isOk(pageContextIdResult)) {
-      return pageContextIdResult as Result<never, BCError>;
-    }
-
-    // Extract optional filters
-    const filtersResult = this.getOptionalObject(input, 'filters');
-    if (!isOk(filtersResult)) {
-      return filtersResult as Result<never, BCError>;
-    }
-
-    // Extract optional setCurrent
-    const setCurrentValue = (input as Record<string, unknown>).setCurrent;
-    const setCurrent = typeof setCurrentValue === 'boolean' ? setCurrentValue : false;
-
-    // Extract optional limit
-    const limitValue = (input as Record<string, unknown>).limit;
-    const limit = typeof limitValue === 'number' ? limitValue : undefined;
-
-    // Extract optional offset
-    const offsetValue = (input as Record<string, unknown>).offset;
-    const offset = typeof offsetValue === 'number' ? offsetValue : undefined;
-
-    return ok({
-      pageContextId: pageContextIdResult.value,
-      filters: filtersResult.value,
-      setCurrent,
-      limit,
-      offset,
-    });
+    super({ inputZod: ReadPageDataInputSchema });
   }
 
   // ============================================================================
@@ -286,16 +242,12 @@ export class ReadPageDataTool extends BaseMCPTool {
 
   /**
    * Executes the tool to read page data.
+   * Input is pre-validated by BaseMCPTool using Zod schema.
    */
   protected async executeInternal(input: unknown): Promise<Result<ReadPageDataOutput, BCError>> {
-    const logger = createToolLogger('read_page_data', (input as any)?.pageContextId);
-    // Validate input
-    const validatedInput = this.validateInput(input);
-    if (!isOk(validatedInput)) {
-      return validatedInput as Result<never, BCError>;
-    }
-
-    const { pageContextId, filters, setCurrent, limit, offset } = validatedInput.value;
+    // Input is already validated by BaseMCPTool with Zod
+    const { pageContextId, filters, setCurrent, limit, offset } = input as ReadPageDataInput;
+    const logger = createToolLogger('read_page_data', pageContextId);
 
     logger.info(`Reading data using pageContext: "${pageContextId}"`);
 

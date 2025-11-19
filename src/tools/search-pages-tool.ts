@@ -18,10 +18,10 @@ import { ok, isOk, err } from '../core/result.js';
 import type { BCError } from '../core/errors.js';
 import { ConnectionError, ProtocolError } from '../core/errors.js';
 import type {
-  SearchPagesInput,
   SearchPagesOutput,
   PageSearchResult,
 } from '../types/mcp-types.js';
+import { SearchPagesInputSchema, type SearchPagesInput } from '../validation/schemas.js';
 import { BCRawWebSocketClient } from '../connection/clients/BCRawWebSocketClient.js';
 import { decompressIfNeeded } from '../protocol/decompression.js';
 import {
@@ -67,7 +67,7 @@ export class SearchPagesTool extends BaseMCPTool {
     private readonly connectionPool?: BCConnectionPool,
     private readonly cache?: CacheManager
   ) {
-    super();
+    super({ inputZod: SearchPagesInputSchema });
   }
 
   public readonly inputSchema = {
@@ -97,53 +97,15 @@ export class SearchPagesTool extends BaseMCPTool {
   public readonly sensitivityLevel = 'low' as const;
 
   /**
-   * Validates and extracts input.
-   */
-  protected override validateInput(input: unknown): Result<SearchPagesInput, BCError> {
-    const baseResult = super.validateInput(input);
-    if (!isOk(baseResult)) {
-      return baseResult;
-    }
-
-    // Extract query
-    const queryResult = this.getRequiredString(input, 'query');
-    if (!isOk(queryResult)) {
-      return queryResult as Result<never, BCError>;
-    }
-
-    // Extract optional limit
-    const limitResult = this.getOptionalNumber(input, 'limit');
-    if (!isOk(limitResult)) {
-      return limitResult as Result<never, BCError>;
-    }
-
-    // Extract optional type
-    const typeResult = this.getOptionalString(input, 'type');
-    if (!isOk(typeResult)) {
-      return typeResult as Result<never, BCError>;
-    }
-
-    return ok({
-      query: queryResult.value,
-      limit: limitResult.value,
-      type: typeResult.value as 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report' | undefined,
-    });
-  }
-
-  /**
    * Executes the tool to search for pages using BC Tell Me protocol.
+   * Input is pre-validated by BaseMCPTool using Zod schema.
    *
    * Uses the BC27+ Tell Me search via LogicalClientChangeHandler format.
    * Requires BC credentials from environment or config.
    */
   protected async executeInternal(input: unknown): Promise<Result<SearchPagesOutput, BCError>> {
-    // Validate input
-    const validatedInput = this.validateInput(input);
-    if (!isOk(validatedInput)) {
-      return validatedInput as Result<never, BCError>;
-    }
-
-    const { query, limit = 10, type } = validatedInput.value;
+    // Input is already validated by BaseMCPTool with Zod
+    const { query, limit = 10, type } = input as SearchPagesInput;
 
     // Build cache key
     const cacheKey = `search:${query}:${type || 'all'}:${limit}`;

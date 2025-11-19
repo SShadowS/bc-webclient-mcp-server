@@ -1,0 +1,9 @@
+{
+  "method": "Message",
+  "params": [
+    {
+      "sequenceNumber": 1,
+      "compressedResult": "H4sIAAAAAAAACoWPQUvDQBSE/0qY86ZoPGj3JqliUSJk21Pp4Zk80sVkd9nd1saw/11i9SjePpiBmW834UCm7dlvRseQWFWLF9vphvqy12yi4nh0T5cKBBx5GjiyD5C7CYr9ib3iELQ16xYS4cI5vTX5dXEDgZ/0mUdIvPOYn8fP/PZuCYHSDo7MWNEwT5f1a7VV2Vbdi2xtmgUEDIfILeSEltmxn4nP0dOKIkFGf+SU0j6J/zQeTmxiTTpo0/1hg0frh41VB/sB8av27eSo4+VVUcyPyUVtDSRq23NWsonskfZp/wWGCXCXSgEAAA=="
+    }
+  ]
+}

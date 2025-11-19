@@ -95,7 +95,7 @@ async function main() {
     password,
     tenantId,
     {
-      minConnections: 2,
+      minConnections: 1, // Reduced to 1 to avoid BC rate limiting
       maxConnections: 10,
       idleTimeoutMs: 300000, // 5 minutes
       healthCheckIntervalMs: 60000, // 1 minute

@@ -109,6 +109,56 @@ export class WritePageDataTool extends BaseMCPTool {
   }
 
   /**
+   * Validates and extracts input with field normalization.
+   * NOTE: write-page-data-tool uses legacy validation due to complex field format normalization.
+   * Zod migration deferred pending refactoring.
+   */
+  protected override validateInput(input: unknown): Result<WritePageDataInput, BCError> {
+    const baseResult = super.validateInput(input);
+    if (!isOk(baseResult)) {
+      return baseResult;
+    }
+
+    const pageContextIdResult = this.getRequiredString(input, 'pageContextId');
+    if (!isOk(pageContextIdResult)) {
+      return pageContextIdResult as Result<never, BCError>;
+    }
+
+    const fieldsValue = (input as Record<string, unknown>).fields;
+    if (!fieldsValue) {
+      return err(
+        new InputValidationError('fields parameter is required', 'fields', ['Must provide fields'])
+      ) as Result<never, BCError>;
+    }
+
+    // Normalize fields to internal format: Record<string, {value, controlPath?}>
+    let fields: Record<string, { value: unknown; controlPath?: string }>;
+    if (typeof fieldsValue === 'object' && !Array.isArray(fieldsValue)) {
+      fields = {};
+      for (const [name, value] of Object.entries(fieldsValue as Record<string, unknown>)) {
+        fields[name] = { value };
+      }
+    } else {
+      return err(
+        new InputValidationError('fields must be an object', 'fields', ['Expected object format'])
+      ) as Result<never, BCError>;
+    }
+
+    const stopOnErrorValue = (input as Record<string, unknown>).stopOnError;
+    const stopOnError = typeof stopOnErrorValue === 'boolean' ? stopOnErrorValue : true;
+
+    const immediateValidationValue = (input as Record<string, unknown>).immediateValidation;
+    const immediateValidation = typeof immediateValidationValue === 'boolean' ? immediateValidationValue : true;
+
+    return ok({
+      pageContextId: pageContextIdResult.value,
+      fields,
+      stopOnError,
+      immediateValidation,
+    });
+  }
+
+  /**
    * Builds a map of field names to metadata from cached LogicalForm.
    * Uses ControlParser to extract all fields from the control tree.
    *
@@ -223,118 +273,22 @@ export class WritePageDataTool extends BaseMCPTool {
   }
 
   /**
-   * Validates and extracts input.
-   */
-  protected override validateInput(input: unknown): Result<WritePageDataInput, BCError> {
-    const baseResult = super.validateInput(input);
-    if (!isOk(baseResult)) {
-      return baseResult;
-    }
-
-    // Extract required pageContextId
-    const pageContextIdResult = this.getRequiredString(input, 'pageContextId');
-    if (!isOk(pageContextIdResult)) {
-      return pageContextIdResult as Result<never, BCError>;
-    }
-
-    // Extract required fields (object or array)
-    const fieldsValue = (input as Record<string, unknown>).fields;
-    if (!fieldsValue) {
-      return err(
-        new InputValidationError(
-          'fields parameter is required',
-          'fields',
-          ['Must provide fields as object or array']
-        )
-      ) as Result<never, BCError>;
-    }
-
-    // Normalize fields to internal format
-    let fields: Record<string, { value: unknown; controlPath?: string }>;
-
-    if (Array.isArray(fieldsValue)) {
-      // Array format: [{name, value, controlPath?}]
-      if (fieldsValue.length === 0) {
-        return err(
-          new InputValidationError(
-            'fields array cannot be empty',
-            'fields',
-            ['Must provide at least one field to update']
-          )
-        ) as Result<never, BCError>;
-      }
-
-      fields = {};
-      for (const field of fieldsValue) {
-        if (typeof field !== 'object' || !field || !('name' in field) || !('value' in field)) {
-          return err(
-            new InputValidationError(
-              'Invalid field format in array',
-              'fields',
-              ['Each field must have {name, value, controlPath?}']
-            )
-          ) as Result<never, BCError>;
-        }
-
-        const { name, value, controlPath } = field as { name: string; value: unknown; controlPath?: string };
-        fields[name] = { value, controlPath };
-      }
-    } else if (typeof fieldsValue === 'object') {
-      // Object format: {fieldName: value}
-      const fieldObj = fieldsValue as Record<string, unknown>;
-      if (Object.keys(fieldObj).length === 0) {
-        return err(
-          new InputValidationError(
-            'fields object cannot be empty',
-            'fields',
-            ['Must provide at least one field to update']
-          )
-        ) as Result<never, BCError>;
-      }
-
-      fields = {};
-      for (const [name, value] of Object.entries(fieldObj)) {
-        fields[name] = { value };
-      }
-    } else {
-      return err(
-        new InputValidationError(
-          'fields must be object or array',
-          'fields',
-          ['Expected object or array format']
-        )
-      ) as Result<never, BCError>;
-    }
-
-    // Extract optional flags
-    const stopOnErrorValue = (input as Record<string, unknown>).stopOnError;
-    const stopOnError = typeof stopOnErrorValue === 'boolean' ? stopOnErrorValue : true;
-
-    const immediateValidationValue = (input as Record<string, unknown>).immediateValidation;
-    const immediateValidation = typeof immediateValidationValue === 'boolean' ? immediateValidationValue : true;
-
-    return ok({
-      pageContextId: pageContextIdResult.value,
-      fields,
-      stopOnError,
-      immediateValidation,
-    });
-  }
-
-  /**
    * Executes the tool to write page data.
+   * Uses legacy validation with field normalization.
    *
    * Sets field values on the current record using SaveValue interactions.
    */
   protected async executeInternal(input: unknown): Promise<Result<WritePageDataOutput, BCError>> {
     const logger = createToolLogger('write_page_data', (input as any)?.pageContextId);
-    // Validate input
+
+    // Validate and normalize input
     const validatedInput = this.validateInput(input);
     if (!isOk(validatedInput)) {
       return validatedInput as Result<never, BCError>;
     }
 
     const { pageContextId, fields, stopOnError, immediateValidation } = validatedInput.value;
+
     const fieldNames = Object.keys(fields);
 
     logger.info(`Writing ${fieldNames.length} fields using pageContext: "${pageContextId}"`);

@@ -9,6 +9,18 @@
  */
 
 /**
+ * Standard options for cancelable operations.
+ *
+ * Provides consistent timeout and abort signal support across all async operations.
+ */
+export type CancelableOptions = {
+  /** Optional AbortSignal for external cancellation */
+  signal?: AbortSignal;
+  /** Optional timeout in milliseconds */
+  timeoutMs?: number;
+};
+
+/**
  * Composes an optional parent AbortSignal with a timeout deadline.
  *
  * Uses Node 20+ native AbortSignal.timeout() and AbortSignal.any() for

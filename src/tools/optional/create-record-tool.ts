@@ -23,7 +23,7 @@ import type {
 import { GetPageMetadataTool } from '../get-page-metadata-tool.js';
 import { ExecuteActionTool } from '../execute-action-tool.js';
 import { WritePageDataTool } from '../write-page-data-tool.js';
-import { ensurePageIdentifiers } from '../../utils/pageContext.js';
+import { ensurePageIdentifiers } from '../../util/pageContext.js';
 import { createToolLogger } from '../../core/logger.js';
 import type { AuditLogger } from '../../services/audit-logger.js';
 

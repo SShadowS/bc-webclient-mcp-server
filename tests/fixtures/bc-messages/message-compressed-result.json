@@ -1,0 +1,12 @@
+{
+  "method": "Message",
+  "params": [
+    {
+      "sequenceNumber": 42,
+      "openFormIds": [
+        "page21"
+      ],
+      "compressedResult": "H4sIAAAAAAAACiXKsQrCMBAG4FeRfy6CjlmjoiAOtlvpcJgjDSS5cIkVKX13B7/5G1fMlF1kHb6FYXB67O/iw4uijYFzOy+c25NCDdlf/xMdCiklbqwVZsRFNA3Sz/JBt6JnXVhvDgaFPB8P6GCptCAZBvZdmyTWnSV12KZt+gGTlHy6gwAAAA=="
+    }
+  ]
+}

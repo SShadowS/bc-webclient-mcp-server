@@ -139,7 +139,7 @@ export class BCConnectionPool {
     this.tenantId = tenantId;
 
     // Pool configuration with defaults
-    this.minConnections = poolConfig?.minConnections ?? 2;
+    this.minConnections = poolConfig?.minConnections ?? 1; // Default 1 to avoid BC rate limiting
     this.maxConnections = poolConfig?.maxConnections ?? 10;
     this.idleTimeoutMs = poolConfig?.idleTimeoutMs ?? 300000; // 5 minutes
     this.healthCheckIntervalMs = poolConfig?.healthCheckIntervalMs ?? 60000; // 1 minute
@@ -169,24 +169,24 @@ export class BCConnectionPool {
 
     logger.info(`Initializing connection pool (min: ${this.minConnections}, max: ${this.maxConnections})...`);
 
-    // Create minimum connections
-    const promises: Promise<void>[] = [];
+    // Create minimum connections SEQUENTIALLY with delay to avoid BC rate limiting
+    // BC server rejects rapid successive connections, so we space them out
     for (let i = 0; i < this.minConnections; i++) {
-      promises.push(
-        this.createConnection()
-          .then(conn => {
-            this.availableConnections.push(conn);
-            logger.info(`  Created warm connection ${conn.id}`);
-          })
-          .catch(error => {
-            logger.error({ error }, `  Failed to create warm connection: ${error.message}`);
-            // Don't fail initialization if we can't create min connections
-            // Pool will create on demand
-          })
-      );
-    }
+      try {
+        const conn = await this.createConnection();
+        this.availableConnections.push(conn);
+        logger.info(`  Created warm connection ${conn.id}`);
 
-    await Promise.all(promises);
+        // Add 500ms delay between connections to avoid BC rate limiting
+        if (i < this.minConnections - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+        }
+      } catch (error) {
+        logger.error({ error }, `  Failed to create warm connection: ${error instanceof Error ? error.message : String(error)}`);
+        // Don't fail initialization if we can't create min connections
+        // Pool will create on demand
+      }
+    }
 
     // Start background tasks
     this.startHealthChecks();
@@ -199,17 +199,26 @@ export class BCConnectionPool {
   /**
    * Acquire a connection from the pool
    *
+   * @param attempt Current retry attempt (internal parameter for recursion limit)
    * @returns Promise that resolves with a pooled connection
    * @throws TimeoutError if no connection available within timeout
-   * @throws ConnectionError if pool is shutting down
+   * @throws ConnectionError if pool is shutting down or max retries exceeded
    */
-  async acquire(): Promise<PooledConnection> {
+  async acquire(attempt: number = 0): Promise<PooledConnection> {
     if (this.shuttingDown) {
       throw new ConnectionError('Connection pool is shutting down');
     }
 
     if (!this.initialized) {
       throw new ConnectionError('Connection pool not initialized. Call initialize() first.');
+    }
+
+    // Prevent infinite recursion - fail after 5 attempts
+    if (attempt > 5) {
+      throw new ConnectionError(
+        'Failed to acquire a healthy connection after 5 attempts. ' +
+        'This indicates a systemic issue with connection health checks.'
+      );
     }
 
     // Try to get an available connection
@@ -234,11 +243,11 @@ export class BCConnectionPool {
     const isHealthy = await this.checkHealth(connection);
 
     if (!isHealthy) {
-      logger.warn(`Connection ${connection.id} failed health check, creating replacement...`);
+      logger.warn(`Connection ${connection.id} failed health check (attempt ${attempt + 1}/5), creating replacement...`);
       await this.destroyConnection(connection);
 
-      // Recursively try to get another connection
-      return this.acquire();
+      // Recursively try to get another connection (with attempt counter)
+      return this.acquire(attempt + 1);
     }
 
     // Mark as in use

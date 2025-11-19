@@ -181,6 +181,8 @@ export type GetPageMetadataInput = z.infer<typeof GetPageMetadataInputSchema>;
  */
 export const ReadPageDataInputSchema = z.object({
   pageContextId: PageContextIdSchema,
+  filters: z.record(z.unknown()).optional(),
+  setCurrent: BooleanSchema.optional().default(false),
   limit: LimitSchema.optional(),
   offset: z.coerce.number().int().min(0).optional(),
 });
@@ -193,6 +195,8 @@ export type ReadPageDataInput = z.infer<typeof ReadPageDataInputSchema>;
 export const WritePageDataInputSchema = z.object({
   pageContextId: PageContextIdSchema,
   fields: FieldUpdatesSchema,
+  stopOnError: BooleanSchema.optional().default(true),
+  immediateValidation: BooleanSchema.optional().default(true),
 });
 
 export type WritePageDataInput = z.infer<typeof WritePageDataInputSchema>;
@@ -203,7 +207,7 @@ export type WritePageDataInput = z.infer<typeof WritePageDataInputSchema>;
 export const ExecuteActionInputSchema = z.object({
   pageContextId: PageContextIdSchema,
   actionName: ActionNameSchema,
-  parameters: z.record(z.unknown()).optional(),
+  controlPath: z.string().trim().optional(),
 });
 
 export type ExecuteActionInput = z.infer<typeof ExecuteActionInputSchema>;

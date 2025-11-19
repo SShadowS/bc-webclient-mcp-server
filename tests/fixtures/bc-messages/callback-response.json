@@ -1,0 +1,9 @@
+{
+  "method": "Message",
+  "params": [
+    {
+      "sequenceNumber": 10,
+      "compressedResult": "H4sIAAAAAAAACouuVspIzEvJSS0KqSxIVbJScvHTc07MyUlKTM4OSi0uyM8rTg0oyi9ILSrJTC1W0lEqSCxKzE0tSS0qVrKKjq2NBQC3cd48QQAAAA=="
+    }
+  ]
+}

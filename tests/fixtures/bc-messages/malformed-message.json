@@ -1,0 +1,9 @@
+{
+  "method": "Message",
+  "params": [
+    {
+      "sequenceNumber": 44,
+      "compressedResult": "invalid-base64!!!"
+    }
+  ]
+}
