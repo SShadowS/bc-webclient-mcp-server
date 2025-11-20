@@ -63,13 +63,16 @@ export class CreateRecordByFieldNameTool extends BaseMCPTool {
   public readonly name = 'create_record_by_field_name';
 
   public readonly description =
-    'Creates a new Business Central record using field names/captions (e.g., "Name", "Address", "Email"). ' +
-    'Automatically resolves field names to control paths using FormState metadata. ' +
-    'Inputs: pageId (number|string), fields (object with field names as keys). ' +
-    'Supports scoped fields like "General > Name" or "Address/City". ' +
-    'Use [SourceExpr] syntax to target specific AL fields. ' +
-    'Returns: {success, formId, setFields, failedFields}. ' +
-    'More robust than create_record with automatic field resolution and proper oldValue handling.';
+    'Convenience helper that creates a new Business Central record in a single operation using field names/captions. ' +
+    'Alternative to the stateful workflow: get_page_metadata → execute_action("New") → write_page_data → execute_action("Post/Save"). ' +
+    'pageId (required): Target page for creation (e.g., 21 for Customer Card, 22 for Customer List). ' +
+    'fields (required): Object where keys are field names/captions (e.g., "Name", "Email", "Credit Limit (LCY)") and values are strings. ' +
+    'Supports scoped field identifiers like "General > Name", "Address/City", or "[SourceExpr]" for AL field targeting. ' +
+    'formId (optional): Reuse an already-open list page form context if available. ' +
+    'newButtonPath (optional): Control path of specific "New" button; defaults to systemAction 10. ' +
+    'Returns: {success, formId, setFields, failedFields: [{field, error}]}. ' +
+    'Behavior: Automatically resolves field identifiers to controls, enters create mode, sets fields with validation, and saves. ' +
+    'Use this for simple record creation; use the stateful pageContext workflow for complex scenarios requiring additional logic.';
 
   public readonly inputSchema = {
     type: 'object',

@@ -46,10 +46,12 @@ export class SearchPagesTool extends BaseMCPTool {
   public readonly name = 'search_pages';
 
   public readonly description =
-    'Searches for Business Central pages by name or type. ' +
-    'Type parameter accepts: List, Card, Document, Worksheet, or Report (enum values only). ' +
-    'Returns array of pages with: pageId, pageName, type, and description. ' +
-    'Use returned pageIds with get_page_metadata to open and interact with the page.';
+    'Searches for Business Central pages by caption (page title), optionally filtered by page type. ' +
+    'query (required): Search term matched against page captions (case-insensitive substring match). ' +
+    'type (optional): Filter results by page type - must be one of: "List", "Card", "Document", "Worksheet", "Report". ' +
+    'limit (optional): Maximum results to return (default: 10, maximum: 100). ' +
+    'Returns array of matching pages: {pageId, pageName, type, description}. Returns empty array if no matches. ' +
+    'Typical workflow: Use returned pageId with get_page_metadata to open and interact with the specific page.';
 
   /**
    * Constructor.

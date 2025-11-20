@@ -202,7 +202,7 @@ export class BCClient {
   async openConnection(): Promise<UserSettings> {
     const connectionRequest: ConnectionRequest = {
       clientType: 'WebClient',
-      clientVersion: '24.0.0.0',
+      clientVersion: '27.0.0.0', // Must match BC server version (BC27)
       clientCulture: 'en-US',
       clientTimeZone: 'UTC'
     };

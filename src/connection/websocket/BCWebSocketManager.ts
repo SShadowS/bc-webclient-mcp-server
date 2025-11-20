@@ -29,6 +29,8 @@
 import WebSocket from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../core/logger.js';
+import { debugWebSocket } from '../../services/debug-logger.js';
+import { config } from '../../core/config.js';
 import { composeWithTimeout, isTimeoutAbortReason } from '../../core/abort.js';
 import { defaultTimeouts, type TimeoutsConfig } from '../../core/timeouts.js';
 import {
@@ -199,6 +201,18 @@ export class BCWebSocketManager implements IBCWebSocketManager {
 
           const response = JSON.parse(message) as any;
 
+          // 🐛 Debug: Log incoming WebSocket messages
+          debugWebSocket('WebSocket message received', {
+            messageType: response.method || 'response',
+            id: response.id,
+            method: response.method,
+            hasResult: !!response.result,
+            hasError: !!response.error,
+            hasHandlers: !!response.result?.handlers,
+            handlerCount: response.result?.handlers?.length,
+            fullMessage: config.debug.logFullWsMessages ? response : undefined,
+          }, undefined, Buffer.byteLength(message));
+
           // Emit to raw message handlers (for protocol adapter)
           // Protocol adapter will handle BC-specific parsing
           this.rawMessageHandlers.forEach((handler) => {
@@ -235,26 +249,39 @@ export class BCWebSocketManager implements IBCWebSocketManager {
                 pending.reject(
                   new Error(`RPC Error: ${response.error.message}`)
                 );
+              } else {
+                // JSON-RPC ack without compressed data
+                logger.info(`JSON-RPC response with ID ${response.id} has no compressed data, result: ${JSON.stringify(response.result).substring(0, 100)}`);
+                logger.info(`  Leaving pending request unresolved, waiting for async Message event`);
+                logger.info(`  Pending requests count: ${this.pendingRequests.size}`);
               }
-              // Else: JSON-RPC ack without compressed data - don't resolve yet,
-              // wait for async Message event with the actual payload
+            } else {
+              logger.warn(`Received JSON-RPC response with ID ${response.id} but no pending request found`);
             }
           }
           // 2) Async Message events with compressed data (BC's primary response format)
           // These don't have request IDs, so we resolve the first pending request
-          else if (
-            response.method === 'Message' &&
-            (response.params?.[0]?.compressedResult ||
-              response.params?.[0]?.compressedData)
-          ) {
-            // For async Message events, resolve the first (oldest) pending request
-            // This matches the original code's behavior
-            if (this.pendingRequests.size > 0) {
-              const [[requestId, pending]] = this.pendingRequests.entries();
-              this.pendingRequests.delete(requestId);
-              // Return the raw result (caller handles decompression)
-              pending.resolve(response.params[0]);
+          else if (response.method === 'Message') {
+            logger.info(`Received async Message event`);
+            if (response.params?.[0]?.compressedResult || response.params?.[0]?.compressedData) {
+              logger.info(`  Message has compressed data, resolving first pending request`);
+              // For async Message events, resolve the first (oldest) pending request
+              // This matches the original code's behavior
+              if (this.pendingRequests.size > 0) {
+                const [[requestId, pending]] = this.pendingRequests.entries();
+                this.pendingRequests.delete(requestId);
+                logger.info(`  Resolved pending request ${requestId}, remaining: ${this.pendingRequests.size}`);
+                // Return the raw result (caller handles decompression)
+                pending.resolve(response.params[0]);
+              } else {
+                logger.warn(`  No pending requests to resolve!`);
+              }
+            } else {
+              logger.info(`  Message has no compressed data, ignoring (params: ${JSON.stringify(response.params).substring(0, 100)})`);
             }
+          } else {
+            // Log any other message types we're not handling
+            logger.info(`Unhandled message type: ${response.method || 'no method'}, jsonrpc: ${response.jsonrpc || 'no jsonrpc'}`);
           }
         } catch (error) {
           logger.error({ error }, 'Error parsing message');
@@ -372,6 +399,14 @@ export class BCWebSocketManager implements IBCWebSocketManager {
       // Send request
       const message = JSON.stringify(rpcRequest);
       logger.info(`→ Sending: ${message.substring(0, 200)}...`);
+
+      // 🐛 Debug: Log outgoing WebSocket messages
+      debugWebSocket('WebSocket request sent', {
+        method,
+        requestId,
+        paramsCount: params.length,
+        fullRequest: config.debug.logFullWsMessages ? rpcRequest : undefined,
+      }, requestId, Buffer.byteLength(message));
 
       this.ws!.send(message, (error) => {
         if (error) {

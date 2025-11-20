@@ -36,12 +36,16 @@ export class HandleDialogTool extends BaseMCPTool {
   public readonly name = 'handle_dialog';
 
   public readonly description =
-    'Interacts with Business Central dialog windows (confirmation, prompts, wizards). ' +
-    'Inputs: dialogId OR match:{titleContains/exactTitle}, fields:{fieldId:value}, ' +
-    'click: "OK"|"Yes"|"No"|"Cancel"|"Post"|"Run", wait: "appear"|"existing", timeoutMs. ' +
-    'Returns: {result: "Closed"|"Navigated"|"DialogOpened", navigation?:{pageContextId}, validationMessages?}. ' +
-    'Errors: DialogNotFound, ValidationError, DialogTimeout. ' +
-    'Link with execute_action(expectDialog:true) for robust dialog-triggering flows.';
+    'Handles Business Central dialog windows (confirmations, prompts, simple wizards) within an existing session. ' +
+    'Requires sessionId (optional) or pageContextId to reattach to a session where a dialog may be open. ' +
+    'Set fieldValues (optional map of field identifiers to values) before clicking a button. ' +
+    'action (required): button label to click (e.g., "OK", "Cancel", "Yes", "No", "Finish", "Post"). ' +
+    'waitForDialog (default false): if true, waits for a dialog to appear; if false, assumes dialog is already open. ' +
+    'timeout (default 5000ms): maximum time to wait when waitForDialog is true. ' +
+    'Returns: {result: "Closed"|"Navigated"|"DialogOpened", navigation?:{pageContextId}, validationMessages?, fieldsSet}. ' +
+    'Errors: DialogNotFound, DialogTimeout, ValidationError. ' +
+    'Typical usage: Call execute_action that opens a dialog (e.g., "Post", "Delete"), ' +
+    'then call handle_dialog with waitForDialog=true and action="Yes"/"OK" to confirm.';
 
   public readonly inputSchema = {
     type: 'object',

@@ -21,6 +21,7 @@ import { ok, err } from '../core/result.js';
 import type { BCError } from '../core/errors.js';
 import { ConnectionError } from '../core/errors.js';
 import { logger } from '../core/logger.js';
+import { FilterMetadataService } from '../services/filter-metadata-service.js';
 
 /**
  * Information about an open BC form within a session.
@@ -89,7 +90,7 @@ export class ConnectionManager {
    * Private constructor - use getInstance() instead.
    */
   private constructor() {
-    logger.error('[ConnectionManager] 🏗️  ConnectionManager initialized');
+    logger.info('[ConnectionManager] 🏗️  ConnectionManager initialized');
   }
 
   /**
@@ -120,7 +121,7 @@ export class ConnectionManager {
     const existing = this.sessions.get(envKey);
     if (existing && !this.isExpired(existing)) {
       existing.lastUsed = new Date();
-      logger.error(`[ConnectionManager] ♻️  Reusing session: ${existing.sessionId} (env: ${envKey})`);
+      logger.info(`[ConnectionManager] ♻️  Reusing session: ${existing.sessionId} (env: ${envKey})`);
 
       return ok({
         sessionId: existing.sessionId,
@@ -131,12 +132,12 @@ export class ConnectionManager {
 
     // Remove expired session if it exists
     if (existing) {
-      logger.error(`[ConnectionManager] ⏰ Session expired, creating new: ${existing.sessionId}`);
+      logger.warn(`[ConnectionManager] ⏰ Session expired, creating new: ${existing.sessionId}`);
       await this.closeSessionByEnvKey(envKey);
     }
 
     // Create new session
-    logger.error(`[ConnectionManager] 🆕 Creating new session for ${envKey}`);
+    logger.info(`[ConnectionManager] 🆕 Creating new session for ${envKey}`);
 
     try {
       const connection = new BCPageConnectionClass({
@@ -168,7 +169,7 @@ export class ConnectionManager {
       };
 
       this.sessions.set(envKey, sessionInfo);
-      logger.error(`[ConnectionManager] ✓ Session created: ${sessionId}`);
+      logger.info(`[ConnectionManager] ✓ Session created: ${sessionId}`);
 
       // Schedule TTL cleanup
       this.scheduleCleanup(envKey);
@@ -198,18 +199,18 @@ export class ConnectionManager {
     for (const session of this.sessions.values()) {
       if (session.sessionId === sessionId) {
         if (this.isExpired(session)) {
-          logger.error(`[ConnectionManager] ⏰ Session expired: ${sessionId}`);
+          logger.warn(`[ConnectionManager] ⏰ Session expired: ${sessionId}`);
           this.closeSessionById(sessionId);
           return null;
         }
 
         session.lastUsed = new Date();
-        logger.error(`[ConnectionManager] ✓ Retrieved session: ${sessionId}`);
+        logger.debug(`[ConnectionManager] ✓ Retrieved session: ${sessionId}`);
         return session.connection;
       }
     }
 
-    logger.error(`[ConnectionManager] ⚠️  Session not found: ${sessionId}`);
+    logger.warn(`[ConnectionManager] ⚠️  Session not found: ${sessionId}`);
     return null;
   }
 
@@ -236,14 +237,14 @@ export class ConnectionManager {
         };
 
         session.formRegistry.set(pageId, fullFormInfo);
-        logger.error(
+        logger.debug(
           `[ConnectionManager] 📝 Registered form: Page ${pageId} → formId ${formInfo.formId} (session: ${sessionId})`
         );
         return;
       }
     }
 
-    logger.error(
+    logger.warn(
       `[ConnectionManager] ⚠️  Cannot register form - session not found: ${sessionId}`
     );
   }
@@ -260,11 +261,11 @@ export class ConnectionManager {
       if (session.sessionId === sessionId) {
         const formInfo = session.formRegistry.get(pageId);
         if (formInfo) {
-          logger.error(
+          logger.debug(
             `[ConnectionManager] ✓ Found open form: Page ${pageId} → formId ${formInfo.formId}`
           );
         } else {
-          logger.error(
+          logger.debug(
             `[ConnectionManager] ℹ️  Page ${pageId} not open in session ${sessionId}`
           );
         }
@@ -272,7 +273,7 @@ export class ConnectionManager {
       }
     }
 
-    logger.error(
+    logger.warn(
       `[ConnectionManager] ⚠️  Cannot get form - session not found: ${sessionId}`
     );
     return null;
@@ -297,7 +298,7 @@ export class ConnectionManager {
   public async closeSessionById(sessionId: string): Promise<void> {
     for (const [envKey, session] of this.sessions.entries()) {
       if (session.sessionId === sessionId) {
-        logger.error(`[ConnectionManager] 🔌 Closing session: ${sessionId}`);
+        logger.info(`[ConnectionManager] 🔌 Closing session: ${sessionId}`);
 
         // Cancel cleanup timer
         const timer = this.cleanupTimers.get(envKey);
@@ -314,15 +315,18 @@ export class ConnectionManager {
           );
         }
 
+        // Clear filter state cache for this session (Phase 1: Filter State Cache)
+        FilterMetadataService.getInstance().clearFilterStateForSession(sessionId);
+
         // Remove from registry
         this.sessions.delete(envKey);
 
-        logger.error(`[ConnectionManager] ✓ Session closed: ${sessionId}`);
+        logger.info(`[ConnectionManager] ✓ Session closed: ${sessionId}`);
         return;
       }
     }
 
-    logger.error(
+    logger.warn(
       `[ConnectionManager] ⚠️  Cannot close session - not found: ${sessionId}`
     );
   }
@@ -331,11 +335,11 @@ export class ConnectionManager {
    * Close all sessions (for shutdown).
    */
   public async closeAllSessions(): Promise<void> {
-    logger.error(`[ConnectionManager] 🔌 Closing all sessions (${this.sessions.size} total)`);
+    logger.info(`[ConnectionManager] 🔌 Closing all sessions (${this.sessions.size} total)`);
 
     const closePromises: Promise<void>[] = [];
     for (const [envKey, session] of this.sessions.entries()) {
-      logger.error(`[ConnectionManager] 🔌 Closing session: ${session.sessionId}`);
+      logger.info(`[ConnectionManager] 🔌 Closing session: ${session.sessionId}`);
 
       // Cancel cleanup timer
       const timer = this.cleanupTimers.get(envKey);
@@ -359,7 +363,7 @@ export class ConnectionManager {
     await Promise.all(closePromises);
     this.sessions.clear();
 
-    logger.error('[ConnectionManager] ✓ All sessions closed');
+    logger.info('[ConnectionManager] ✓ All sessions closed');
   }
 
   /**
@@ -424,7 +428,7 @@ export class ConnectionManager {
       async () => {
         const session = this.sessions.get(envKey);
         if (session && this.isExpired(session)) {
-          logger.error(
+          logger.info(
             `[ConnectionManager] 🧹 Auto-closing expired session: ${session.sessionId}`
           );
           await this.closeSessionByEnvKey(envKey);

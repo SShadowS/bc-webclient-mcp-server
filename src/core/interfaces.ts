@@ -588,9 +588,10 @@ export interface IControlVisitor {
    * Visits a control.
    * @param control - The control to visit
    * @param depth - Current depth in tree
+   * @param path - Control path (e.g., "server:c[0]:c[1]")
    * @returns Whether to continue visiting children
    */
-  visit(control: Control, depth: number): boolean;
+  visit(control: Control, depth: number, path?: string): boolean;
 }
 
 /**

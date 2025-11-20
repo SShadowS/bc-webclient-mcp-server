@@ -355,8 +355,11 @@ export class StdioTransport {
           break;
 
         case 'prompts/list':
-          // Not implemented yet - return empty list
-          await this.sendSuccess(request.id, { prompts: [] });
+          await this.handlePromptsList(request);
+          break;
+
+        case 'prompts/get':
+          await this.handlePromptGet(request);
           break;
 
         case 'ping':
@@ -458,6 +461,35 @@ export class StdioTransport {
   private async handleResourceRead(request: JSONRPCRequest): Promise<void> {
     const params = request.params as { uri: string };
     const result = await this.server.handleResourceRead(params);
+
+    if (!isOk(result)) {
+      await this.sendErrorFromBCError(request.id, result.error);
+      return;
+    }
+
+    await this.sendSuccess(request.id, result.value);
+  }
+
+  /**
+   * Handles prompts/list request.
+   */
+  private async handlePromptsList(request: JSONRPCRequest): Promise<void> {
+    const result = await this.server.handlePromptsList();
+
+    if (!isOk(result)) {
+      await this.sendErrorFromBCError(request.id, result.error);
+      return;
+    }
+
+    await this.sendSuccess(request.id, result.value);
+  }
+
+  /**
+   * Handles prompts/get request.
+   */
+  private async handlePromptGet(request: JSONRPCRequest): Promise<void> {
+    const params = request.params as { name: string; arguments?: Record<string, string> };
+    const result = await this.server.handlePromptGet(params);
 
     if (!isOk(result)) {
       await this.sendErrorFromBCError(request.id, result.error);

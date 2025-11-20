@@ -21,6 +21,31 @@ export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 export type NodeEnv = 'development' | 'production' | 'test';
 
 /**
+ * Debug logging channels
+ */
+export type DebugChannel =
+  | 'stdio' // MCP protocol (already exists via MCP_STDIO_LOG_FILE)
+  | 'tools' // Tool execution lifecycle
+  | 'websocket' // BC WebSocket protocol
+  | 'handlers' // Handler event emission & accumulation
+  | 'session' // Session management
+  | 'cache' // Cache operations
+  | 'all'; // All channels
+
+/**
+ * Debug logging configuration
+ */
+export interface DebugConfig {
+  readonly enabled: boolean;
+  readonly logDir: string;
+  readonly maxSizeMB: number;
+  readonly maxFiles: number;
+  readonly channels: Set<DebugChannel>;
+  readonly logFullHandlers: boolean;
+  readonly logFullWsMessages: boolean;
+}
+
+/**
  * Business Central configuration
  */
 export interface BCConfig {
@@ -39,6 +64,7 @@ export interface AppConfig {
   readonly nodeEnv: NodeEnv;
   readonly logLevel: LogLevel;
   readonly bc: BCConfig;
+  readonly debug: DebugConfig;
 }
 
 /**
@@ -67,6 +93,40 @@ class Config {
         timeout: this.getNumberEnv('BC_TIMEOUT', 30000),
         searchTimingWindowMs: this.getNumberEnv('BC_SEARCH_TIMING_WINDOW_MS', 15000),
       },
+      debug: this.parseDebugConfig(),
+    };
+  }
+
+  /**
+   * Parse debug logging configuration
+   */
+  private parseDebugConfig(): DebugConfig {
+    const enabled = this.getBooleanEnv('DEBUG_MODE', false);
+    const channelsStr = process.env.DEBUG_CHANNELS || 'all';
+    const channelsList = channelsStr.split(',').map((c) => c.trim() as DebugChannel);
+
+    // If 'all' is specified, enable all channels (except 'all' itself)
+    const channels = new Set<DebugChannel>(channelsList);
+    if (channels.has('all')) {
+      return {
+        enabled,
+        logDir: process.env.DEBUG_LOG_DIR || '.debug-logs',
+        maxSizeMB: this.getNumberEnv('DEBUG_LOG_MAX_SIZE_MB', 50),
+        maxFiles: this.getNumberEnv('DEBUG_LOG_MAX_FILES', 10),
+        channels: new Set(['stdio', 'tools', 'websocket', 'handlers', 'session', 'cache']),
+        logFullHandlers: this.getBooleanEnv('DEBUG_LOG_FULL_HANDLERS', false),
+        logFullWsMessages: this.getBooleanEnv('DEBUG_LOG_FULL_WS_MESSAGES', true),
+      };
+    }
+
+    return {
+      enabled,
+      logDir: process.env.DEBUG_LOG_DIR || '.debug-logs',
+      maxSizeMB: this.getNumberEnv('DEBUG_LOG_MAX_SIZE_MB', 50),
+      maxFiles: this.getNumberEnv('DEBUG_LOG_MAX_FILES', 10),
+      channels,
+      logFullHandlers: this.getBooleanEnv('DEBUG_LOG_FULL_HANDLERS', false),
+      logFullWsMessages: this.getBooleanEnv('DEBUG_LOG_FULL_WS_MESSAGES', true),
     };
   }
 
@@ -183,6 +243,13 @@ class Config {
    */
   public get bc(): Readonly<BCConfig> {
     return this.config.bc;
+  }
+
+  /**
+   * Get debug configuration
+   */
+  public get debug(): Readonly<DebugConfig> {
+    return this.config.debug;
   }
 
   /**

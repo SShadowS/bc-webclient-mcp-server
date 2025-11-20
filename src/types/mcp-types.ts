@@ -202,15 +202,25 @@ export interface ActionDescription {
   readonly description?: string;
 }
 
+export interface DocumentLinesBlock {
+  readonly repeaterPath: string;
+  readonly caption: string;
+  readonly lines: readonly PageDataRecord[];
+  readonly totalCount: number;
+}
+
 export interface ReadPageDataOutput {
   readonly pageId: string;
   readonly pageContextId: string; // Current page context (opaque - do not parse)
   readonly caption: string;
-  readonly pageType: 'Card' | 'List';
+  readonly pageType: 'Card' | 'List' | 'Document';
   readonly records: readonly PageDataRecord[];
   readonly totalCount: number;
   readonly hasMore?: boolean;
   readonly currentRecord?: PageDataRecord; // If setCurrent was used
+  // Document page specific fields
+  readonly header?: PageDataRecord; // For Document pages: the header record
+  readonly linesBlocks?: readonly DocumentLinesBlock[]; // For Document pages: line item blocks
 }
 
 export interface PageDataRecord {

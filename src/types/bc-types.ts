@@ -100,6 +100,7 @@ export interface BCInteraction {
   readonly callbackId: string;
   readonly controlPath?: string; // GPT-5-Pro fix: e.g., "server:c[0]"
   readonly formId?: string; // Optional formId for interactions on existing forms
+  readonly openFormIds?: readonly string[]; // Optional formIds for session state tracking
 }
 
 export interface OpenFormInteraction extends BCInteraction {
@@ -452,6 +453,7 @@ export interface ActionMetadata {
   readonly controlId?: string;
   readonly icon?: string;
   readonly synopsis?: string;
+  readonly controlPath?: string; // BC control path (e.g., "server:c[3]/ha[1]") for invoking the action
 }
 
 export interface PageMetadata {

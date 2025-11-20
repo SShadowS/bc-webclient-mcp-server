@@ -105,12 +105,12 @@ export class BCPageConnection implements IBCConnection {
     // Open BC session
     await client.openSession({
       clientType: 'WebClient',
-      clientVersion: '26.0.0.0',
+      clientVersion: '27.0.0.0', // Must match BC server version (BC27 = 27.0.0.0)
       clientCulture: 'en-US',
       clientTimeZone: 'UTC',
     });
 
-    logger.error(`[BCPageConnection] ✓ New connection established`);
+    logger.info(`[BCPageConnection] ✓ New connection established`);
     return client;
   }
 
@@ -141,12 +141,15 @@ export class BCPageConnection implements IBCConnection {
       }
 
       // Send the interaction
+      // FIX: Don't override openFormIds - let BCRawWebSocketClient manage session-level form tracking
+      // BCPageConnection was incorrectly accumulating formIds across unrelated pages (Page 21 → Page 22)
+      // causing BC to return empty responses due to form state mismatch
       const response = await this.currentClient.invoke({
         interactionName: interaction.interactionName,
         namedParameters: interaction.namedParameters || {},
         controlPath: interaction.controlPath,
         formId: interaction.formId,
-        openFormIds: this.getAllOpenFormIds(),
+        openFormIds: interaction.openFormIds, // Only pass if explicitly provided by caller
         lastClientAckSequenceNumber: this.lastAckSequence,
         callbackId: this.nextCallbackId++,
       } as any);
@@ -285,7 +288,7 @@ export class BCPageConnection implements IBCConnection {
           formId: child.serverId,
           controlPath: (child as any).controlPath || child.serverId || 'server:',
           namedParameters: {},
-          openFormIds: this.getAllOpenFormIds(),
+          openFormIds: undefined, // Let BCRawWebSocketClient manage form tracking
           lastClientAckSequenceNumber: this.lastAckSequence,
           callbackId: this.nextCallbackId++,
         } as any);

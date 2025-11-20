@@ -40,11 +40,16 @@ export class WritePageDataTool extends BaseMCPTool {
   public readonly name = 'write_page_data';
 
   public readonly description =
-    'Sets field values on a Business Central record with immediate validation. Requires pageContextId from get_page_metadata. ' +
-    'Prerequisites: Record must be in edit mode (use execute_action with "Edit" or "New"). ' +
-    'Supports simple fields map OR array with controlPath: [{name, value, controlPath?}]. ' +
-    'Options: stopOnError (default true), immediateValidation (default true). ' +
-    'Returns: {updatedFields, failedFields with validation messages, saved}. Use for batch field updates.';
+    'Sets field values on the current Business Central record with immediate validation. Requires pageContextId from get_page_metadata. ' +
+    'Prerequisites: Record MUST be in edit mode (call execute_action with "Edit" for existing records or "New" for new records first). ' +
+    'fields: Provide as simple map {"FieldName": value} where keys are field names/captions (case-insensitive), ' +
+    'OR as array [{name: "FieldName", value: value, controlPath?: "path"}] for precise targeting. ' +
+    'Field references use field name or caption from get_page_metadata.fields. ' +
+    'stopOnError (default true): stops processing remaining fields on first validation error. ' +
+    'immediateValidation (default true): runs Business Central OnValidate triggers immediately and surfaces validation messages. ' +
+    'Returns: {updatedFields: [], failedFields: [{field, error, validationMessage}], saved: false}. ' +
+    'IMPORTANT: This call does NOT commit/post to the database. Field changes are held in memory. ' +
+    'Use execute_action("Save") or execute_action("Post") to persist changes to the database.';
 
   public readonly inputSchema = {
     type: 'object',

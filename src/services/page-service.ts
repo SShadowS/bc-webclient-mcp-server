@@ -314,7 +314,10 @@ export class PageService {
     if (isListPage) {
       const decompressed = decompressResponse(handlers);
       const dataToProcess = decompressed || handlers;
-      extractionResult = this.dataExtractor.extractListPageData(dataToProcess as readonly unknown[]);
+      extractionResult = this.dataExtractor.extractListPageData(
+        dataToProcess as readonly unknown[],
+        logicalForm  // Pass LogicalForm for visibility filtering
+      );
     } else {
       extractionResult = this.dataExtractor.extractCardPageData(logicalForm);
     }

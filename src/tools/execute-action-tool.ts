@@ -38,11 +38,13 @@ export class ExecuteActionTool extends BaseMCPTool {
   public readonly name = 'execute_action';
 
   public readonly description =
-    'Executes an action (button click) on a Business Central page. Requires pageContextId from get_page_metadata. ' +
-    'Optionally provide controlPath if known. ' +
-    'Returns: {success, actionName, pageId, formId, message, handlers}. ' +
-    'Common actions: Edit, New, Delete, Post, Save, Cancel, OK. ' +
-    'Note: High-risk operation - some actions like Post or Delete may be irreversible.';
+    'Executes an action (button click) on a Business Central page using an existing pageContextId from get_page_metadata. ' +
+    'actionName: Use action identifiers from get_page_metadata.actions array when available. ' +
+    'Common well-known actions: "Edit", "New", "Delete", "Post", "Save", "Cancel", "OK", "Yes", "No". ' +
+    'controlPath (optional): Control path for the action button to disambiguate when multiple actions share similar names. ' +
+    'Returns: {success, actionName, pageId, formId, message}. ' +
+    'Side effects: May navigate to another page (requiring new get_page_metadata call) or trigger dialog windows (use handle_dialog to respond). ' +
+    'WARNING: High-risk operation. Actions like "Post", "Delete", or "Approve" may irreversibly commit or delete data. Use only with explicit consent.';
 
   public readonly inputSchema = {
     type: 'object',

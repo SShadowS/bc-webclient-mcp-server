@@ -17,17 +17,21 @@ import { AuditLogger } from './services/audit-logger.js';
 import { CacheManager } from './services/cache-manager.js';
 import { isOk } from './core/result.js';
 
-// Import 5 core tools (consolidated from 9 for context efficiency)
+// Import 6 core tools (consolidated from 9 for context efficiency)
 import { GetPageMetadataTool } from './tools/get-page-metadata-tool.js';
 import { SearchPagesTool } from './tools/search-pages-tool.js';
 import { ReadPageDataTool } from './tools/read-page-data-tool.js';
 import { WritePageDataTool } from './tools/write-page-data-tool.js';
 import { ExecuteActionTool } from './tools/execute-action-tool.js';
+import { SelectAndDrillDownTool } from './tools/select-and-drill-down-tool.js';
 
 // Optional/Advanced tools (not in default registry, but available for opt-in)
 import { CreateRecordByFieldNameTool } from './tools/create-record-by-field-name-tool.js';
 import { CreateRecordTool } from './tools/optional/create-record-tool.js';
 import { UpdateRecordTool } from './tools/optional/update-record-tool.js';
+
+// Import resources
+import { buildResources } from './resources/index.js';
 
 /**
  * Main function to start the STDIO MCP server
@@ -66,6 +70,11 @@ async function main(): Promise<void> {
     // Create MCP server
     const server = new MCPServer(logger);
 
+    // Register MCP resources
+    for (const resource of buildResources({ logger })) {
+      server.registerResource(resource);
+    }
+
     // Create audit logger
     const auditLogger = new AuditLogger(logger, 10000);
 
@@ -78,9 +87,10 @@ async function main(): Promise<void> {
     // Write/mutation tools (with audit logger)
     server.registerTool(new WritePageDataTool(connection, bcConfig, auditLogger));
     server.registerTool(new ExecuteActionTool(connection, bcConfig, auditLogger));
+    server.registerTool(new SelectAndDrillDownTool(connection, bcConfig, auditLogger));
 
-    // Optional/Advanced tools (register if needed)
-    // server.registerTool(new CreateRecordByFieldNameTool(connection, bcConfig, auditLogger));
+    // Optional/Advanced tools
+    server.registerTool(new CreateRecordByFieldNameTool(connection, bcConfig, auditLogger));
     // server.registerTool(new CreateRecordTool(connection, bcConfig, auditLogger));
     // server.registerTool(new UpdateRecordTool(connection, bcConfig, auditLogger));
 

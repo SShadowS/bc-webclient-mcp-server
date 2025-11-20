@@ -12,6 +12,8 @@ import { composeWithTimeout, isTimeoutAbortReason } from '../../core/abort.js';
 import { TimeoutError, AbortedError } from '../../core/errors.js';
 import { defaultTimeouts } from '../../core/timeouts.js';
 import type { IBCHandlerEventEmitter, HandlerEvent } from '../interfaces.js';
+import { debugHandlers } from '../../services/debug-logger.js';
+import { config } from '../../core/config.js';
 
 /**
  * Event emitter for BC handler arrays.
@@ -74,11 +76,21 @@ export class BCHandlerEventEmitter implements IBCHandlerEventEmitter {
   public onHandlers(listener: (event: HandlerEvent) => void): () => void {
     this.handlerListeners.push(listener);
 
+    // 🐛 Debug: Handler listener registered
+    debugHandlers('Handler listener registered', {
+      totalListeners: this.handlerListeners.length,
+    });
+
     // Return unsubscribe function
     return () => {
       const index = this.handlerListeners.indexOf(listener);
       if (index !== -1) {
         this.handlerListeners.splice(index, 1);
+
+        // 🐛 Debug: Handler listener unregistered
+        debugHandlers('Handler listener unregistered', {
+          totalListeners: this.handlerListeners.length,
+        });
       }
     };
   }
@@ -116,8 +128,17 @@ export class BCHandlerEventEmitter implements IBCHandlerEventEmitter {
       timeoutMs?: number;
     }
   ): Promise<T> {
+    const waitId = `wait-${Date.now()}`;
+    const startTime = Date.now();
     const timeoutMs = options?.timeoutMs ?? defaultTimeouts.handlerWaitTimeoutMs;
     const parentSignal = options?.signal;
+
+    // 🐛 Debug: Wait start
+    debugHandlers('Waiting for handlers', {
+      waitId,
+      timeoutMs,
+      hasAbortSignal: !!options?.signal,
+    }, waitId);
 
     // Compose timeout with optional parent signal
     const signal = composeWithTimeout(parentSignal, timeoutMs);
@@ -164,8 +185,28 @@ export class BCHandlerEventEmitter implements IBCHandlerEventEmitter {
       unsubscribe = this.onHandlers((event) => {
         try {
           const result = predicate(event);
+
+          // 🐛 Debug: Handler event evaluated (log only if matched or full logging enabled)
+          if (config.debug.logFullHandlers || result.matched) {
+            debugHandlers('Handler event evaluated', {
+              waitId,
+              eventKind: event.kind,
+              matched: result.matched,
+              fullEvent: config.debug.logFullHandlers ? event : undefined,
+            }, waitId);
+          }
+
           if (result.matched) {
             cleanup();
+            const duration = Date.now() - startTime;
+
+            // 🐛 Debug: Handler match found
+            debugHandlers('Handler match found', {
+              waitId,
+              eventKind: event.kind,
+              duration,
+            }, waitId);
+
             resolve(result.data!);
           }
         } catch (error) {

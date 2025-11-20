@@ -14,6 +14,8 @@ import type { BCError } from '../core/errors.js';
 import { InputValidationError } from '../core/errors.js';
 import type { ZodTypeAny, ZodError } from 'zod';
 import type { AuditLogger } from '../services/audit-logger.js';
+import { debugTools } from '../services/debug-logger.js';
+import { config } from '../core/config.js';
 
 /**
  * Options for BaseMCPTool constructor.
@@ -138,14 +140,51 @@ export abstract class BaseMCPTool implements IMCPTool {
    * entries where "success" is logged but the operation fails.
    */
   public async execute(input: unknown): Promise<Result<unknown, BCError>> {
+    const startTime = Date.now();
+    const executionId = `exec-${Date.now()}-${this.name}`;
+
+    // 🐛 Debug: Log tool start
+    debugTools('Tool execution started', {
+      toolName: this.name,
+      requiresConsent: (this as IMCPTool).requiresConsent,
+    }, executionId);
+
     // Validate input
     const validationResult = this.validateInput(input);
     if (!validationResult.ok) {
+      const duration = Date.now() - startTime;
+
+      // 🐛 Debug: Log validation failure
+      debugTools('Tool validation failed', {
+        toolName: this.name,
+        error: validationResult.error.message,
+        errorCode: validationResult.error.code,
+      }, executionId, duration);
+
       return validationResult;
     }
 
+    // 🐛 Debug: Log validated parameters
+    debugTools('Tool parameters validated', {
+      toolName: this.name,
+      validatedInput: config.debug.logFullHandlers
+        ? validationResult.value
+        : this.getInputSummary(validationResult.value),
+    }, executionId);
+
     // Execute tool logic
     const result = await this.executeInternal(validationResult.value);
+
+    const duration = Date.now() - startTime;
+
+    // 🐛 Debug: Log tool result
+    debugTools('Tool execution completed', {
+      toolName: this.name,
+      success: result.ok,
+      error: result.ok ? undefined : result.error.message,
+      errorCode: result.ok ? undefined : result.error.code,
+      resultSize: result.ok ? JSON.stringify(result.value).length : 0,
+    }, executionId, duration);
 
     // Log audit event AFTER execution for consent-required tools
     // This ensures we log the actual result (success/error), not a prediction

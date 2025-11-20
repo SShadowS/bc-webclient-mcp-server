@@ -48,17 +48,17 @@ export class ControlParser implements IControlParser {
   }
 
   /**
-   * Walks control tree and returns all controls.
+   * Walks control tree and returns all controls with their paths.
    *
    * @param logicalForm - The form to parse
-   * @returns Flat array of all controls
+   * @returns Flat array of all controls with controlPath property
    */
-  public walkControls(logicalForm: LogicalForm): readonly Control[] {
-    const controls: Control[] = [];
+  public walkControls(logicalForm: LogicalForm): readonly (Control & { controlPath?: string })[] {
+    const controls: (Control & { controlPath?: string })[] = [];
 
     const visitor: IControlVisitor = {
-      visit: (control: Control) => {
-        controls.push(control);
+      visit: (control: Control, _depth: number, path?: string) => {
+        controls.push({ ...control, controlPath: path });
         return true; // Continue visiting children
       },
     };
@@ -128,7 +128,7 @@ export class ControlParser implements IControlParser {
   /**
    * Converts a control to action metadata.
    */
-  private controlToActionMetadata(control: Control): ActionMetadata | null {
+  private controlToActionMetadata(control: Control & { controlPath?: string }): ActionMetadata | null {
     // Skip actions without captions (internal actions)
     if (!control.Caption) {
       return null;
@@ -144,6 +144,7 @@ export class ControlParser implements IControlParser {
       controlId: control.ControlIdentifier ? String(control.ControlIdentifier) : undefined,
       icon: iconId ? String(iconId) : undefined,
       synopsis: synopsis ? String(synopsis) : undefined,
+      controlPath: control.controlPath, // Capture the BC control path
     };
   }
 }
@@ -160,28 +161,60 @@ export class ControlWalker implements IControlWalker {
    * @param visitor - Visitor to apply to each control
    */
   public walk(logicalForm: LogicalForm, visitor: IControlVisitor): void {
-    this.walkControl(logicalForm as unknown as Control, visitor, 0);
+    this.walkControl(logicalForm as unknown as Control, visitor, 0, 'server');
   }
 
   /**
    * Recursively walks a control and its children.
+   * Also walks special action arrays: HeaderActions (/ha[N]) and Actions (/a[N]).
+   *
+   * ⚠️ CRITICAL: Walk HeaderActions/Actions BEFORE Children
+   * BC puts canonical action controls in HeaderActions/Actions arrays.
+   * The same actions may also appear in Children (for UI layout), but those
+   * paths don't trigger navigation. We must find HeaderActions/Actions first.
    */
   private walkControl(
     control: Control,
     visitor: IControlVisitor,
-    depth: number
+    depth: number,
+    currentPath: string
   ): void {
-    // Visit current control
-    const continueWalking = visitor.visit(control, depth);
+    // Visit current control with path
+    const continueWalking = visitor.visit(control, depth, currentPath);
 
     if (!continueWalking) {
       return;
     }
 
-    // Walk children if present
+    // ⚠️ WALK ACTIONS FIRST (before Children)
+    // HeaderActions/Actions contain canonical control paths that BC expects.
+    // Children may contain duplicate actions with wrong paths.
+
+    // Walk HeaderActions array (e.g., Edit, View, Delete actions)
+    // BC uses /ha[N] notation for these
+    const headerActions = (control as any).HeaderActions;
+    if (headerActions && Array.isArray(headerActions)) {
+      for (let i = 0; i < headerActions.length; i++) {
+        const actionPath = `${currentPath}/ha[${i}]`;
+        this.walkControl(headerActions[i], visitor, depth + 1, actionPath);
+      }
+    }
+
+    // Walk Actions array (e.g., other actions)
+    // BC uses /a[N] notation for these
+    const actions = (control as any).Actions;
+    if (actions && Array.isArray(actions)) {
+      for (let i = 0; i < actions.length; i++) {
+        const actionPath = `${currentPath}/a[${i}]`;
+        this.walkControl(actions[i], visitor, depth + 1, actionPath);
+      }
+    }
+
+    // Walk children LAST (after HeaderActions/Actions)
     if (control.Children && Array.isArray(control.Children)) {
-      for (const child of control.Children) {
-        this.walkControl(child, visitor, depth + 1);
+      for (let i = 0; i < control.Children.length; i++) {
+        const childPath = `${currentPath}:c[${i}]`;
+        this.walkControl(control.Children[i], visitor, depth + 1, childPath);
       }
     }
   }
@@ -195,7 +228,7 @@ export class TypeFilterVisitor implements IControlVisitor {
 
   public constructor(private readonly types: readonly ControlType[]) {}
 
-  public visit(control: Control): boolean {
+  public visit(control: Control, _depth?: number, _path?: string): boolean {
     if (this.types.includes(control.t as ControlType)) {
       this.controls.push(control);
     }

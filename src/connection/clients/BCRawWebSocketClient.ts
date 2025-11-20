@@ -55,7 +55,6 @@ export class BCRawWebSocketClient {
   private companyName: string | null = null;
   private roleCenterFormId: string | null = null;
   private clientSequenceCounter = 0;
-  private lastServerSequence = -1;
   private openFormIds: string[] = [];
   private spaInstanceId = `poc${Date.now()}`;
 
@@ -332,6 +331,9 @@ export class BCRawWebSocketClient {
     if (formHandler?.parameters?.[1]?.ServerId) {
       this.roleCenterFormId = formHandler.parameters[1].ServerId;
       logger.info(`  Role center form: ${this.roleCenterFormId}`);
+
+      // Track role center as open form (BC requires this for subsequent Invoke calls)
+      this.openFormIds = [this.roleCenterFormId!]; // Non-null assertion safe here (checked in if condition)
     }
 
     logger.info('✓ BC session opened\n');
@@ -373,29 +375,68 @@ export class BCRawWebSocketClient {
     // Use current openFormIds if not provided
     const openFormIds = options.openFormIds ?? this.openFormIds;
 
-    // Use last server sequence as ack number
+    // Use last server sequence as ack number (from protocol adapter)
     const lastClientAckSequenceNumber =
-      options.lastClientAckSequenceNumber ?? this.lastServerSequence;
+      options.lastClientAckSequenceNumber ?? this.protocolAdapter?.getLastServerSequence() ?? -1;
 
-    const params: any = {
-      sessionId: this.serverSessionId,
-      sessionKey: this.sessionKey,
+    logger.info(`[invoke] sequenceNo=${sequenceNo}, lastClientAckSequenceNumber=${lastClientAckSequenceNumber}, openFormIds=${JSON.stringify(openFormIds)}`);
+
+    // Build interaction object (matches browser format)
+    const interaction: any = {
       interactionName: options.interactionName,
-      namedParameters: options.namedParameters,
-      sequenceNo,
-      lastClientAckSequenceNumber,
-      openFormIds,
+      skipExtendingSessionLifetime: false,
+      namedParameters: typeof options.namedParameters === 'string'
+        ? options.namedParameters
+        : JSON.stringify(options.namedParameters),
+      callbackId: String(this.clientSequenceCounter),
     };
 
     if (options.controlPath !== undefined) {
-      params.controlPath = options.controlPath;
+      interaction.controlPath = options.controlPath;
     }
     if (options.formId !== undefined) {
-      params.formId = options.formId;
+      interaction.formId = options.formId;
     }
     if (options.systemAction !== undefined) {
-      params.systemAction = options.systemAction;
+      interaction.systemAction = options.systemAction;
     }
+
+    // Build full params matching browser format
+    const params: any = {
+      openFormIds,
+      sessionId: this.serverSessionId,
+      sequenceNo,
+      lastClientAckSequenceNumber,
+      telemetryClientActivityId: null,
+      telemetryTraceStartInfo: `traceStartInfo=%5BWeb%20Client%20-%20Web%20browser%5D%20${options.interactionName}`,
+      navigationContext: {
+        applicationId: 'FIN',
+        deviceCategory: 0,
+        spaInstanceId: this.spaInstanceId,
+      },
+      supportedExtensions: JSON.stringify([
+        { Name: 'Microsoft.Dynamics.Nav.Client.PageNotifier' },
+        { Name: 'Microsoft.Dynamics.Nav.Client.Capabilities.Tour' },
+        { Name: 'Microsoft.Dynamics.Nav.Client.Capabilities.UserTours' },
+        { Name: 'Microsoft.Dynamics.Nav.Client.Capabilities.AppSource' },
+        { Name: 'Microsoft.Dynamics.Nav.Client.Capabilities.Designer' },
+      ]),
+      interactionsToInvoke: [interaction],
+      tenantId: this.getTenantId(),
+      sessionKey: this.sessionKey,
+      company: this.companyName,
+      telemetryClientSessionId: uuidv4(),
+      features: [
+        'QueueInteractions',
+        'MetadataCache',
+        'CacheSession',
+        'DynamicsQuickEntry',
+        'Multitasking',
+        'MultilineEdit',
+        'SaveValueToDatabasePromptly',
+        'CalcOnlyVisibleFlowFields',
+      ],
+    };
 
     const result = await this.sendRpcRequest('Invoke', [params], {
       signal: options.signal,

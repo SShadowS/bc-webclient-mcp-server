@@ -169,10 +169,22 @@ export type SearchPagesInput = z.infer<typeof SearchPagesInputSchema>;
 
 /**
  * Schema for get_page_metadata tool input.
+ * Accepts either pageId OR pageContextId (or both).
  */
-export const GetPageMetadataInputSchema = z.object({
-  pageId: PageIdSchema,
-});
+export const GetPageMetadataInputSchema = z
+  .object({
+    pageId: PageIdSchema.optional(),
+    pageContextId: PageContextIdSchema.optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (!data.pageId && !data.pageContextId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Either pageId or pageContextId must be provided',
+        path: ['pageId'],
+      });
+    }
+  });
 
 export type GetPageMetadataInput = z.infer<typeof GetPageMetadataInputSchema>;
 
@@ -253,3 +265,14 @@ export const RecordToolInputSchema = z.object({
 });
 
 export type RecordToolInput = z.infer<typeof RecordToolInputSchema>;
+
+/**
+ * Schema for select_and_drill_down tool input.
+ */
+export const SelectAndDrillDownInputSchema = z.object({
+  pageContextId: PageContextIdSchema,
+  bookmark: z.string().trim().min(1, 'Bookmark cannot be empty'),
+  action: z.enum(['Edit', 'View']).optional().default('Edit'),
+});
+
+export type SelectAndDrillDownInput = z.infer<typeof SelectAndDrillDownInputSchema>;

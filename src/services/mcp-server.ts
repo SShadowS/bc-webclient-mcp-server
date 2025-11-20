@@ -18,6 +18,8 @@ import type { BCError } from '../core/errors.js';
 import { InternalError } from '../core/errors.js';
 import type { IMCPServer, IMCPTool, IMCPResource, ILogger } from '../core/interfaces.js';
 import { PageContextCache } from './page-context-cache.js';
+import { debugLogger } from './debug-logger.js';
+import { config } from '../core/config.js';
 
 // ============================================================================
 // MCP Protocol Types
@@ -60,6 +62,7 @@ export interface InitializeParams {
   readonly capabilities: {
     readonly tools?: Record<string, unknown>;
     readonly resources?: Record<string, unknown>;
+    readonly prompts?: Record<string, unknown>;
   };
   readonly clientInfo: {
     readonly name: string;
@@ -75,6 +78,7 @@ export interface InitializeResult {
   readonly capabilities: {
     readonly tools?: Record<string, unknown>;
     readonly resources?: Record<string, unknown>;
+    readonly prompts?: Record<string, unknown>;
   };
   readonly serverInfo: {
     readonly name: string;
@@ -112,6 +116,46 @@ export interface ResourceListItem {
   readonly name: string;
   readonly description: string;
   readonly mimeType: string;
+}
+
+/**
+ * Prompt argument for MCP protocol.
+ */
+export interface PromptArgument {
+  readonly name: string;
+  readonly description: string;
+  readonly required?: boolean;
+  readonly default?: string;
+}
+
+/**
+ * Prompt list item for MCP protocol.
+ */
+export interface PromptListItem {
+  readonly name: string;
+  readonly description: string;
+  readonly arguments: readonly PromptArgument[];
+}
+
+/**
+ * Parameters for prompts/get request.
+ */
+export interface GetPromptParams {
+  readonly name: string;
+  readonly arguments?: Record<string, string>;
+}
+
+/**
+ * Result for prompts/get request.
+ */
+export interface GetPromptResult {
+  /**
+   * Human-readable prompt text (markdown).
+   */
+  readonly prompt: string;
+  readonly name: string;
+  readonly description: string;
+  readonly arguments: readonly PromptArgument[];
 }
 
 // ============================================================================
@@ -247,6 +291,20 @@ export class MCPServer implements IMCPServer {
         // Non-fatal: continue without persistent cache
       }
 
+      // 🐛 Initialize debug logger
+      if (config.debug.enabled) {
+        try {
+          await debugLogger.initialize();
+          this.logger?.info('✓ Debug logging enabled', {
+            channels: Array.from(config.debug.channels),
+            logDir: config.debug.logDir,
+          });
+        } catch (error) {
+          this.logger?.error(`Failed to initialize debug logging: ${error}`);
+          // Non-fatal: continue without debug logging
+        }
+      }
+
       this.running = true;
 
       // Note: Actual stdio processing handled by stdio-transport.ts
@@ -281,6 +339,16 @@ export class MCPServer implements IMCPServer {
       }
 
       this.logger?.info('Stopping MCP server');
+
+      // 🐛 Shutdown debug logger
+      if (config.debug.enabled) {
+        try {
+          await debugLogger.shutdown();
+          this.logger?.info('✓ Debug logging shut down');
+        } catch (error) {
+          this.logger?.error(`Failed to shutdown debug logging: ${error}`);
+        }
+      }
 
       this.running = false;
 
@@ -330,10 +398,11 @@ export class MCPServer implements IMCPServer {
       this.clientInfo = params.clientInfo;
 
       const result: InitializeResult = {
-        protocolVersion: '2024-11-05', // MCP protocol version (Claude Desktop supports 2025-06-18)
+        protocolVersion: '2025-06-18', // MCP protocol version upgraded to support prompts
         capabilities: {
           tools: this.tools.size > 0 ? {} : undefined,
           resources: this.resources.size > 0 ? {} : undefined,
+          prompts: {}, // Prompts capability enabled
         },
         serverInfo: {
           name: 'bc-webclient-mcp',
@@ -526,6 +595,78 @@ export class MCPServer implements IMCPServer {
           'Failed to handle resources/read request',
           { code: 'RESOURCE_READ_FAILED', uri: params.uri, error: String(error) }
         )
+      );
+    }
+  }
+
+  /**
+   * Handles prompts/list request.
+   */
+  public async handlePromptsList(): Promise<Result<{ prompts: readonly PromptListItem[] }, BCError>> {
+    try {
+      this.logger?.debug('Handling prompts/list request');
+
+      // Import prompts dynamically to avoid circular dependencies
+      const { listPrompts } = await import('../prompts/index.js');
+
+      const prompts = listPrompts().map((p) => ({
+        name: p.name,
+        description: p.description,
+        arguments: p.arguments,
+      }));
+
+      this.logger?.debug('Returning prompts list', { count: prompts.length });
+
+      return ok({ prompts });
+    } catch (error) {
+      return err(
+        new InternalError('Failed to handle prompts/list request', {
+          code: 'PROMPTS_LIST_FAILED',
+          error: String(error),
+        })
+      );
+    }
+  }
+
+  /**
+   * Handles prompts/get request.
+   */
+  public async handlePromptGet(params: GetPromptParams): Promise<Result<GetPromptResult, BCError>> {
+    try {
+      this.logger?.info('Handling prompts/get request', {
+        promptName: params.name,
+      });
+
+      // Import prompts dynamically to avoid circular dependencies
+      const { getPromptByName, buildPromptResult } = await import('../prompts/index.js');
+
+      const template = getPromptByName(params.name);
+      if (!template) {
+        return err(
+          new InternalError(`Prompt not found: ${params.name}`, {
+            code: 'PROMPT_NOT_FOUND',
+            promptName: params.name,
+          })
+        );
+      }
+
+      const args = params.arguments ?? {};
+      // Optional: enforce required args; for now we rely on the template content being clear.
+
+      const result = buildPromptResult(template, args);
+
+      this.logger?.debug('Prompt rendered', {
+        promptName: params.name,
+      });
+
+      return ok(result);
+    } catch (error) {
+      return err(
+        new InternalError('Failed to handle prompts/get request', {
+          code: 'PROMPT_GET_FAILED',
+          promptName: params.name,
+          error: String(error),
+        })
       );
     }
   }

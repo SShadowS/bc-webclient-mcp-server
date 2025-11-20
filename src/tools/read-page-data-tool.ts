@@ -19,6 +19,7 @@ import { decompressResponse } from '../util/loadform-helpers.js';
 import { ConnectionManager } from '../connection/connection-manager.js';
 import { createToolLogger } from '../core/logger.js';
 import { PageContextCache } from '../services/page-context-cache.js';
+import { FilterMetadataService } from '../services/filter-metadata-service.js';
 
 /**
  * MCP Tool: read_page_data
@@ -29,9 +30,13 @@ export class ReadPageDataTool extends BaseMCPTool {
   public readonly name = 'read_page_data';
 
   public readonly description =
-    'Reads data records from a Business Central page. Requires pageContextId from get_page_metadata. ' +
-    'Supports filtering with operators: =, !=, contains, startsWith, >=, <=, between. ' +
-    'Can set current record with setCurrent=true (when single record matches). ' +
+    'Reads data records from a Business Central page using an existing pageContextId from get_page_metadata. ' +
+    'filters: Optional object where keys are field names/captions (case-insensitive) and values specify filter criteria. ' +
+    'Simple format: {"No.": "10000"} for equality. Advanced: {"No.": {operator: "=", value: "10000"}}. ' +
+    'Supported operators: = (equals), != (not equals), contains, startsWith, >= (greater/equal), <= (less/equal), between (provide [min, max]). ' +
+    'Multiple filters are combined with AND logic. ' +
+    'setCurrent: If true and exactly ONE record matches, sets it as the current record for subsequent operations (write_page_data, execute_action). ' +
+    'Returns error if 0 or multiple records match when setCurrent=true. ' +
     'Returns: {records: [...], total?, nextOffset?} for pagination support.';
 
   public readonly inputSchema = {
@@ -120,8 +125,58 @@ export class ReadPageDataTool extends BaseMCPTool {
   }
 
   /**
+   * Extracts field metadata from a LogicalForm.
+   * Returns a map of field name to FieldMetadata for all filterable fields.
+   *
+   * Walks the LogicalForm tree and extracts metadata from RepeaterColumnControls
+   * and other field controls. This metadata is used for filter pre-validation.
+   */
+  private extractFieldMetadata(logicalForm: any): Map<string, import('../types/bc-types.js').FieldMetadata> {
+    const fields = new Map<string, import('../types/bc-types.js').FieldMetadata>();
+
+    const walkControl = (control: any): void => {
+      if (!control || typeof control !== 'object') return;
+
+      const controlType = control.t as string;
+
+      // Extract field metadata from various control types
+      const fieldTypes = ['rcc', 'sc', 'dc', 'bc', 'i32c', 'sec', 'dtc', 'pc'];
+      if (fieldTypes.includes(controlType)) {
+        // Get field name (prefer DesignName, fall back to Name or Caption)
+        const fieldName = control.DesignName || control.Name || control.Caption;
+        if (fieldName) {
+          fields.set(fieldName, {
+            type: controlType,
+            caption: control.Caption,
+            name: control.Name || control.DesignName,
+            controlId: control.ID || control.ControlIdentifier,
+            enabled: control.Enabled !== false,
+            visible: control.Visible !== false,
+            readonly: control.ReadOnly === true,
+            options: control.Options,
+          });
+        }
+      }
+
+      // Walk children recursively
+      if (Array.isArray(control.Children)) {
+        for (const child of control.Children) {
+          walkControl(child);
+        }
+      }
+    };
+
+    // Start walk from root
+    walkControl(logicalForm);
+    return fields;
+  }
+
+  /**
    * Applies filters to a list page before reading data.
    * Uses BC's Filter + SaveValue protocol.
+   *
+   * OPTIMIZATION: Caches filter state to skip redundant Filter/SaveValue calls.
+   * This is the highest-value optimization (validated by GPT-5.1 analysis).
    *
    * Filter format:
    * - Simple: { "No.": "10000" } → equality filter
@@ -133,13 +188,47 @@ export class ReadPageDataTool extends BaseMCPTool {
     connection: IBCConnection,
     filters: Record<string, any>,
     repeaterPath: string,
-    logger: any
+    sessionId: string,
+    pageId: string,
+    logger: any,
+    logicalForm: any
   ): Promise<Result<void, BCError>> {
     if (!filters || Object.keys(filters).length === 0) {
       return ok(undefined);
     }
 
     logger.info(`Applying ${Object.keys(filters).length} filter(s)...`);
+
+    // Get cached filter state (Phase 1: Filter State Cache)
+    const filterService = FilterMetadataService.getInstance();
+    const filterState = filterService.getFilterState(sessionId, pageId);
+    let stateChanged = false;
+
+    // Get or compute field metadata (Phase 3: Field Metadata Cache)
+    const fieldMetadata = await filterService.getOrComputeFieldMetadata(
+      pageId,
+      logicalForm,
+      (form) => this.extractFieldMetadata(form)
+    );
+
+    // Pre-validate filter fields (Phase 3: Field Metadata Cache)
+    const invalidFields: string[] = [];
+    for (const fieldName of Object.keys(filters)) {
+      if (!fieldMetadata.has(fieldName)) {
+        invalidFields.push(fieldName);
+      }
+    }
+
+    if (invalidFields.length > 0) {
+      const availableFields = Array.from(fieldMetadata.keys()).sort();
+      return err(
+        new ProtocolError(
+          `Invalid filter field(s): ${invalidFields.join(', ')}. ` +
+            `Available fields: ${availableFields.join(', ')}`,
+          { invalidFields, availableFields }
+        )
+      );
+    }
 
     for (const [columnName, filterSpec] of Object.entries(filters)) {
       try {
@@ -152,6 +241,13 @@ export class ReadPageDataTool extends BaseMCPTool {
           value = filterSpec.value;
         } else {
           value = filterSpec;
+        }
+
+        // CHECK CACHE: Skip if filter already applied with same operator and value
+        const cached = filterState.get(columnName);
+        if (cached && cached.operator === operator && cached.value === value) {
+          logger.info(`  ✓ Skipping "${columnName}" ${operator} "${value}" - already active (cached)`);
+          continue;
         }
 
         logger.info(`  Filtering "${columnName}" ${operator} "${value}"`);
@@ -230,10 +326,19 @@ export class ReadPageDataTool extends BaseMCPTool {
         }
 
         logger.info(`    ✓ Filter applied: "${columnName}" ${operator} "${value}"`);
+
+        // UPDATE CACHE: Track successfully applied filter
+        filterState.set(columnName, { operator, value });
+        stateChanged = true;
       } catch (error) {
         logger.warn(`    Error applying filter for "${columnName}": ${error instanceof Error ? error.message : String(error)}`);
         continue; // Try next filter
       }
+    }
+
+    // Save updated filter state if any filters were applied
+    if (stateChanged) {
+      filterService.setFilterState(sessionId, pageId, filterState);
     }
 
     logger.info(`✓ Filters applied`);
@@ -390,14 +495,46 @@ export class ReadPageDataTool extends BaseMCPTool {
 
     logger.info(`LogicalForm: ${caption}`);
 
+    // Check for Document page type FIRST (Sales Order, Purchase Order, etc.)
+    const isDocumentPage = cachedPageType === 'Document';
+    if (isDocumentPage) {
+      logger.info(`Page type: Document - extracting header + lines`);
+
+      const extractionResult = this.dataExtractor.extractDocumentPageData(logicalForm, handlers);
+
+      if (!isOk(extractionResult)) {
+        return extractionResult as Result<never, BCError>;
+      }
+
+      const { header, linesBlocks, totalCount } = extractionResult.value;
+      logger.info(`Extracted Document page: ${Object.keys(header.fields || {}).length} header fields, ${linesBlocks.length} lines block(s)`);
+
+      // Return structured output with header + lines
+      return ok({
+        pageId: String(pageId),
+        pageContextId,
+        caption,
+        pageType: 'Document',
+        header,
+        linesBlocks,
+        records: [header], // Backwards compatibility
+        totalCount,
+      });
+    }
+
     // Use cached page type if available, otherwise detect from LogicalForm
     const isListPage = cachedPageType === 'List' || cachedPageType === 'Worksheet' || this.dataExtractor.isListPage(logicalForm);
     logger.info(`Page type: ${isListPage ? 'list' : 'card'}`);
 
     // Apply filters if provided (only for list pages)
     if (isListPage && filters && Object.keys(filters).length > 0) {
-      // Find repeater control path from LogicalForm
-      const repeaterPath = this.findRepeaterControlPath(logicalForm);
+      // Find repeater control path from LogicalForm (with Phase 2 cache optimization)
+      const filterService = FilterMetadataService.getInstance();
+      const repeaterPath = await filterService.getOrComputeRepeaterPath(
+        pageId,
+        logicalForm,
+        (form) => this.findRepeaterControlPath(form)
+      );
 
       if (!repeaterPath) {
         logger.warn(`Could not find repeater control in LogicalForm for filtering`);
@@ -405,8 +542,8 @@ export class ReadPageDataTool extends BaseMCPTool {
       } else {
         logger.info(`Found repeater at path: ${repeaterPath}`);
 
-        // Apply filters
-        const filterResult = await this.applyFilters(connection, filters, repeaterPath, logger);
+        // Apply filters (with cache optimization - Phases 1, 2, & 3)
+        const filterResult = await this.applyFilters(connection, filters, repeaterPath, sessionId, pageId, logger, logicalForm);
 
         if (!isOk(filterResult)) {
           // Log warning but continue - filtering is best-effort
@@ -426,8 +563,11 @@ export class ReadPageDataTool extends BaseMCPTool {
       const decompressed = decompressResponse(handlers);
       const dataToProcess = decompressed || handlers;
 
-      // Try synchronous extraction first
-      const syncExtractionResult = this.dataExtractor.extractListPageData(dataToProcess as readonly unknown[]);
+      // Try synchronous extraction first (with LogicalForm for field filtering)
+      const syncExtractionResult = this.dataExtractor.extractListPageData(
+        dataToProcess as readonly unknown[],
+        logicalForm  // Pass LogicalForm for visibility filtering
+      );
 
       if (isOk(syncExtractionResult) && syncExtractionResult.value.totalCount > 0) {
         // Got data synchronously
@@ -484,11 +624,14 @@ export class ReadPageDataTool extends BaseMCPTool {
           const asyncHandlers = await connection.waitForHandlers(hasListData, { timeoutMs: 10000 });
           logger.info(`Received async data with ${asyncHandlers.length} handlers`);
 
-          // Extract from async handlers
+          // Extract from async handlers (with LogicalForm for field filtering)
           const asyncDecompressed = decompressResponse(asyncHandlers);
           const asyncData = asyncDecompressed || asyncHandlers;
 
-          const asyncExtractionResult = this.dataExtractor.extractListPageData(asyncData as readonly unknown[]);
+          const asyncExtractionResult = this.dataExtractor.extractListPageData(
+            asyncData as readonly unknown[],
+            logicalForm  // Pass LogicalForm for visibility filtering
+          );
 
           if (!isOk(asyncExtractionResult)) {
             return asyncExtractionResult as Result<never, BCError>;
@@ -525,7 +668,7 @@ export class ReadPageDataTool extends BaseMCPTool {
       // Card page - data is directly in LogicalForm
       logger.info(`Extracting card page data...`);
 
-      const extractionResult = this.dataExtractor.extractCardPageData(logicalForm);
+      const extractionResult = this.dataExtractor.extractCardPageData(logicalForm, handlers);
 
       if (!isOk(extractionResult)) {
         return extractionResult as Result<never, BCError>;

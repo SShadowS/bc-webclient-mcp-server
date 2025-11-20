@@ -188,7 +188,7 @@ class MCPRealTestClient {
       this.assert(!response.error, `Initialize failed: ${response.error?.message}`);
       this.assert(response.result, 'No result returned');
       this.assert(response.result.serverInfo, 'No serverInfo returned');
-      this.assert(response.result.serverInfo.name === 'bc-mcp-server', 'Unexpected server name');
+      this.assert(response.result.serverInfo.name === 'bc-webclient-mcp', `Unexpected server name: ${response.result.serverInfo.name}`);
     });
 
     // Test 2: Tools List

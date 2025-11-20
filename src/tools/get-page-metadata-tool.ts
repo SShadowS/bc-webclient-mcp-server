@@ -35,11 +35,17 @@ import { PageIdSchema, PageContextIdSchema } from '../validation/schemas.js';
 /**
  * Zod schema for get_page_metadata tool input.
  * Handles mixed types (string|number for pageId) via type coercion.
+ * Requires AT LEAST ONE of pageId or pageContextId.
  */
 const GetPageMetadataInputZodSchema = z.object({
-  pageId: PageIdSchema,
+  pageId: PageIdSchema.optional(),
   pageContextId: PageContextIdSchema.optional(),
-});
+}).refine(
+  (data) => data.pageId !== undefined || data.pageContextId !== undefined,
+  {
+    message: "At least one of 'pageId' or 'pageContextId' must be provided",
+  }
+);
 
 type GetPageMetadataInputValidated = z.infer<typeof GetPageMetadataInputZodSchema>;
 
@@ -53,24 +59,31 @@ export class GetPageMetadataTool extends BaseMCPTool {
   public readonly name = 'get_page_metadata';
 
   public readonly description =
-    'Retrieves metadata for a Business Central page and initializes a page context for subsequent operations. ' +
-    'Returns pageContextId (required for stateful operations), page type (List/Card/Document/Worksheet), ' +
-    'fields with metadata (id, caption, dataType, editable, required), actions, and page structure. ' +
-    'Side effects: Creates a short-lived pageContextId for maintaining state across operations.';
+    'Opens a Business Central page and retrieves its metadata, creating or refreshing a pageContextId for subsequent stateful operations. ' +
+    'EITHER pageId OR pageContextId is required (not both): ' +
+    'pageId: The BC page ID (e.g., 21 for Customer Card, 22 for Customer List) - opens a new page. ' +
+    'pageContextId: Existing page context ID from previous get_page_metadata or drill-down - retrieves cached metadata for already-open page. ' +
+    'Returns: pageContextId (use with read_page_data, write_page_data, execute_action), ' +
+    'pageType ("List"|"Card"|"Document"|"Worksheet"), ' +
+    'fields array with metadata (name, caption, type, editable, required), ' +
+    'actions array (available buttons/operations), and page structure information. ' +
+    'Side effects: Creates or updates a short-lived page context bound to the underlying BC session. ' +
+    'Context may expire if session ends or navigation leaves the page. ' +
+    'Typical workflow: search_pages → get_page_metadata → read_page_data / write_page_data / execute_action.';
 
   public readonly inputSchema = {
     type: 'object',
     properties: {
       pageId: {
         type: ['string', 'number'],
-        description: 'The BC page ID (e.g., "21" for Customer Card)',
+        description: 'The BC page ID (e.g., "21" for Customer Card) - use to open a new page',
       },
       pageContextId: {
         type: 'string',
-        description: 'Optional existing page context ID to reuse',
+        description: 'Existing page context ID to retrieve cached metadata (from drill-down or previous get_page_metadata)',
       },
     },
-    required: ['pageId'],
+    // At least one of pageId or pageContextId is required
   };
 
   // Consent configuration - Read-only metadata operation, no consent needed
@@ -97,11 +110,37 @@ export class GetPageMetadataTool extends BaseMCPTool {
    */
   protected async executeInternal(input: unknown): Promise<Result<GetPageMetadataOutput, BCError>> {
     // Input is already validated by BaseMCPTool with Zod
-    const { pageId, pageContextId: inputPageContextId } = input as GetPageMetadataInputValidated;
+    let { pageId, pageContextId: inputPageContextId } = input as GetPageMetadataInputValidated;
+
+    // If pageId not provided but pageContextId is, extract pageId from pageContextId
+    // Format: sessionId:page:pageId:timestamp
+    if (!pageId && inputPageContextId) {
+      const parts = inputPageContextId.split(':');
+      if (parts.length >= 3 && parts[1] === 'page') {
+        pageId = parts[2];
+      } else {
+        return err(
+          new ProtocolError(
+            `Invalid pageContextId format: ${inputPageContextId}. Expected format: sessionId:page:pageId:timestamp`,
+            { pageContextId: inputPageContextId }
+          )
+        );
+      }
+    }
+
+    // At this point, pageId must be defined (either provided directly or extracted from pageContextId)
+    if (!pageId) {
+      return err(
+        new ProtocolError(
+          `pageId could not be determined. Provide either pageId or pageContextId.`,
+          { input }
+        )
+      );
+    }
 
     // Create logger for this execution
     const logger = createToolLogger('GetPageMetadata', inputPageContextId);
-    logger.info(`Requesting metadata for BC Page: "${pageId}"`);
+    logger.info(`Requesting metadata for BC Page: "${pageId}"${inputPageContextId ? ` (from pageContextId: ${inputPageContextId})` : ''}`);
 
     const manager = ConnectionManager.getInstance();
     let connection: IBCConnection;
@@ -168,17 +207,105 @@ export class GetPageMetadataTool extends BaseMCPTool {
       }
     }
 
-    // Check if page is already open in the session (true user simulation)
+    // If caller provided an existing pageContextId, try to reuse cached metadata instead of reopening the page
     let allHandlers: Handler[] = [];
+    let reusedFromContext = false;
+    let reusedLogicalForm: any | null = null;
+    let reusedPageType: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report' | undefined;
+
+    if (inputPageContextId) {
+      const contextParts = inputPageContextId.split(':');
+      if (contextParts.length < 3) {
+        return err(
+          new ProtocolError(
+            `Invalid pageContextId format: ${inputPageContextId}`,
+            { pageContextId: inputPageContextId }
+          )
+        );
+      }
+
+      const contextSessionId = contextParts[0];
+      const contextPageId = contextParts[2];
+
+      // Sanity check: pageId consistency (only warn, don't hard-fail)
+      if (String(contextPageId) !== String(pageId)) {
+        logger.warn(
+          `pageContextId pageId (${contextPageId}) does not match requested pageId (${pageId}). ` +
+          `Continuing but results may be unexpected.`
+        );
+      }
+
+      if (contextSessionId !== actualSessionId) {
+        // This should not normally happen because we resolved connection from the same pageContextId
+        logger.warn(
+          `pageContextId sessionId (${contextSessionId}) does not match active session (${actualSessionId}). ` +
+          `Treating pageContext as stale.`
+        );
+      } else {
+        // Try in-memory context first
+        let pageContext = (connection as any).pageContexts?.get(inputPageContextId);
+
+        // If not in memory, try persistent cache
+        if (!pageContext) {
+          logger.info(`⚠️  Page context not in memory, checking persistent cache...`);
+          try {
+            const cache = PageContextCache.getInstance();
+            const cachedContext = await cache.load(inputPageContextId);
+            if (cachedContext) {
+              logger.info(`✓ Restored pageContext from cache: ${inputPageContextId}`);
+              if (!(connection as any).pageContexts) {
+                (connection as any).pageContexts = new Map();
+              }
+              (connection as any).pageContexts.set(inputPageContextId, cachedContext);
+              pageContext = cachedContext;
+            }
+          } catch (error) {
+            logger.error(`Failed to load pageContext from cache: ${error}`);
+          }
+        }
+
+        if (pageContext) {
+          // Reuse cached handlers + metadata
+          const cachedHandlers = pageContext.handlers as Handler[] | undefined;
+          if (cachedHandlers && cachedHandlers.length > 0) {
+            logger.info(
+              `♻️  Reusing ${cachedHandlers.length} cached handlers from pageContext ` +
+              `"${inputPageContextId}" - skipping OpenForm/LoadForm`
+            );
+            allHandlers = cachedHandlers;
+            reusedFromContext = true;
+            reusedLogicalForm = pageContext.logicalForm ?? null;
+            reusedPageType = pageContext.pageType;
+          } else {
+            logger.info(
+              `⚠️  Page context "${inputPageContextId}" has no cached handlers. ` +
+              `Treating as stale and requiring fresh OpenForm.`
+            );
+          }
+        } else {
+          // Mirror read_page_data behavior: explicit context not found → error, not implicit reopen
+          logger.info(`❌ Page context not found in memory or cache`);
+          return err(
+            new ProtocolError(
+              `Page context ${inputPageContextId} not found. Page may have been closed. Please call get_page_metadata again.`,
+              { pageContextId: inputPageContextId }
+            )
+          );
+        }
+      }
+    }
+
+    // From here on, if reusedFromContext is true, we must NOT call OpenForm/LoadForm
     const pageIdStr = String(pageId); // Ensure pageId is always a string
 
-    // REMOVED: Aggressive form closing logic was causing OpenForm failures for Pages 22 & 30
-    // BC can handle multiple open forms - let it manage form lifecycle naturally
-    // The close logic with manual tracking manipulation was corrupting session state
-    logger.info(`ℹ️  Skipping form close - BC will manage form lifecycle`);
+    if (!reusedFromContext) {
+      // REMOVED: Aggressive form closing logic was causing OpenForm failures for Pages 22 & 30
+      // BC can handle multiple open forms - let it manage form lifecycle naturally
+      // The close logic with manual tracking manipulation was corrupting session state
+      logger.info(`ℹ️  Skipping form close - BC will manage form lifecycle`);
 
-    // Always open fresh forms to avoid BC caching issues
-    logger.info(`🆕 Opening new BC Page: "${pageIdStr}" (using LoadForm solution)`);
+      // Always open fresh forms to avoid BC caching issues
+      logger.info(`🆕 Opening new BC Page: "${pageIdStr}" (using LoadForm solution)`);
 
     // Generate unique startTraceId for this request (prevents BC form caching)
     const startTraceId = newId();
@@ -212,6 +339,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
 
     // Accumulate shell handlers
     allHandlers = Array.from(shellResult.value) as Handler[];
+    logger.info(`📊 OpenForm returned ${allHandlers.length} handlers`);
 
     // Step 2: Decompress response if needed (BC may compress responses)
     const decompressed = decompressResponse(shellResult.value);
@@ -286,8 +414,10 @@ export class GetPageMetadataTool extends BaseMCPTool {
     } catch (err) {
       logger.info(`⚠️  LoadForm extraction/call failed: ${String(err)} - continuing with OpenForm data only`);
     }
+    } // End if (!reusedFromContext)
 
     // Parse metadata from accumulated handlers (now includes LoadForm data if available)
+    logger.info(`📋 Total handlers before parsing: ${allHandlers.length}`);
     const metadataResult = this.metadataParser.parse(allHandlers);
 
     if (!isOk(metadataResult)) {
@@ -300,10 +430,16 @@ export class GetPageMetadataTool extends BaseMCPTool {
     const pageContextId = `${actualSessionId}:page:${metadata.pageId}:${Date.now()}`;
 
     // Determine page type from ViewMode/FormStyle (accurate) or caption (fallback)
-    const pageType = this.inferPageType(allHandlers, metadata.caption);
+    // Reuse cached values if available from existing pageContext
+    const pageType =
+      reusedPageType ??
+      this.inferPageType(allHandlers, metadata.caption);
 
     // Extract LogicalForm from handlers for caching
-    const logicalForm = this.extractLogicalFormFromHandlers(allHandlers);
+    // Reuse cached values if available from existing pageContext
+    const logicalForm =
+      reusedLogicalForm ??
+      this.extractLogicalFormFromHandlers(allHandlers);
 
     // Prepare page context data
     const pageContextData = {

@@ -6,12 +6,13 @@
 
 export { BaseMCPTool } from './base-tool.js';
 
-// Core MCP Tools (5) - Default tool registry
+// Core MCP Tools (6) - Default tool registry
 export { GetPageMetadataTool } from './get-page-metadata-tool.js';
 export { SearchPagesTool } from './search-pages-tool.js';
 export { ReadPageDataTool } from './read-page-data-tool.js';
 export { WritePageDataTool } from './write-page-data-tool.js';
 export { ExecuteActionTool } from './execute-action-tool.js';
+export { SelectAndDrillDownTool } from './select-and-drill-down-tool.js';
 
 // Optional/Advanced Tools
 export { CreateRecordByFieldNameTool } from './create-record-by-field-name-tool.js';
@@ -29,7 +30,7 @@ export { UpdateRecordTool } from './optional/update-record-tool.js';
 /**
  * Tool registry for easy initialization.
  *
- * Core tools (5): Essential primitives for BC interaction
+ * Core tools (6): Essential primitives for BC interaction
  * Optional tools: Convenience wrappers and advanced patterns
  */
 export const TOOL_NAMES = {
@@ -39,6 +40,7 @@ export const TOOL_NAMES = {
   READ_PAGE_DATA: 'read_page_data',
   WRITE_PAGE_DATA: 'write_page_data',
   EXECUTE_ACTION: 'execute_action',
+  SELECT_AND_DRILL_DOWN: 'select_and_drill_down',
 
   // Optional/Advanced tools
   CREATE_RECORD_BY_FIELD_NAME: 'create_record_by_field_name',
