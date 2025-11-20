@@ -4,6 +4,8 @@
 
 **Model Context Protocol server for Microsoft Dynamics 365 Business Central via WebUI protocol**
 
+[![npm version](https://img.shields.io/npm/v/bc-webclient-mcp.svg)](https://www.npmjs.com/package/bc-webclient-mcp)
+[![npm downloads](https://img.shields.io/npm/dm/bc-webclient-mcp.svg)](https://www.npmjs.com/package/bc-webclient-mcp)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green?logo=node.js)](https://nodejs.org/)
@@ -101,21 +103,9 @@ Get up and running with BC WebClient MCP in 5 minutes.
 - Valid BC credentials with web client access
 - **Claude Desktop** ([Download](https://claude.ai/download)) or any MCP-compatible client
 
-### Step 1: Clone and Install
+### Step 1: No Installation Required!
 
-```bash
-# Clone the repository
-git clone https://github.com/SShadowS/bc-webclient-mcp-server.git
-cd bc-webclient-mcp-server
-
-# Install dependencies
-npm install
-
-# Build the TypeScript project (IMPORTANT!)
-npm run build
-```
-
-> **⚠️ Don't skip the build step!** The MCP server runs the compiled JavaScript from the `dist/` folder.
+The MCP server runs directly via `npx` - no installation needed. Just configure Claude Desktop in the next step.
 
 ### Step 2: Configure Claude Desktop
 
@@ -125,14 +115,18 @@ npm run build
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
-**Edit the config file** and add the MCP server (replace paths and credentials):
+**Edit the config file** and add the MCP server (replace with your BC credentials):
 
 ```json
 {
   "mcpServers": {
     "business-central": {
-      "command": "node",
-      "args": ["C:\\path\\to\\bc-webclient-mcp-server\\dist\\index.js"],
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "bc-webclient-mcp@latest"
+      ],
       "env": {
         "BC_BASE_URL": "http://your-bc-server/BC/",
         "BC_USERNAME": "your-username",
@@ -144,36 +138,17 @@ npm run build
 }
 ```
 
+> **Note**: On macOS/Linux, use `"command": "sh"` and `"args": ["-c", "npx bc-webclient-mcp@latest"]` instead.
+
+**Why `npx`?**
+- ✅ No installation required - runs directly from npm
+- ✅ Always uses the latest version automatically
+- ✅ No need to manage global packages
+
 **Important notes:**
-- Use **full absolute paths** (e.g., `C:\\Users\\YourName\\bc-webclient-mcp-server\\dist\\index.js`)
 - Use `BC_USERNAME=username`, **NOT** `domain\username`
 - The tenant is handled automatically in the URL parameter
-- Use double backslashes `\\` on Windows
-
-**Alternative: Using .env file (for development)**
-
-If you prefer keeping credentials in a `.env` file:
-
-```bash
-# Create environment configuration
-cp .env.example .env
-
-# Edit with your BC credentials
-notepad .env  # Windows
-nano .env     # Linux/macOS
-```
-
-Then in Claude Desktop config:
-```json
-{
-  "mcpServers": {
-    "business-central": {
-      "command": "node",
-      "args": ["C:\\path\\to\\bc-webclient-mcp-server\\dist\\index.js"]
-    }
-  }
-}
-```
+- For BC Online, use your full BC URL (e.g., `https://businesscentral.dynamics.com/...`)
 
 ### Step 3: Restart Claude Desktop
 
@@ -228,9 +203,9 @@ Update customer 10000's credit limit to 50000
 ### 🔧 Quick Troubleshooting
 
 **MCP server not showing up in Claude Desktop?**
-- Did you run `npm run build`? (Most common issue!)
-- Check the config file path is correct
-- Restart Claude Desktop completely
+- Check the config file syntax is valid JSON
+- Restart Claude Desktop completely (close all windows)
+- Verify Node.js is installed: `node --version` (requires 18+)
 - Check Claude Desktop logs: View → Developer → Toggle Developer Tools → Console
 
 **Connection failed?**
@@ -248,6 +223,43 @@ Update customer 10000's credit limit to 50000
 - Ensure Node.js version is 18 or higher: `node --version`
 
 For more troubleshooting, see [`CLAUDE.md`](./CLAUDE.md#troubleshooting)
+
+### 📦 Alternative: Install from Source
+
+For development, testing unreleased features, or contributing to the project:
+
+```bash
+# Clone the repository
+git clone https://github.com/SShadowS/bc-webclient-mcp-server.git
+cd bc-webclient-mcp-server
+
+# Install dependencies
+npm install
+
+# Build the TypeScript project
+npm run build
+```
+
+Then in Claude Desktop config, use the local path:
+
+```json
+{
+  "mcpServers": {
+    "business-central": {
+      "command": "node",
+      "args": ["C:\\path\\to\\bc-webclient-mcp-server\\dist\\index.js"],
+      "env": {
+        "BC_BASE_URL": "http://your-bc-server/BC/",
+        "BC_USERNAME": "your-username",
+        "BC_PASSWORD": "your-password",
+        "BC_TENANT_ID": "default"
+      }
+    }
+  }
+}
+```
+
+**Note**: Use full absolute paths with double backslashes on Windows.
 
 ---
 

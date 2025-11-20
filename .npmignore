@@ -1,0 +1,76 @@
+# Source files (we publish dist/ only)
+src/
+tests/
+archive/
+
+# Development files
+*.ts
+!*.d.ts
+tsconfig.json
+.env
+.env.*
+
+# Test files
+test-*.ts
+test-*.js
+test-*.mjs
+debug-*.ts
+debug-*.js
+*.test.ts
+*.test.js
+*.spec.ts
+*.spec.js
+vitest.config.ts
+
+# Build artifacts
+*.tsbuildinfo
+.cache/
+coverage/
+
+# Development scripts
+find-endpoint.js
+analyze-*.mjs
+analyze-*.cjs
+capture-*.mjs
+decompress-*.mjs
+
+# Documentation (development only)
+docs/investigation/
+docs/decompiled/
+CLAUDE.md
+BC_PROTOCOL_PATTERNS.md
+COPILOT_ARCHIVE.md
+CHANGELOG-README-UPDATE.md
+linkedin-post-v2.md
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
+
+# Node
+node_modules/
