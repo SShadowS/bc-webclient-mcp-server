@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-green?logo=node.js)](https://nodejs.org/)
-[![MCP](https://img.shields.io/badge/MCP-2024--11--05-purple)](https://modelcontextprotocol.io/)
+[![MCP](https://img.shields.io/badge/MCP-2025--06--18-purple)](https://modelcontextprotocol.io/)
 
 [Features](#-features) • [Quick Start](#-quick-start) • [Tools](#-available-tools) • [Documentation](#-documentation) • [Architecture](#-architecture)
 
@@ -36,6 +36,14 @@ Business Central's web client uses an undocumented WebSocket protocol for all UI
 
 ## ✨ Features
 
+### 🆕 **Version 2 Highlights**
+
+- **📄 Document Pages** - Full support for Sales Orders, Purchase Orders with header + line items
+- **📚 MCP Resources** - Access BC schema, workflows, and session state
+- **🎯 MCP Prompts** - Guided workflows for common operations
+- **✏️ User-Friendly Fields** - No more internal IDs - clean field names like "Type", "No.", "Description"
+- **🔄 Multi-Page Support** - Card, List, and Document pages all work reliably
+
 <table>
 <tr>
 <td width="50%">
@@ -54,6 +62,7 @@ Business Central's web client uses an undocumented WebSocket protocol for all UI
 - Filter and query list pages
 - Create and update records
 - Execute page actions
+- **NEW:** Document pages with line items
 
 </td>
 </tr>
@@ -83,75 +92,49 @@ Business Central's web client uses an undocumented WebSocket protocol for all UI
 
 ## 🚀 Quick Start
 
+Get up and running with BC WebClient MCP in 5 minutes.
+
 ### Prerequisites
 
-- **Node.js** 18 or higher
-- **Business Central** v24.0+ (tested on v27.0)
+- **Node.js** 18 or higher ([Download](https://nodejs.org/))
+- **Business Central v27.0** (other versions may work but are not tested - protocol specifics are BC 27)
 - Valid BC credentials with web client access
+- **Claude Desktop** ([Download](https://claude.ai/download)) or any MCP-compatible client
 
-### Installation
+### Step 1: Clone and Install
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd bc-poc
+git clone https://github.com/SShadowS/bc-webclient-mcp-server.git
+cd bc-webclient-mcp-server
 
 # Install dependencies
 npm install
 
-# Create environment configuration
-cp .env.example .env
-
-# Edit with your BC credentials
-notepad .env  # Windows
-nano .env     # Linux/macOS
+# Build the TypeScript project (IMPORTANT!)
+npm run build
 ```
 
-### Configuration
+> **⚠️ Don't skip the build step!** The MCP server runs the compiled JavaScript from the `dist/` folder.
 
-Edit `.env` with your Business Central details:
+### Step 2: Configure Claude Desktop
 
-```env
-# Business Central Server
-BC_BASE_URL=http://your-bc-server/BC/
-BC_TENANT_ID=default
+**Find your Claude Desktop config file:**
 
-# Credentials (username only, NO domain prefix!)
-BC_USERNAME=your-username
-BC_PASSWORD=your-password
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
-# Optional
-BC_COMPANY_NAME=CRONUS International Ltd.
-ROLE_CENTER_PAGE_ID=9022
-```
-
-> **⚠️ Important:** Use `BC_USERNAME=username`, **NOT** `domain\username`. The tenant is handled automatically in the URL parameter.
-
-### Run the Server
-
-```bash
-# Start MCP server (for Claude Desktop)
-npm start
-
-# Development mode with auto-reload
-npm run dev
-
-# Run tests
-npm test
-```
-
-### Connect with Claude Desktop
-
-Add to your Claude Desktop configuration (`claude_desktop_config.json`):
+**Edit the config file** and add the MCP server (replace paths and credentials):
 
 ```json
 {
   "mcpServers": {
     "business-central": {
       "command": "node",
-      "args": ["C:\\path\\to\\bc-poc\\dist\\index.js"],
+      "args": ["C:\\path\\to\\bc-webclient-mcp-server\\dist\\index.js"],
       "env": {
-        "BC_BASE_URL": "http://your-server/BC/",
+        "BC_BASE_URL": "http://your-bc-server/BC/",
         "BC_USERNAME": "your-username",
         "BC_PASSWORD": "your-password",
         "BC_TENANT_ID": "default"
@@ -160,6 +143,111 @@ Add to your Claude Desktop configuration (`claude_desktop_config.json`):
   }
 }
 ```
+
+**Important notes:**
+- Use **full absolute paths** (e.g., `C:\\Users\\YourName\\bc-webclient-mcp-server\\dist\\index.js`)
+- Use `BC_USERNAME=username`, **NOT** `domain\username`
+- The tenant is handled automatically in the URL parameter
+- Use double backslashes `\\` on Windows
+
+**Alternative: Using .env file (for development)**
+
+If you prefer keeping credentials in a `.env` file:
+
+```bash
+# Create environment configuration
+cp .env.example .env
+
+# Edit with your BC credentials
+notepad .env  # Windows
+nano .env     # Linux/macOS
+```
+
+Then in Claude Desktop config:
+```json
+{
+  "mcpServers": {
+    "business-central": {
+      "command": "node",
+      "args": ["C:\\path\\to\\bc-webclient-mcp-server\\dist\\index.js"]
+    }
+  }
+}
+```
+
+### Step 3: Restart Claude Desktop
+
+**Restart Claude Desktop completely** to load the MCP server.
+
+### Step 4: Verify It's Working
+
+Open a new chat in Claude Desktop and try:
+
+```
+Search for customer pages
+```
+
+You should see Claude using the `search_pages` tool and returning BC pages. If the MCP server appears in the tools list (🔧 icon), you're all set!
+
+### 🎉 What You Can Do Now
+
+Try these commands to explore v2 capabilities:
+
+**Document Pages with Line Items:**
+```
+Read Sales Order 101001 with all line items
+```
+
+**Smart Search:**
+```
+Find all pages related to inventory management
+```
+
+**Resources (Schema Discovery):**
+```
+What BC pages are available?
+```
+*(Uses the `bc://schema/pages` resource)*
+
+**Guided Workflows (Prompts):**
+```
+Create a new customer named Acme Corporation
+```
+*(Uses the `create_bc_customer` prompt for step-by-step guidance)*
+
+**Data Operations:**
+```
+Show me customers where balance is over 10000
+```
+
+**Field Updates:**
+```
+Update customer 10000's credit limit to 50000
+```
+
+### 🔧 Quick Troubleshooting
+
+**MCP server not showing up in Claude Desktop?**
+- Did you run `npm run build`? (Most common issue!)
+- Check the config file path is correct
+- Restart Claude Desktop completely
+- Check Claude Desktop logs: View → Developer → Toggle Developer Tools → Console
+
+**Connection failed?**
+- Verify BC is accessible: Open `http://your-bc-server/BC/` in a browser
+- Check `BC_BASE_URL` includes the `/BC/` path
+- Ensure firewall allows WebSocket connections
+
+**Authentication error?**
+- Test login in browser first
+- Use username WITHOUT domain prefix (just `username`)
+- Verify tenant ID matches your BC installation (`default` for on-prem)
+
+**"TypeScript errors" when building?**
+- Run `npx tsc --noEmit` to see detailed errors
+- Ensure Node.js version is 18 or higher: `node --version`
+
+For more troubleshooting, see [`CLAUDE.md`](./CLAUDE.md#troubleshooting)
 
 ---
 
@@ -484,11 +572,13 @@ Contributions are welcome! Please:
 
 ### Supported Business Central Versions
 
-- ✅ Business Central v27.0 (tested)
-- ✅ Business Central v26.0
-- ✅ Business Central v24.x - v25.x (likely compatible)
-- ✅ On-Premises installations
-- ✅ Business Central Online
+- ✅ **Business Central v27.0** (fully tested and supported)
+- ⚠️ **Other versions** (v24-v26, v28+) may work but are **not tested**
+  - Protocol specifics are hardcoded for BC 27
+  - Older/newer versions may have different WebSocket protocol implementations
+  - Use at your own risk - contributions for other versions welcome!
+- ✅ **On-Premises installations** (BC 27)
+- ✅ **Business Central Online** (BC 27)
 
 ### Authentication Support
 
