@@ -34,3 +34,5 @@ yarn-error.log*
 .msal-cache/
 .serena/
 captures/
+debug-dumps/
+logs/
