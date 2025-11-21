@@ -201,11 +201,11 @@ export class HandleDialogTool extends BaseMCPTool {
     if (sessionId) {
       const existing = manager.getSession(sessionId);
       if (existing) {
-        logger.info(`♻️  Reusing session: ${sessionId}`);
+        logger.info(`Reusing session: ${sessionId}`);
         connection = existing;
         actualSessionId = sessionId;
       } else {
-        logger.info(`⚠️  Session ${sessionId} not found, creating new`);
+        logger.info(`Session ${sessionId} not found, creating new`);
         if (!this.bcConfig) {
           if (!this.connection) {
             return err(
@@ -215,7 +215,7 @@ export class HandleDialogTool extends BaseMCPTool {
               )
             );
           }
-          logger.info(`⚠️  No BC config, using injected connection`);
+          logger.info(`No BC config, using injected connection`);
           connection = this.connection;
           actualSessionId = 'legacy-session';
         } else {
@@ -226,7 +226,7 @@ export class HandleDialogTool extends BaseMCPTool {
           connection = sessionResult.value.connection;
           actualSessionId = sessionResult.value.sessionId;
           console.error(
-            `[HandleDialogTool] ${sessionResult.value.isNewSession ? '🆕 New' : '♻️  Reused'} session: ${actualSessionId}`
+            `[HandleDialogTool] ${sessionResult.value.isNewSession ? 'New' : 'Reused'} session: ${actualSessionId}`
           );
         }
       }
@@ -240,7 +240,7 @@ export class HandleDialogTool extends BaseMCPTool {
             )
           );
         }
-        logger.info(`⚠️  No BC config, using injected connection`);
+        logger.info(`No BC config, using injected connection`);
         connection = this.connection;
         actualSessionId = 'legacy-session';
       } else {
@@ -251,7 +251,7 @@ export class HandleDialogTool extends BaseMCPTool {
         connection = sessionResult.value.connection;
         actualSessionId = sessionResult.value.sessionId;
         console.error(
-          `[HandleDialogTool] ${sessionResult.value.isNewSession ? '🆕 New' : '♻️  Reused'} session: ${actualSessionId}`
+          `[HandleDialogTool] ${sessionResult.value.isNewSession ? 'New' : 'Reused'} session: ${actualSessionId}`
         );
       }
     }

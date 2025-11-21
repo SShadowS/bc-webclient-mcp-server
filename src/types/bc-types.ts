@@ -440,6 +440,7 @@ export interface FieldMetadata {
   readonly caption?: string;
   readonly name?: string;
   readonly controlId?: string;
+  readonly controlPath?: string; // BC control path (e.g., "server:c[1]/c[1]") for cache updates
   readonly enabled: boolean;
   readonly visible: boolean;
   readonly readonly?: boolean;

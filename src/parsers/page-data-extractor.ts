@@ -245,21 +245,21 @@ export class PageDataExtractor {
     try {
       // Build field metadata map from LogicalForm for control ID → semantic name mapping
       const fieldMetadata = this.buildFieldMetadataMap(logicalForm);
-      logger.info(`📝 fieldMetadata size: ${fieldMetadata.size}`);
+      logger.info(`fieldMetadata size: ${fieldMetadata.size}`);
       // Extract column mappings from LogicalForm (runtime ID → semantic name)
       let columnMappings = this.extractColumnMappings(logicalForm);
 
       // For Card pages, extractColumnMappings returns empty (no repeaters)
       // Extract mappings from ColumnBinder.Name on simple controls instead
       if (!columnMappings || columnMappings.size === 0) {
-        logger.info(`📝 No repeater columnMappings, extracting from Card controls' ColumnBinder...`);
+        logger.info(`No repeater columnMappings, extracting from Card controls' ColumnBinder...`);
         columnMappings = this.extractCardControlColumnMappings(logicalForm);
       }
 
-      logger.info(`📝 columnMappings size: ${columnMappings?.size || 0}`);
+      logger.info(`columnMappings size: ${columnMappings?.size || 0}`);
       if (columnMappings && columnMappings.size > 0) {
         const first5 = Array.from(columnMappings.entries()).slice(0, 5);
-        logger.info(`📝 First 5 columnMappings: ${JSON.stringify(first5).substring(0, 200)}`);
+        logger.info(`First 5 columnMappings: ${JSON.stringify(first5).substring(0, 200)}`);
       }
 
       // Build controlId → semanticName map for Card pages (prefer Table/Column metadata)
@@ -282,11 +282,11 @@ export class PageDataExtractor {
         }
       }
 
-      logger.info(`📝 controlIdToName (Card) size: ${controlIdToName.size}`);
+      logger.info(`controlIdToName (Card) size: ${controlIdToName.size}`);
 
       // Card pages use PropertyChanges for field data (not DataRowUpdated)
       // DataRowUpdated is only for child list controls within Card pages
-      logger.info('📊 Extracting Card data using PropertyChanges pattern');
+      logger.info('Extracting Card data using PropertyChanges pattern');
 
       // Apply PropertyChanges to LogicalForm if available (drill-down pattern)
       let effectiveForm = logicalForm;
@@ -294,7 +294,7 @@ export class PageDataExtractor {
         const applied = this.applyPropertyChangesToLogicalForm(logicalForm, handlers);
         if (applied.appliedCount > 0) {
           effectiveForm = applied.updatedForm;
-          logger.info(`✅ Applied ${applied.appliedCount} PropertyChanges to LogicalForm for Card page`);
+          logger.info(`Applied ${applied.appliedCount} PropertyChanges to LogicalForm for Card page`);
         }
       }
 
@@ -336,7 +336,7 @@ export class PageDataExtractor {
           // Debug: Log when we find "ÅBEN" to track Status field
           if (fieldValue.value === 'ÅBEN' || String(fieldValue.value).includes('ÅBEN')) {
             logger.info(
-              `🔎 Status candidate control found in extractCardPageData: ` +
+              `Status candidate control found in extractCardPageData: ` +
               `t=${control.t}, DesignName=${control.DesignName}, Name=${control.Name}, Caption=${control.Caption}, ` +
               `controlId=${control.ControlIdentifier ?? control.ControlId ?? control.ControlID}, ` +
               `resolvedFieldName=${fieldName}`
@@ -354,10 +354,10 @@ export class PageDataExtractor {
 
           if (encounterCount > 1) {
             if (existingValueIsNotEmpty && newValueIsEmpty) {
-              logger.debug(`⏭️  Field "${fieldName}" encountered ${encounterCount} times - SKIPPING empty value (keeping existing non-empty value)`);
+              logger.debug(`Field "${fieldName}" encountered ${encounterCount} times - SKIPPING empty value (keeping existing non-empty value)`);
               return;  // Skip this control, keep existing value
             } else {
-              logger.warn(`⚠️  Field "${fieldName}" encountered ${encounterCount} times! Previous value will be overwritten.`);
+              logger.warn(`Field "${fieldName}" encountered ${encounterCount} times! Previous value will be overwritten.`);
               logger.warn(`   Previous value: ${JSON.stringify(existingValue?.value)}, New value: ${JSON.stringify(fieldValue.value)}`);
             }
           }
@@ -369,8 +369,8 @@ export class PageDataExtractor {
       // Extract bookmark from LogicalForm Properties (card/document pages)
       // Use effectiveForm which has PropertyChanges applied (Bookmark is set via PropertyChanges)
       const bookmark = (effectiveForm as any).Properties?.Bookmark as string | undefined;
-      logger.info(`📗 extractCardPageData: effectiveForm.Properties = ${JSON.stringify((effectiveForm as any).Properties)?.substring(0, 200)}`);
-      logger.info(`📗 extractCardPageData: Bookmark = ${bookmark}`);
+      logger.info(`extractCardPageData: effectiveForm.Properties = ${JSON.stringify((effectiveForm as any).Properties)?.substring(0, 200)}`);
+      logger.info(`extractCardPageData: Bookmark = ${bookmark}`);
       const record: PageRecord = { bookmark, fields };
 
       return ok({
@@ -530,7 +530,7 @@ export class PageDataExtractor {
             lines: linesResult.value.records,
             totalCount: linesResult.value.totalCount,
           });
-          logger.info(`✓ Extracted ${linesResult.value.totalCount} line(s) from DataRefreshChange`);
+          logger.info(`Extracted ${linesResult.value.totalCount} line(s) from DataRefreshChange`);
         } else {
           logger.info(`No lines found in DataRefreshChange handlers`);
         }
@@ -773,7 +773,7 @@ export class PageDataExtractor {
       // POSITIONAL + PATTERN FILTER: Skip first cell if it's a GUID (likely SystemId)
       // This is a pragmatic heuristic since we cannot map control IDs to semantic names
       if (cellIndex === 0 && extractedValue !== null && looksLikeSystemIdGuid(extractedValue.value)) {
-        logger.debug(`🚫 Filtered SystemId GUID at position 0: ${extractedValue.value}`);
+        logger.debug(`Filtered SystemId GUID at position 0: ${extractedValue.value}`);
         cellIndex++;
         continue;
       }
@@ -803,7 +803,7 @@ export class PageDataExtractor {
 
       // Filter system fields (SystemId, etc.)
       if (SYSTEM_FIELD_BLOCKLIST.includes(semanticName)) {
-        logger.debug(`🚫 Filtered system field: ${semanticName}`);
+        logger.debug(`Filtered system field: ${semanticName}`);
         cellIndex++;
         continue;
       }
@@ -811,12 +811,12 @@ export class PageDataExtractor {
       // Filter hidden / non-caption fields when we have metadata
       if (nameInfo) {
         if (!visible) {
-          logger.debug(`🚫 Filtered hidden field: ${semanticName}`);
+          logger.debug(`Filtered hidden field: ${semanticName}`);
           cellIndex++;
           continue;
         }
         if (!hasCaption) {
-          logger.debug(`🚫 Filtered field without caption: ${semanticName}`);
+          logger.debug(`Filtered field without caption: ${semanticName}`);
           cellIndex++;
           continue;
         }
@@ -940,7 +940,7 @@ export class PageDataExtractor {
    * Finds DataRowUpdated from handlers (drill-down pattern).
    */
   private findDataRowUpdated(handlers: readonly unknown[]): any | null {
-    logger.info(`🔍 findDataRowUpdated: Searching ${handlers.length} handlers...`);
+    logger.info(`findDataRowUpdated: Searching ${handlers.length} handlers...`);
     for (const handler of handlers as any[]) {
       if (handler.handlerType === 'DN.LogicalClientChangeHandler') {
         const changes = handler.parameters?.[1];
@@ -948,13 +948,13 @@ export class PageDataExtractor {
           logger.info(`  Checking ${changes.length} changes...`);
           const dataRowUpdated = changes.find((c: any) => c.t === 'DataRowUpdated');
           if (dataRowUpdated) {
-            logger.info(`  ✅ Found DataRowUpdated! Keys: ${Object.keys(dataRowUpdated).join(', ')}`);
+            logger.info(`  Found DataRowUpdated! Keys: ${Object.keys(dataRowUpdated).join(', ')}`);
             return dataRowUpdated;
           }
         }
       }
     }
-    logger.info(`  ❌ No DataRowUpdated found`);
+    logger.info(`  No DataRowUpdated found`);
     return null;
   }
 
@@ -1163,13 +1163,13 @@ export class PageDataExtractor {
           }
 
           mappings.set(runtimeId, mapping);
-          logger.debug(`  ColumnBinder mapping: ${runtimeId} → ${semanticName}`);
+          logger.debug(`  ColumnBinder mapping: ${runtimeId} -> ${semanticName}`);
         }
       });
 
-      logger.info(`📝 Extracted ${mappings.size} Card control ColumnBinder mappings`);
+      logger.info(`Extracted ${mappings.size} Card control ColumnBinder mappings`);
     } catch (error) {
-      logger.error({ error }, 'Failed to extract Card control column mappings');
+      logger.warn({ error }, 'Failed to extract Card control column mappings');
     }
 
     return mappings;
@@ -1185,19 +1185,19 @@ export class PageDataExtractor {
     columnMappings?: Map<string, ColumnMapping> | null
   ): Result<PageDataExtractionResult, BCError> {
     try {
-      logger.info(`📝 extractFromDataRowUpdated: dataRowUpdated keys = ${Object.keys(dataRowUpdated).join(', ')}`);
-      logger.info(`📝 dataRowUpdated.DataRowUpdated type = ${Array.isArray(dataRowUpdated.DataRowUpdated) ? 'array' : typeof dataRowUpdated.DataRowUpdated}`);
+      logger.info(`extractFromDataRowUpdated: dataRowUpdated keys = ${Object.keys(dataRowUpdated).join(', ')}`);
+      logger.info(`dataRowUpdated.DataRowUpdated type = ${Array.isArray(dataRowUpdated.DataRowUpdated) ? 'array' : typeof dataRowUpdated.DataRowUpdated}`);
       if (Array.isArray(dataRowUpdated.DataRowUpdated)) {
-        logger.info(`📝 dataRowUpdated.DataRowUpdated length = ${dataRowUpdated.DataRowUpdated.length}`);
+        logger.info(`dataRowUpdated.DataRowUpdated length = ${dataRowUpdated.DataRowUpdated.length}`);
       }
 
       // DataRowUpdated structure: [index, rowData]
       const rowData = dataRowUpdated.DataRowUpdated?.[1];
-      logger.info(`📝 rowData exists? ${!!rowData}, rowData keys = ${rowData ? Object.keys(rowData).join(', ') : 'N/A'}`);
-      logger.info(`📝 rowData.cells exists? ${!!(rowData?.cells)}, cells keys = ${rowData?.cells ? Object.keys(rowData.cells).join(', ').substring(0, 100) : 'N/A'}`);
+      logger.info(`rowData exists? ${!!rowData}, rowData keys = ${rowData ? Object.keys(rowData).join(', ') : 'N/A'}`);
+      logger.info(`rowData.cells exists? ${!!(rowData?.cells)}, cells keys = ${rowData?.cells ? Object.keys(rowData.cells).join(', ').substring(0, 100) : 'N/A'}`);
 
       if (!rowData || !rowData.cells) {
-        logger.info(`⚠️  No rowData or cells found, returning empty records`);
+        logger.info(`No rowData or cells found, returning empty records`);
         return ok({
           pageType: 'card',
           records: [],
@@ -1218,21 +1218,21 @@ export class PageDataExtractor {
           }
         }
       }
-      logger.info(`📝 controlIdToName size: ${controlIdToName.size}`);
+      logger.info(`controlIdToName size: ${controlIdToName.size}`);
       if (controlIdToName.size > 0) {
         const first5 = Array.from(controlIdToName.entries()).slice(0, 5);
-        logger.info(`📝 First 5 controlIdToName: ${JSON.stringify(first5).substring(0, 200)}`);
+        logger.info(`First 5 controlIdToName: ${JSON.stringify(first5).substring(0, 200)}`);
       }
 
       const fields: Record<string, FieldValue> = {};
-      logger.info(`📝 Processing ${Object.keys(rowData.cells).length} cells, columnMappings size = ${columnMappings?.size || 0}`);
+      logger.info(`Processing ${Object.keys(rowData.cells).length} cells, columnMappings size = ${columnMappings?.size || 0}`);
 
       for (const [cellKey, cellValue] of Object.entries(rowData.cells)) {
         const extractedValue = this.extractCellValue(cellValue as any);
         logger.info(`  Cell ${cellKey}: extractedValue = ${JSON.stringify(extractedValue)?.substring(0, 100)}`);
 
         if (extractedValue === null) {
-          logger.info(`    → Skipped (null value)`);
+          logger.info(`    Skipped (null value)`);
           continue;
         }
 
@@ -1247,39 +1247,39 @@ export class PageDataExtractor {
           if (colMapping) {
             semanticName = colMapping.semanticName || cellKey;
             hasCaption = !!(colMapping.caption && colMapping.caption.trim().length > 0);
-            logger.info(`    → Mapped to semantic name: ${semanticName}`);
+            logger.info(`    Mapped to semantic name: ${semanticName}`);
           } else {
-            logger.info(`    → No columnMapping found for ${cellKey}`);
+            logger.info(`    No columnMapping found for ${cellKey}`);
           }
         } else {
-          logger.info(`    → No columnMappings available`);
+          logger.info(`    No columnMappings available`);
         }
 
         // 2) Fallback: old metadata map based on ControlIdentifier
         const nameInfo = controlIdToName.get(cellKey);
         if (!colMapping && nameInfo) {
-          logger.info(`    → Fallback: controlIdToName[${cellKey}] = ${nameInfo.name}`);
+          logger.info(`    Fallback: controlIdToName[${cellKey}] = ${nameInfo.name}`);
           semanticName = nameInfo.name;
           visible = nameInfo.visible;
           hasCaption = nameInfo.hasCaption;
         } else if (!colMapping) {
-          logger.info(`    → No match in controlIdToName for ${cellKey}`);
+          logger.info(`    No match in controlIdToName for ${cellKey}`);
         }
 
         // Filter system fields
         if (SYSTEM_FIELD_BLOCKLIST.includes(semanticName)) {
-          logger.debug(`🚫 Filtered system field on Card page: ${semanticName}`);
+          logger.debug(`Filtered system field on Card page: ${semanticName}`);
           continue;
         }
 
         // Filter hidden / caption-less fields when we have metadata
         if (nameInfo) {
           if (!visible) {
-            logger.debug(`🚫 Filtered hidden field on Card page: ${semanticName}`);
+            logger.debug(`Filtered hidden field on Card page: ${semanticName}`);
             continue;
           }
           if (!hasCaption) {
-            logger.debug(`🚫 Filtered field without caption on Card page: ${semanticName}`);
+            logger.debug(`Filtered field without caption on Card page: ${semanticName}`);
             continue;
           }
         }
@@ -1317,12 +1317,15 @@ export class PageDataExtractor {
     logicalForm: LogicalForm,
     handlers: readonly unknown[]
   ): { updatedForm: LogicalForm; appliedCount: number } {
-    logger.info(`🔍 applyPropertyChangesToLogicalForm called with ${handlers.length} handlers`);
+    logger.info(`applyPropertyChangesToLogicalForm called with ${handlers.length} handlers`);
 
     // Deep clone to avoid mutating cached LogicalForm
     const clonedForm = JSON.parse(JSON.stringify(logicalForm)) as LogicalForm;
     let appliedCount = 0;
     let propertyChangesFound = 0;
+
+    // DIAGNOSTIC: Find all PropertyChanges for Name field
+    logger.error(`[READ DIAGNOSTIC] Searching for PropertyChanges with controlPath "server:c[0]/c[1]" (Name field)...`);
 
     // Find all PropertyChanges in handlers
     for (const handler of handlers) {
@@ -1333,17 +1336,23 @@ export class PageDataExtractor {
         const params = h.parameters;
         if (params && params[1] && Array.isArray(params[1])) {
           for (const change of params[1]) {
-            if (change && typeof change === 'object' && change.t === 'PropertyChanges') {
+            // BC uses both "PropertyChanges" (plural) AND "PropertyChange" (singular)
+            if (change && typeof change === 'object' && (change.t === 'PropertyChanges' || change.t === 'PropertyChange')) {
               propertyChangesFound++;
-              logger.info(`   ✓ Found PropertyChanges #${propertyChangesFound}: ControlReference=${JSON.stringify(change.ControlReference)}`);
-              logger.info(`   📦 Changes keys: ${Object.keys(change.Changes || {}).join(', ')}`);
+              logger.info(`   Found ${change.t} #${propertyChangesFound}: ControlReference=${JSON.stringify(change.ControlReference)}`);
+              logger.info(`   Changes keys: ${Object.keys(change.Changes || {}).join(', ')}`);
 
-              // Apply this PropertyChanges to the cloned form
+              // DIAGNOSTIC: Log Name field specifically
+              if (change.ControlReference?.controlPath === 'server:c[0]/c[1]') {
+                logger.error(`[READ DIAGNOSTIC] Found Name field: t=${change.t}, StringValue="${change.Changes?.StringValue}"`);
+              }
+
+              // Apply this PropertyChanges/PropertyChange to the cloned form
               const applied = this.applyPropertyChange(clonedForm, change);
               if (applied > 0) {
-                logger.info(`   ✅ Applied PropertyChanges #${propertyChangesFound}`);
+                logger.info(`   Applied ${change.t} #${propertyChangesFound}`);
               } else {
-                logger.info(`   ❌ Failed to apply PropertyChanges #${propertyChangesFound}`);
+                logger.info(`   Failed to apply ${change.t} #${propertyChangesFound}`);
               }
               appliedCount += applied;
             }
@@ -1352,7 +1361,7 @@ export class PageDataExtractor {
       }
     }
 
-    logger.info(`📊 PropertyChanges summary: Found ${propertyChangesFound}, Applied ${appliedCount}`);
+    logger.info(`PropertyChanges summary: Found ${propertyChangesFound}, Applied ${appliedCount}`);
     return { updatedForm: clonedForm, appliedCount };
   }
 
@@ -1392,31 +1401,31 @@ export class PageDataExtractor {
       // Extract control reference
       const controlRef = propertyChange.ControlReference;
       if (!controlRef || !controlRef.controlPath) {
-        logger.info(`     ⚠️ No controlPath in ControlReference`);
+        logger.info(`     No controlPath in ControlReference`);
         return 0;
       }
 
       const controlPath = controlRef.controlPath as string;
-      logger.info(`     🎯 Resolving controlPath: ${controlPath}`);
+      logger.info(`     Resolving controlPath: ${controlPath}`);
 
       // Resolve target control using path
       const targetControl = this.resolveControlByPath(form, controlPath);
       if (!targetControl) {
-        logger.info(`     ❌ Could not resolve control path: ${controlPath}`);
+        logger.info(`     Could not resolve control path: ${controlPath}`);
         return 0;
       }
 
       const controlInfo = `type=${(targetControl as any).t}, DesignName=${(targetControl as any).DesignName}, Caption=${(targetControl as any).Caption}`;
-      logger.info(`     ✓ Resolved control: ${controlInfo}`);
+      logger.info(`     Resolved control: ${controlInfo}`);
 
       // Extract Changes object
       const changes = propertyChange.Changes;
       if (!changes || typeof changes !== 'object') {
-        logger.info(`     ⚠️ No Changes object found`);
+        logger.info(`     No Changes object found`);
         return 0;
       }
 
-      logger.info(`     📝 Applying ${Object.keys(changes).length} properties: ${Object.keys(changes).join(', ')}`);
+      logger.info(`     Applying ${Object.keys(changes).length} properties: ${Object.keys(changes).join(', ')}`);
 
       // Apply PropertyChanges to target control as-is (don't redirect)
       // BC sends PropertyChanges for both group controls ('gc') and field controls ('sc', 'dc', etc.)
@@ -1441,7 +1450,7 @@ export class PageDataExtractor {
 
       return applied > 0 ? 1 : 0; // Return 1 if any properties were set
     } catch (error) {
-      logger.info(`     ❌ Error applying PropertyChange: ${error instanceof Error ? error.message : String(error)}`);
+      logger.info(`     Error applying PropertyChange: ${error instanceof Error ? error.message : String(error)}`);
       return 0;
     }
   }

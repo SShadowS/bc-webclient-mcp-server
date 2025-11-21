@@ -16,7 +16,7 @@ export class MetadataFormatter {
     lines.push('');
 
     // Basic Info
-    lines.push('📄 BASIC INFORMATION');
+    lines.push('BASIC INFORMATION');
     lines.push('─'.repeat(80));
     lines.push(`  ID:          ${page.id}`);
     lines.push(`  Name:        ${page.name}`);
@@ -27,19 +27,19 @@ export class MetadataFormatter {
 
     // Permissions/Properties
     if (page.pageProperties) {
-      lines.push('🔒 PERMISSIONS');
+      lines.push('PERMISSIONS');
       lines.push('─'.repeat(80));
       const props = page.pageProperties;
-      lines.push(`  Insert:      ${props.insertAllowed ? '✓' : '✗'}`);
-      lines.push(`  Modify:      ${props.modifyAllowed ? '✓' : '✗'}`);
-      lines.push(`  Delete:      ${props.deleteAllowed ? '✓' : '✗'}`);
-      lines.push(`  Editable:    ${props.editable ? '✓' : '✗'}`);
+      lines.push(`  Insert:      ${props.insertAllowed ? 'Yes' : 'No'}`);
+      lines.push(`  Modify:      ${props.modifyAllowed ? 'Yes' : 'No'}`);
+      lines.push(`  Delete:      ${props.deleteAllowed ? 'Yes' : 'No'}`);
+      lines.push(`  Editable:    ${props.editable ? 'Yes' : 'No'}`);
       lines.push('');
     }
 
     // Actions
     if (page.commandBar?.actions && page.commandBar.actions.length > 0) {
-      lines.push('⚡ ACTIONS / COMMANDS');
+      lines.push('ACTIONS / COMMANDS');
       lines.push('─'.repeat(80));
       lines.push(this.formatActions(page.commandBar.actions));
       lines.push('');
@@ -47,7 +47,7 @@ export class MetadataFormatter {
 
     // Controls/Fields
     if (page.contentArea?.controls && page.contentArea.controls.length > 0) {
-      lines.push('🎛️  CONTROLS / FIELDS');
+      lines.push('CONTROLS / FIELDS');
       lines.push('─'.repeat(80));
       lines.push(this.formatControls(page.contentArea.controls));
       lines.push('');
@@ -55,7 +55,7 @@ export class MetadataFormatter {
 
     // Groups
     if (page.contentArea?.groups && page.contentArea.groups.length > 0) {
-      lines.push('📦 CONTROL GROUPS');
+      lines.push('CONTROL GROUPS');
       lines.push('─'.repeat(80));
       page.contentArea.groups.forEach((group) => {
         lines.push(`  Group: ${group.caption || '(unnamed)'} (ID: ${group.id})`);
@@ -68,7 +68,7 @@ export class MetadataFormatter {
 
     // Methods
     if (page.methods && page.methods.length > 0) {
-      lines.push('🔧 CALLABLE METHODS');
+      lines.push('CALLABLE METHODS');
       lines.push('─'.repeat(80));
       page.methods.forEach((method) => {
         const params = method.parameters
@@ -81,7 +81,7 @@ export class MetadataFormatter {
 
     // Field Definitions
     if (page.expressions && page.expressions.length > 0) {
-      lines.push('📊 FIELD DEFINITIONS');
+      lines.push('FIELD DEFINITIONS');
       lines.push('─'.repeat(80));
       page.expressions.forEach((field) => {
         const length = field.length ? ` (${field.length})` : '';
@@ -104,9 +104,9 @@ export class MetadataFormatter {
 
     actions.forEach((action) => {
       const status: string[] = [];
-      if (action.promoted) status.push('⭐');
-      if (action.enabled === false) status.push('🚫');
-      if (action.visible === false) status.push('👁️‍🗨️');
+      if (action.promoted) status.push('[promoted]');
+      if (action.enabled === false) status.push('[disabled]');
+      if (action.visible === false) status.push('[hidden]');
 
       const statusStr = status.length > 0 ? ` ${status.join(' ')}` : '';
       const typeStr = action.type ? ` [${action.type}]` : '';
@@ -127,9 +127,9 @@ export class MetadataFormatter {
 
     controls.forEach((control) => {
       const status: string[] = [];
-      if (control.editable === false) status.push('🔒');
-      if (control.visible === false) status.push('👁️‍🗨️');
-      if (control.enabled === false) status.push('🚫');
+      if (control.editable === false) status.push('[readonly]');
+      if (control.visible === false) status.push('[hidden]');
+      if (control.enabled === false) status.push('[disabled]');
 
       const statusStr = status.length > 0 ? ` ${status.join(' ')}` : '';
       const typeInfo = control.dataType ? ` [${control.dataType}]` : ` [${control.controlType}]`;

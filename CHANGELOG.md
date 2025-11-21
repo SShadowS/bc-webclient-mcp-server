@@ -13,7 +13,8 @@ All notable changes to this project will be documented in this file.
 ### Changed
 
 - **Improved cache usage logic**: `read_page_data` now calls LoadForm when cached handlers lack data, even if not marked for refresh
-- **Better logging**: Added descriptive messages for cache hit/miss scenarios
+- **Fixed logging levels**: Changed misused `logger.error` calls to appropriate levels (`info`/`debug`/`warn`) in BCPageConnection, LoadFormHelpers, and PageMetadataParser
+- **Removed emojis from logs**: Replaced emojis with plain text to fix encoding issues on Windows
 
 ## [2.1.0] - 2025-11-21
 

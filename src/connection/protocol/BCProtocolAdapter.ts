@@ -167,7 +167,7 @@ export class BCProtocolAdapter implements IBCProtocolAdapter {
         this.emitTypedEvents(handlers);
       }
     } catch (error) {
-      logger.error({ error }, '[BCProtocolAdapter] Error handling message');
+      logger.warn({ error }, '[BCProtocolAdapter] Error handling message');
     }
   }
 

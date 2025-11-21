@@ -4,7 +4,7 @@
  * Reusable client that spawns MCP server and provides helper methods.
  */
 
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import readline from 'readline';
 
 const colors = {
@@ -20,6 +20,7 @@ const colors = {
 export class MCPTestClient {
   constructor() {
     this.server = null;
+    this.rl = null;
     this.requestId = 0;
     this.pendingRequests = new Map();
     this.initialized = false;
@@ -34,12 +35,12 @@ export class MCPTestClient {
       cwd: process.cwd(),
     });
 
-    const rl = readline.createInterface({
+    this.rl = readline.createInterface({
       input: this.server.stdout,
       terminal: false,
     });
 
-    rl.on('line', (line) => this.handleResponse(line));
+    this.rl.on('line', (line) => this.handleResponse(line));
 
     this.server.on('error', (error) => {
       console.error(colors.red + 'Server error:' + colors.reset, error);
@@ -64,8 +65,22 @@ export class MCPTestClient {
   }
 
   async stop() {
+    if (this.rl) {
+      this.rl.close();
+      this.rl = null;
+    }
     if (this.server) {
-      this.server.kill();
+      const pid = this.server.pid;
+      // On Windows, kill the process tree using taskkill
+      if (process.platform === 'win32' && pid) {
+        try {
+          execSync(`taskkill /pid ${pid} /T /F`, { stdio: 'ignore' });
+        } catch {
+          // Process may already be dead
+        }
+      } else {
+        this.server.kill();
+      }
       this.server = null;
     }
   }

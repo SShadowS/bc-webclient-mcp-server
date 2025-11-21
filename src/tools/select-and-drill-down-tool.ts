@@ -148,7 +148,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
     }
 
     const connection = existing;
-    logger.info(`♻️  Reusing session from pageContext: ${actualSessionId}`);
+    logger.info(`Reusing session from pageContext: ${actualSessionId}`);
 
     // Get pageContext to access formId and logicalForm
     const pageContext = (connection as any).pageContexts?.get(pageContextId);
@@ -202,7 +202,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
 
       if (matchingHandlers.length > 0) {
         logger.info(
-          `✓ Detected FormToShow event, ${matchingHandlers.length} handler(s)`
+          `Detected FormToShow event, ${matchingHandlers.length} handler(s)`
         );
         return { matched: true, data: handlers };
       }
@@ -224,7 +224,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
 
             // 2. DataRowUpdated (for drill-down to LIST controls within Card pages)
             if (change.t === 'DataRowUpdated') {
-              logger.info('✓ Detected DataRowUpdated event (List control data)');
+              logger.info('Detected DataRowUpdated event (List control data)');
               return true;
             }
 
@@ -235,7 +235,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
                                   change.Changes.ObjectValue !== undefined ||
                                   change.Changes.DecimalValue !== undefined;
               if (hasFieldValue) {
-                logger.info('✓ Detected PropertyChanges with field value (Card data)');
+                logger.info('Detected PropertyChanges with field value (Card data)');
                 return true;
               }
             }
@@ -247,7 +247,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       });
 
       if (matched) {
-        logger.info(`✅ hasRecordData matched! Returning ${handlers.length} handlers`);
+        logger.info(`hasRecordData matched! Returning ${handlers.length} handlers`);
         return { matched: true, data: handlers };
       }
       return { matched: false };
@@ -299,7 +299,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       );
     }
 
-    logger.info(`✓ Row selected successfully`);
+    logger.info(`Row selected successfully`);
 
     // Step 3: Find the action control path from cached metadata
     const systemAction = action === 'View' ? SystemAction.View : SystemAction.Edit;
@@ -362,7 +362,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
     }
 
     const actionControlPath = targetAction.controlPath;
-    logger.info(`✓ Selected action: "${targetAction.caption}", controlPath: ${actionControlPath}`);
+    logger.info(`Selected action: "${targetAction.caption}", controlPath: ${actionControlPath}`);
 
     const actionInteraction = {
       interactionName: 'InvokeAction',
@@ -396,7 +396,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       );
     }
 
-    logger.info(`✓ Action invoked successfully`);
+    logger.info(`Action invoked successfully`);
 
     // Step 4: Wait for navigation (FormToShow handler)
     let navigationHandlers: Handler[];
@@ -411,7 +411,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
         );
       }
       navigationHandlers = result;
-      logger.info(`✓ Navigation detected, received ${navigationHandlers.length} handlers`);
+      logger.info(`Navigation detected, received ${navigationHandlers.length} handlers`);
     } catch (error) {
       return err(
         new ProtocolError(
@@ -432,51 +432,51 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
     try {
       const { shellFormId, childFormIds } = extractServerIds(allNavigationHandlers);
       targetShellFormId = shellFormId; // Save for pageContext formIds
-      logger.info(`📋 Extracted shellFormId for target page: ${shellFormId}`);
+      logger.info(`Extracted shellFormId for target page: ${shellFormId}`);
       const formsToLoad = filterFormsToLoad(childFormIds);
 
       if (formsToLoad.length > 0) {
-        logger.info(`📋 Found ${formsToLoad.length} child form(s) requiring LoadForm after navigation`);
+        logger.info(`Found ${formsToLoad.length} child form(s) requiring LoadForm after navigation`);
 
         // Call LoadForm for each child form (web client pattern)
         for (let i = 0; i < formsToLoad.length; i++) {
           const child = formsToLoad[i];
           const interaction = createLoadFormInteraction(child.serverId, String(i));
 
-          logger.info(`📤 Calling LoadForm for child form: ${child.serverId}`);
+          logger.info(`Calling LoadForm for child form: ${child.serverId}`);
           const loadResult = await connection.invoke(interaction);
 
           if (!isOk(loadResult)) {
-            logger.info(`⚠️  LoadForm failed for ${child.serverId}: ${loadResult.error.message}`);
+            logger.info(`LoadForm failed for ${child.serverId}: ${loadResult.error.message}`);
             continue;
           }
 
-          logger.info(`✓ LoadForm sent for: ${child.serverId}`);
+          logger.info(`LoadForm sent for: ${child.serverId}`);
         }
       } else {
-        logger.info(`ℹ️  No child forms requiring LoadForm (simple Card page or all forms already loaded)`);
+        logger.info(`No child forms requiring LoadForm (simple Card page or all forms already loaded)`);
       }
 
       // Wait for async record data
       // This is now unconditional - we always check if data arrived, regardless of formsToLoad
-      logger.info(`⏳ Checking for async record data (timeout 5s)...`);
+      logger.info(`Checking for async record data (timeout 5s)...`);
       try {
         const asyncHandlers = await asyncDataPromise;
         if (asyncHandlers && Array.isArray(asyncHandlers)) {
-          logger.info(`✓ Received ${asyncHandlers.length} async handlers with record data`);
+          logger.info(`Received ${asyncHandlers.length} async handlers with record data`);
 
           // Merge async handlers into the main collection
           allNavigationHandlers.push(...asyncHandlers);
         } else {
-          logger.info(`ℹ️  No async record data received (predicate returned no data)`);
+          logger.info(`No async record data received (predicate returned no data)`);
         }
       } catch (err) {
         // It is normal for this to timeout if the page is static or data was already embedded
-        logger.info(`ℹ️  No async record data received (timeout): ${String(err)}`);
+        logger.info(`No async record data received (timeout): ${String(err)}`);
       }
 
     } catch (err) {
-      logger.info(`⚠️  LoadForm/AsyncData extraction failed: ${String(err)} - continuing with FormToShow data only`);
+      logger.info(`LoadForm/AsyncData extraction failed: ${String(err)} - continuing with FormToShow data only`);
     }
 
     const dataToProcess = allNavigationHandlers;
@@ -500,7 +500,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
     const targetMetadata: PageMetadata = metadataResult.value;
     const targetPageId = targetMetadata.pageId;
 
-    logger.info(`✓ Navigated to target page: ${targetPageId} (${targetMetadata.caption})`);
+    logger.info(`Navigated to target page: ${targetPageId} (${targetMetadata.caption})`);
 
     // Step 7: Create new pageContext for the opened page
     const targetPageContextId = `${actualSessionId}:page:${targetPageId}:${Date.now()}`;
@@ -515,7 +515,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
     // CRITICAL: Use only the target page's formId, not all open forms!
     // Using getAllOpenFormIds() was causing execute_action to use wrong formId
     const targetFormIds = targetShellFormId ? [targetShellFormId] : connection.getAllOpenFormIds();
-    logger.info(`📋 Creating pageContext with formIds: ${JSON.stringify(targetFormIds)} (shellFormId=${targetShellFormId})`);
+    logger.info(`Creating pageContext with formIds: ${JSON.stringify(targetFormIds)} (shellFormId=${targetShellFormId})`);
     const targetPageContextData = {
       sessionId: actualSessionId,
       pageId: targetPageId,
@@ -538,10 +538,10 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
     try {
       const cache = PageContextCache.getInstance();
       await cache.save(targetPageContextId, targetPageContextData);
-      logger.debug(`💾 Persisted target pageContext to cache: ${targetPageContextId}`);
+      logger.debug(`Persisted target pageContext to cache: ${targetPageContextId}`);
     } catch (error) {
       // Non-fatal: continue even if cache save fails
-      logger.error(`⚠️  Failed to persist target pageContext: ${error}`);
+      logger.warn(`Failed to persist target pageContext: ${error}`);
     }
 
     return ok({

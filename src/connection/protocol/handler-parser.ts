@@ -55,7 +55,7 @@ export function decompressHandlers(base64: string): any[] {
   const decompressed = gunzipSync(compressed);
   const decompressedJson = decompressed.toString('utf-8');
 
-  logger.info(`  ✓ Decompressed: ${decompressedJson.substring(0, 200)}...`);
+  logger.info(`  Decompressed: ${decompressedJson.substring(0, 200)}...`);
 
   // Parse decompressed JSON as handler array
   const actualResponse = JSON.parse(decompressedJson);

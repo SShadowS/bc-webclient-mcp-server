@@ -164,11 +164,11 @@ export class GetPageMetadataTool extends BaseMCPTool {
       const [extractedSessionId] = inputPageContextId.split(':');
       const existing = manager.getSession(extractedSessionId);
       if (existing) {
-        logger.info(`♻️  Reusing session from pageContext: ${extractedSessionId}`);
+        logger.info(`Reusing session from pageContext: ${extractedSessionId}`);
         connection = existing;
         actualSessionId = extractedSessionId;
       } else {
-        logger.info(`⚠️  Session ${extractedSessionId} not found, will create new session`);
+        logger.info(`Session ${extractedSessionId} not found, will create new session`);
         if (!this.bcConfig) {
           if (!this.connection) {
             return err(
@@ -178,7 +178,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
               )
             );
           }
-          logger.info(`⚠️  No BC config, using injected connection`);
+          logger.info(`No BC config, using injected connection`);
           connection = this.connection;
           actualSessionId = 'legacy-session';
         } else {
@@ -189,7 +189,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
           connection = sessionResult.value.connection;
           actualSessionId = sessionResult.value.sessionId;
           logger.info(
-            `${sessionResult.value.isNewSession ? '🆕 New' : '♻️  Reused'} session: ${actualSessionId}`
+            `${sessionResult.value.isNewSession ? 'New' : 'Reused'} session: ${actualSessionId}`
           );
         }
       }
@@ -203,7 +203,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
             )
           );
         }
-        logger.info(`⚠️  No BC config, using injected connection`);
+        logger.info(`No BC config, using injected connection`);
         connection = this.connection;
         actualSessionId = 'legacy-session';
       } else {
@@ -214,7 +214,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
         connection = sessionResult.value.connection;
         actualSessionId = sessionResult.value.sessionId;
         logger.info(
-          `${sessionResult.value.isNewSession ? '🆕 New' : '♻️  Reused'} session: ${actualSessionId}`
+          `${sessionResult.value.isNewSession ? 'New' : 'Reused'} session: ${actualSessionId}`
         );
       }
     }
@@ -259,12 +259,12 @@ export class GetPageMetadataTool extends BaseMCPTool {
 
         // If not in memory, try persistent cache
         if (!pageContext) {
-          logger.info(`⚠️  Page context not in memory, checking persistent cache...`);
+          logger.info(`Page context not in memory, checking persistent cache...`);
           try {
             const cache = PageContextCache.getInstance();
             const cachedContext = await cache.load(inputPageContextId);
             if (cachedContext) {
-              logger.info(`✓ Restored pageContext from cache: ${inputPageContextId}`);
+              logger.info(`Restored pageContext from cache: ${inputPageContextId}`);
               if (!(connection as any).pageContexts) {
                 (connection as any).pageContexts = new Map();
               }
@@ -272,7 +272,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
               pageContext = cachedContext;
             }
           } catch (error) {
-            logger.error(`Failed to load pageContext from cache: ${error}`);
+            logger.warn(`Failed to load pageContext from cache: ${error}`);
           }
         }
 
@@ -281,14 +281,14 @@ export class GetPageMetadataTool extends BaseMCPTool {
           // This prevents execute_action from using wrong formId after drill-down
           if (Array.isArray(pageContext.formIds) && pageContext.formIds.length > 0) {
             existingFormIds = pageContext.formIds;
-            logger.info(`📋 Preserving existing formIds from pageContext: ${JSON.stringify(existingFormIds)}`);
+            logger.info(`Preserving existing formIds from pageContext: ${JSON.stringify(existingFormIds)}`);
           }
 
           // Reuse cached handlers + metadata
           const cachedHandlers = pageContext.handlers as Handler[] | undefined;
           if (cachedHandlers && cachedHandlers.length > 0) {
             logger.info(
-              `♻️  Reusing ${cachedHandlers.length} cached handlers from pageContext ` +
+              `Reusing ${cachedHandlers.length} cached handlers from pageContext ` +
               `"${inputPageContextId}" - skipping OpenForm/LoadForm`
             );
             allHandlers = cachedHandlers;
@@ -297,13 +297,13 @@ export class GetPageMetadataTool extends BaseMCPTool {
             reusedPageType = pageContext.pageType;
           } else {
             logger.info(
-              `⚠️  Page context "${inputPageContextId}" has no cached handlers. ` +
+              `Page context "${inputPageContextId}" has no cached handlers. ` +
               `Treating as stale and requiring fresh OpenForm.`
             );
           }
         } else {
           // Mirror read_page_data behavior: explicit context not found → error, not implicit reopen
-          logger.info(`❌ Page context not found in memory or cache`);
+          logger.info(`Page context not found in memory or cache`);
           return err(
             new ProtocolError(
               `Page context ${inputPageContextId} not found. Page may have been closed. Please call get_page_metadata again.`,
@@ -321,10 +321,10 @@ export class GetPageMetadataTool extends BaseMCPTool {
       // REMOVED: Aggressive form closing logic was causing OpenForm failures for Pages 22 & 30
       // BC can handle multiple open forms - let it manage form lifecycle naturally
       // The close logic with manual tracking manipulation was corrupting session state
-      logger.info(`ℹ️  Skipping form close - BC will manage form lifecycle`);
+      logger.info(`Skipping form close - BC will manage form lifecycle`);
 
       // Always open fresh forms to avoid BC caching issues
-      logger.info(`🆕 Opening new BC Page: "${pageIdStr}" (using LoadForm solution)`);
+      logger.info(`Opening new BC Page: "${pageIdStr}" (using LoadForm solution)`);
 
     // Generate unique startTraceId for this request (prevents BC form caching)
     const startTraceId = newId();
@@ -347,12 +347,12 @@ export class GetPageMetadataTool extends BaseMCPTool {
         return `${encodeURIComponent(field)}=${encodeURIComponent(String(value))}`;
       });
       filterParams = '&' + filterParts.join('&');
-      logger.info(`📋 Applying filters: ${filterParams}`);
+      logger.info(`Applying filters: ${filterParams}`);
     }
 
     const queryString = `tenant=${encodeURIComponent(tenant)}&company=${encodeURIComponent(company)}&page=${String(pageId)}&runinframe=1&dc=${String(dc)}&startTraceId=${startTraceId}${filterParams}&bookmark=`;
 
-    logger.info(`📝 OpenForm query string: ${queryString}`);
+    logger.info(`OpenForm query string: ${queryString}`);
 
     const shellResult = await connection.invoke({
       interactionName: 'OpenForm',
@@ -367,19 +367,19 @@ export class GetPageMetadataTool extends BaseMCPTool {
       return shellResult as Result<never, BCError>;
     }
 
-    logger.info(`✓ OpenForm created shell for Page "${pageIdStr}"`);
+    logger.info(`OpenForm created shell for Page "${pageIdStr}"`);
 
     // Accumulate shell handlers
     allHandlers = Array.from(shellResult.value) as Handler[];
-    logger.info(`📊 OpenForm returned ${allHandlers.length} handlers`);
+    logger.info(`OpenForm returned ${allHandlers.length} handlers`);
 
     // Step 2: Decompress response if needed (BC may compress responses)
     const decompressed = decompressResponse(shellResult.value);
 
     if (decompressed) {
-      logger.info(`✓ Decompressed server response`);
+      logger.info(`Decompressed server response`);
     } else {
-      logger.info(`ℹ️  Response not compressed, processing raw handlers`);
+      logger.info(`Response not compressed, processing raw handlers`);
     }
 
     // Use decompressed data if available, otherwise use original response (which is already an array of handlers)
@@ -393,7 +393,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
       const formsToLoad = filterFormsToLoad(childFormIds);
 
       if (formsToLoad.length > 0) {
-        logger.info(`📋 Found ${formsToLoad.length} child form(s) requiring LoadForm`);
+        logger.info(`Found ${formsToLoad.length} child form(s) requiring LoadForm`);
 
         // Set up listener for async Message events BEFORE calling LoadForm
         // BC sends list data in Message events, not in LoadForm responses
@@ -402,7 +402,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
             h.handlerType === 'DN.LogicalClientChangeHandler' &&
             Array.isArray(h.parameters?.[1]) &&
             h.parameters[1].some((change: any) =>
-              change.t === 'DataRefreshChange' && Array.isArray(change.RowChanges)
+              (change.t === 'DataRefreshChange' || change.t === 'InitializeChange') && Array.isArray(change.RowChanges)
             )
           );
           return matched ? { matched: true, data: handlers } : { matched: false };
@@ -415,15 +415,15 @@ export class GetPageMetadataTool extends BaseMCPTool {
           const child = formsToLoad[i];
           const interaction = createLoadFormInteraction(child.serverId, String(i));
 
-          logger.info(`📤 Calling LoadForm for: ${child.serverId}`);
+          logger.info(`Calling LoadForm for: ${child.serverId}`);
           const loadResult = await connection.invoke(interaction);
 
           if (!isOk(loadResult)) {
-            logger.info(`⚠️  LoadForm failed for ${child.serverId}: ${loadResult.error.message}`);
+            logger.info(`LoadForm failed for ${child.serverId}: ${loadResult.error.message}`);
             continue;
           }
 
-          logger.info(`✓ LoadForm sent for: ${child.serverId}`);
+          logger.info(`LoadForm sent for: ${child.serverId}`);
         }
 
         // Wait for async data (if LoadForm was called)
@@ -431,25 +431,25 @@ export class GetPageMetadataTool extends BaseMCPTool {
           try {
             const asyncHandlers = await asyncHandlersPromise;
             if (asyncHandlers && Array.isArray(asyncHandlers)) {
-              logger.info(`✓ Received ${asyncHandlers.length} async handlers with list data`);
+              logger.info(`Received ${asyncHandlers.length} async handlers with list data`);
               allHandlers.push(...asyncHandlers);
             } else {
-              logger.info(`ℹ️  No async list data received (predicate returned no data)`);
+              logger.info(`No async list data received (predicate returned no data)`);
             }
           } catch (err) {
-            logger.info(`ℹ️  No async list data received (timeout or no data): ${String(err)}`);
+            logger.info(`No async list data received (timeout or no data): ${String(err)}`);
           }
         }
       } else {
-        logger.info(`ℹ️  No child forms requiring LoadForm (Card page or no delayed controls)`);
+        logger.info(`No child forms requiring LoadForm (Card page or no delayed controls)`);
       }
     } catch (err) {
-      logger.info(`⚠️  LoadForm extraction/call failed: ${String(err)} - continuing with OpenForm data only`);
+      logger.info(`LoadForm extraction/call failed: ${String(err)} - continuing with OpenForm data only`);
     }
     } // End if (!reusedFromContext)
 
     // Parse metadata from accumulated handlers (now includes LoadForm data if available)
-    logger.info(`📋 Total handlers before parsing: ${allHandlers.length}`);
+    logger.info(`Total handlers before parsing: ${allHandlers.length}`);
     const metadataResult = this.metadataParser.parse(allHandlers);
 
     if (!isOk(metadataResult)) {
@@ -492,14 +492,14 @@ export class GetPageMetadataTool extends BaseMCPTool {
       (connection as any).pageContexts.set(pageContextId, pageContextData);
     }
 
-    // 💾 PERSIST to disk (survives MCP server restarts)
+    // PERSIST to disk (survives MCP server restarts)
     try {
       const cache = PageContextCache.getInstance();
       await cache.save(pageContextId, pageContextData);
-      logger.debug(`💾 Persisted pageContext to cache: ${pageContextId}`);
+      logger.debug(`Persisted pageContext to cache: ${pageContextId}`);
     } catch (error) {
       // Non-fatal: continue even if cache save fails
-      logger.error(`⚠️  Failed to persist pageContext: ${error}`);
+      logger.warn(`Failed to persist pageContext: ${error}`);
     }
 
     // Format output for Claude
@@ -526,8 +526,8 @@ export class GetPageMetadataTool extends BaseMCPTool {
       })),
     };
 
-    logger.info(`✓ Parsed metadata for Page "${pageIdStr}": caption="${metadata.caption}", pageId="${metadata.pageId}"`);
-    logger.info(`✓ Generated pageContextId: ${pageContextId}`);
+    logger.info(`Parsed metadata for Page "${pageIdStr}": caption="${metadata.caption}", pageId="${metadata.pageId}"`);
+    logger.info(`Generated pageContextId: ${pageContextId}`);
 
     // DON'T close forms - keep them open for true user simulation!
     // Forms stay open across requests, just like a real BC user session

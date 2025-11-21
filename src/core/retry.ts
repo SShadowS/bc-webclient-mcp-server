@@ -165,7 +165,7 @@ export async function retryWithBackoff<T>(
       if (attempt > 0) {
         logger.info(
           { attempt, maxAttempts },
-          `✓ Operation succeeded after ${attempt} ${attempt === 1 ? 'retry' : 'retries'}`
+          `Operation succeeded after ${attempt} ${attempt === 1 ? 'retry' : 'retries'}`
         );
       }
       return result;

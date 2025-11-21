@@ -127,9 +127,8 @@ async function runPhase2Tests() {
     }, stats);
 
     await runTest('13.6 Find non-existent - no crash', async () => {
-      const metadata = await client.getPageMetadata(PAGES.customerCard);
-
       try {
+        const metadata = await client.getPageMetadata(PAGES.customerCard);
         const data = await client.readPageData(metadata.pageContextId, {
           filters: { 'No.': 'NONEXISTENT123' }
         });
@@ -153,4 +152,6 @@ async function runPhase2Tests() {
 }
 
 // Run if executed directly
-runPhase2Tests();
+runPhase2Tests().then(stats => {
+  process.exit(stats.failed > 0 ? 1 : 0);
+});

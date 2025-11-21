@@ -127,7 +127,7 @@ export function extractServerIds(response: any[]): ServerIdsExtractResult {
     }
   }
 
-  logger.error(`[LoadFormHelpers] Extracted ServerIds: shell=${shellFormId}, children=${childFormIds.length}`);
+  logger.debug(`[LoadFormHelpers] Extracted ServerIds: shell=${shellFormId}, children=${childFormIds.length}`);
 
   return { shellFormId, childFormIds };
 }
@@ -158,9 +158,9 @@ export function shouldLoadForm(child: ChildFormInfo): boolean {
   const shouldLoad = hasDelayedControls || hasExpressionProps;
 
   if (shouldLoad) {
-    logger.error(`[LoadFormHelpers] Will LoadForm: ${child.serverId} (${child.form.Caption || 'no caption'})`);
+    logger.debug(`[LoadFormHelpers] Will LoadForm: ${child.serverId} (${child.form.Caption || 'no caption'})`);
   } else {
-    logger.error(`[LoadFormHelpers] Skip LoadForm: ${child.serverId} (${child.form.Caption || 'no caption'}) - no DelayedControls or ExpressionProperties`);
+    logger.debug(`[LoadFormHelpers] Skip LoadForm: ${child.serverId} (${child.form.Caption || 'no caption'}) - no DelayedControls or ExpressionProperties`);
   }
 
   return shouldLoad;

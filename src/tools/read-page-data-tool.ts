@@ -191,7 +191,8 @@ export class ReadPageDataTool extends BaseMCPTool {
     sessionId: string,
     pageId: string,
     logger: any,
-    logicalForm: any
+    logicalForm: any,
+    formId: string
   ): Promise<Result<void, BCError>> {
     if (!filters || Object.keys(filters).length === 0) {
       return ok(undefined);
@@ -246,7 +247,7 @@ export class ReadPageDataTool extends BaseMCPTool {
         // CHECK CACHE: Skip if filter already applied with same operator and value
         const cached = filterState.get(columnName);
         if (cached && cached.operator === operator && cached.value === value) {
-          logger.info(`  ✓ Skipping "${columnName}" ${operator} "${value}" - already active (cached)`);
+          logger.info(`  Skipping "${columnName}" ${operator} "${value}" - already active (cached)`);
           continue;
         }
 
@@ -260,6 +261,7 @@ export class ReadPageDataTool extends BaseMCPTool {
           },
           controlPath: repeaterPath,
           callbackId: '0',
+          formId: formId,
         });
 
         if (!isOk(filterResult)) {
@@ -318,6 +320,7 @@ export class ReadPageDataTool extends BaseMCPTool {
           },
           controlPath: `${repeaterPath}:filter`,
           callbackId: '0',
+          formId: formId,
         });
 
         if (!isOk(saveValueResult)) {
@@ -325,7 +328,7 @@ export class ReadPageDataTool extends BaseMCPTool {
           continue;
         }
 
-        logger.info(`    ✓ Filter applied: "${columnName}" ${operator} "${value}"`);
+        logger.info(`    Filter applied: "${columnName}" ${operator} "${value}"`);
 
         // UPDATE CACHE: Track successfully applied filter
         filterState.set(columnName, { operator, value });
@@ -341,7 +344,7 @@ export class ReadPageDataTool extends BaseMCPTool {
       filterService.setFilterState(sessionId, pageId, filterState);
     }
 
-    logger.info(`✓ Filters applied`);
+    logger.info(`Filters applied`);
     return ok(undefined);
   }
 
@@ -378,22 +381,22 @@ export class ReadPageDataTool extends BaseMCPTool {
     // Try to reuse existing session from pageContextId
     const existing = manager.getSession(sessionId);
     if (existing) {
-      logger.info(`♻️  Reusing session from pageContext: ${sessionId}`);
+      logger.info(`Reusing session from pageContext: ${sessionId}`);
       connection = existing;
       actualSessionId = sessionId;
 
       // Check if the page context is still valid in memory
       let pageContext = (connection as any).pageContexts?.get(pageContextId);
 
-      // 💾 If not in memory, try restoring from persistent cache
+      // If not in memory, try restoring from persistent cache
       if (!pageContext) {
-        logger.info(`⚠️  Page context not in memory, checking persistent cache...`);
+        logger.info(`Page context not in memory, checking persistent cache...`);
         try {
           const cache = PageContextCache.getInstance();
           const cachedContext = await cache.load(pageContextId);
 
           if (cachedContext) {
-            logger.info(`✓ Restored pageContext from cache: ${pageContextId}`);
+            logger.info(`Restored pageContext from cache: ${pageContextId}`);
             // Restore to memory
             if (!(connection as any).pageContexts) {
               (connection as any).pageContexts = new Map();
@@ -402,13 +405,13 @@ export class ReadPageDataTool extends BaseMCPTool {
             pageContext = cachedContext;
           }
         } catch (error) {
-          logger.error(`Failed to load from cache: ${error}`);
+          logger.warn(`Failed to load from cache: ${error}`);
         }
       }
 
       // If still not found, return error
       if (!pageContext) {
-        logger.info(`❌ Page context not found in memory or cache`);
+        logger.info(`Page context not found in memory or cache`);
         return err(
           new ProtocolError(
             `Page context ${pageContextId} not found. Page may have been closed. Please call get_page_metadata again.`,
@@ -455,11 +458,11 @@ export class ReadPageDataTool extends BaseMCPTool {
     // Use cached handlers if available, not stale, AND contains actual data
     // get_page_metadata now calls LoadForm and caches all handlers including async data
     if (cachedHandlers && cachedHandlers.length > 0 && !needsRefresh && hasDataHandlers) {
-      logger.info(`✓ Using ${cachedHandlers.length} cached handlers (includes data changes)`);
+      logger.info(`Using ${cachedHandlers.length} cached handlers (includes data changes)`);
       handlers = cachedHandlers;
     } else if (needsRefresh || (cachedHandlers && !hasDataHandlers)) {
       // After action execution OR cached handlers lack data - call LoadForm
-      logger.info(`🔄 ${needsRefresh ? 'Page needs refresh' : 'Cached handlers missing data'}, calling LoadForm...`);
+      logger.info(`${needsRefresh ? 'Page needs refresh' : 'Cached handlers missing data'}, calling LoadForm...`);
       const mainFormId = formIds[0];
       const loadFormResult = await connection.invoke({
         interactionName: 'LoadForm',
@@ -470,21 +473,33 @@ export class ReadPageDataTool extends BaseMCPTool {
       });
 
       if (isOk(loadFormResult)) {
-        logger.info(`✓ LoadForm returned ${loadFormResult.value.length} handlers`);
+        logger.info(`LoadForm returned ${loadFormResult.value.length} handlers`);
         handlers = loadFormResult.value;
         // Update cached handlers and clear refresh flag
         if (pageContext) {
           pageContext.handlers = handlers as any;
           pageContext.needsRefresh = false;
-          logger.info(`✓ Updated cached handlers and cleared refresh flag`);
+          logger.info(`Updated cached handlers and cleared refresh flag`);
         }
       } else {
-        logger.info(`⚠️  LoadForm failed, using stale cached handlers: ${loadFormResult.error.message}`);
-        handlers = cachedHandlers || [];
+        // CRITICAL FIX: LoadForm failure means page state is invalid/stale
+        // Using stale cached handlers guarantees wrong data - MUST propagate error
+        // Per GPT-5 analysis: This indicates session/page instance mismatch, NOT recoverable
+        logger.error(`LoadForm failed - page instance invalid: ${loadFormResult.error.message}`);
+        return err(
+          new ProtocolError(
+            `Failed to refresh page data: ${loadFormResult.error.message}`,
+            {
+              pageContextId,
+              formId: formIds[0],
+              originalError: loadFormResult.error.message,
+            }
+          )
+        );
       }
     } else {
       // Legacy fallback: Call RefreshForm to get current data
-      logger.info(`⚠️  No cached handlers, falling back to RefreshForm`);
+      logger.info(`No cached handlers, falling back to RefreshForm`);
       const refreshResult = await connection.invoke({
         interactionName: 'RefreshForm',
         namedParameters: {},
@@ -554,7 +569,10 @@ export class ReadPageDataTool extends BaseMCPTool {
       // Flatten header: {bookmark, fields: {name: FieldValue}} -> {bookmark, name: value}
       const flatHeader: Record<string, any> = { bookmark: header.bookmark };
       for (const [name, fieldValue] of Object.entries(header.fields)) {
-        flatHeader[name] = fieldValue.value;
+        // Handle both wrapped {value: x} and primitive values
+        flatHeader[name] = typeof fieldValue === 'object' && fieldValue !== null && 'value' in fieldValue
+          ? (fieldValue as any).value
+          : fieldValue;
       }
 
       // Flatten linesBlocks too
@@ -563,7 +581,10 @@ export class ReadPageDataTool extends BaseMCPTool {
         lines: block.lines.map(line => {
           const flatLine: Record<string, any> = { bookmark: line.bookmark };
           for (const [name, fieldValue] of Object.entries(line.fields)) {
-            flatLine[name] = fieldValue.value;
+            // Handle both wrapped {value: x} and primitive values
+            flatLine[name] = typeof fieldValue === 'object' && fieldValue !== null && 'value' in fieldValue
+              ? (fieldValue as any).value
+              : fieldValue;
           }
           return flatLine;
         }),
@@ -603,7 +624,7 @@ export class ReadPageDataTool extends BaseMCPTool {
         logger.info(`Found repeater at path: ${repeaterPath}`);
 
         // Apply filters (with cache optimization - Phases 1, 2, & 3)
-        const filterResult = await this.applyFilters(connection, filters, repeaterPath, sessionId, pageId, logger, logicalForm);
+        const filterResult = await this.applyFilters(connection, filters, repeaterPath, sessionId, pageId, logger, logicalForm, formIds[0]);
 
         if (!isOk(filterResult)) {
           // Log warning but continue - filtering is best-effort
@@ -638,7 +659,10 @@ export class ReadPageDataTool extends BaseMCPTool {
         const flatRecords = records.map(r => {
           const flatFields: Record<string, any> = {};
           for (const [name, fieldValue] of Object.entries(r.fields)) {
-            flatFields[name] = fieldValue.value;
+            // Handle both wrapped {value: x} and primitive values
+            flatFields[name] = typeof fieldValue === 'object' && fieldValue !== null && 'value' in fieldValue
+              ? (fieldValue as any).value
+              : fieldValue;
           }
           return { bookmark: r.bookmark, ...flatFields };
         });

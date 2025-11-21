@@ -281,21 +281,21 @@ export class MCPServer implements IMCPServer {
         resources: this.resources.size,
       });
 
-      // 💾 Initialize persistent pageContext cache
+      // Initialize persistent pageContext cache
       try {
         const cache = PageContextCache.getInstance();
         await cache.initialize();
-        this.logger?.info('✓ PageContext cache initialized');
+        this.logger?.info('PageContext cache initialized');
       } catch (error) {
         this.logger?.error(`Failed to initialize PageContext cache: ${error}`);
         // Non-fatal: continue without persistent cache
       }
 
-      // 🐛 Initialize debug logger
+      // Initialize debug logger
       if (config.debug.enabled) {
         try {
           await debugLogger.initialize();
-          this.logger?.info('✓ Debug logging enabled', {
+          this.logger?.info('Debug logging enabled', {
             channels: Array.from(config.debug.channels),
             logDir: config.debug.logDir,
           });
@@ -340,11 +340,11 @@ export class MCPServer implements IMCPServer {
 
       this.logger?.info('Stopping MCP server');
 
-      // 🐛 Shutdown debug logger
+      // Shutdown debug logger
       if (config.debug.enabled) {
         try {
           await debugLogger.shutdown();
-          this.logger?.info('✓ Debug logging shut down');
+          this.logger?.info('Debug logging shut down');
         } catch (error) {
           this.logger?.error(`Failed to shutdown debug logging: ${error}`);
         }

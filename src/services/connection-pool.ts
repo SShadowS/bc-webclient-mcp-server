@@ -182,7 +182,7 @@ export class BCConnectionPool {
           await new Promise(resolve => setTimeout(resolve, 500));
         }
       } catch (error) {
-        logger.error({ error }, `  Failed to create warm connection: ${error instanceof Error ? error.message : String(error)}`);
+        logger.warn({ error }, `  Failed to create warm connection: ${error instanceof Error ? error.message : String(error)}`);
         // Don't fail initialization if we can't create min connections
         // Pool will create on demand
       }
@@ -193,7 +193,7 @@ export class BCConnectionPool {
     this.startIdleCleanup();
 
     this.initialized = true;
-    logger.info(`✓ Connection pool initialized (${this.availableConnections.length} connections ready)`);
+    logger.info(`Connection pool initialized (${this.availableConnections.length} connections ready)`);
   }
 
   /**
@@ -255,7 +255,7 @@ export class BCConnectionPool {
     connection.lastUsedAt = new Date();
     this.activeConnections.add(connection);
 
-    logger.info(`✓ Acquired connection ${connection.id} (${this.activeConnections.size} active, ${this.availableConnections.length} available)`);
+    logger.info(`Acquired connection ${connection.id} (${this.activeConnections.size} active, ${this.availableConnections.length} available)`);
 
     return connection;
   }
@@ -286,12 +286,12 @@ export class BCConnectionPool {
       this.activeConnections.add(connection);
       queuedRequest.resolve(connection);
 
-      logger.info(`✓ Released connection ${connection.id} to queued request (${this.waitQueue.length} still waiting)`);
+      logger.info(`Released connection ${connection.id} to queued request (${this.waitQueue.length} still waiting)`);
     } else {
       // Return to available pool
       this.availableConnections.push(connection);
 
-      logger.info(`✓ Released connection ${connection.id} (${this.activeConnections.size} active, ${this.availableConnections.length} available)`);
+      logger.info(`Released connection ${connection.id} (${this.activeConnections.size} active, ${this.availableConnections.length} available)`);
     }
   }
 
@@ -340,7 +340,7 @@ export class BCConnectionPool {
     this.availableConnections = [];
     this.initialized = false;
 
-    logger.info('✓ Connection pool shutdown complete');
+    logger.info('Connection pool shutdown complete');
   }
 
   /**
@@ -398,11 +398,11 @@ export class BCConnectionPool {
         inUse: false,
       };
 
-      logger.info(`✓ Created connection ${id}`);
+      logger.info(`Created connection ${id}`);
 
       return connection;
     } catch (error) {
-      logger.error({ error }, `Failed to create connection ${id}: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn({ error }, `Failed to create connection ${id}: ${error instanceof Error ? error.message : String(error)}`);
 
       // Try to disconnect if partially created
       try {
@@ -428,7 +428,7 @@ export class BCConnectionPool {
     try {
       await connection.client.disconnect();
     } catch (error) {
-      logger.error({ error }, `Error disconnecting ${connection.id}: ${error instanceof Error ? error.message : String(error)}`);
+      logger.warn({ error }, `Error disconnecting ${connection.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
 
     // Remove from tracking

@@ -89,20 +89,20 @@ export class HandlerParser implements IHandlerParser {
     );
 
     if (!callbackHandler) {
-      logger.error('[HandlerParser] No CallbackResponseProperties handler found');
+      logger.debug('[HandlerParser] No CallbackResponseProperties handler found');
       return undefined;
     }
 
     // Extract formId from CompletedInteractions[0].Result.value
     const completedInteractions = callbackHandler.parameters?.[0]?.CompletedInteractions;
     if (!completedInteractions || completedInteractions.length === 0) {
-      logger.error('[HandlerParser] No CompletedInteractions found');
+      logger.debug('[HandlerParser] No CompletedInteractions found');
       return undefined;
     }
 
     const result = completedInteractions[0]?.Result as { reason?: number; value?: string } | undefined;
     const formId = result?.value;
-    logger.error({ formId }, '[HandlerParser] Extracted formId from callback');
+    logger.debug({ formId }, '[HandlerParser] Extracted formId from callback');
     return formId;
   }
 
@@ -162,34 +162,34 @@ export class HandlerParser implements IHandlerParser {
     // If formId provided, filter by ServerId
     let formToShowHandler: LogicalClientEventRaisingHandler | undefined;
 
-    logger.error({ count: formToShowHandlers.length }, '[HandlerParser] Found FormToShow handlers');
-    logger.error({ formId }, '[HandlerParser] FormId for filtering');
+    logger.debug({ count: formToShowHandlers.length }, '[HandlerParser] Found FormToShow handlers');
+    logger.debug({ formId }, '[HandlerParser] FormId for filtering');
 
     if (formId) {
       // Log all available ServerIds
       formToShowHandlers.forEach((h, idx) => {
         const logicalForm = h.parameters?.[1] as LogicalForm | undefined;
-        logger.error(`[HandlerParser]   Handler ${idx}: ServerId="${logicalForm?.ServerId}", Caption="${logicalForm?.Caption}"`);
+        logger.debug(`[HandlerParser]   Handler ${idx}: ServerId="${logicalForm?.ServerId}", Caption="${logicalForm?.Caption}"`);
       });
 
       formToShowHandler = formToShowHandlers.find(h => {
         const logicalForm = h.parameters?.[1] as LogicalForm | undefined;
         const matches = logicalForm?.ServerId === formId;
-        logger.error(`[HandlerParser]   Checking ServerId="${logicalForm?.ServerId}" === formId="${formId}": ${matches}`);
+        logger.debug(`[HandlerParser]   Checking ServerId="${logicalForm?.ServerId}" === formId="${formId}": ${matches}`);
         return matches;
       });
 
       if (!formToShowHandler) {
-        logger.error('[HandlerParser] No match found, falling back to first handler');
+        logger.debug('[HandlerParser] No match found, falling back to first handler');
         // Fallback to first handler if no match found
         // (This handles edge cases where formId doesn't match ServerId format)
         formToShowHandler = formToShowHandlers[0];
       } else {
         const selectedForm = formToShowHandler.parameters?.[1] as LogicalForm | undefined;
-        logger.error(`[HandlerParser] ✓ Matched handler: ServerId="${selectedForm?.ServerId}", Caption="${selectedForm?.Caption}"`);
+        logger.debug(`[HandlerParser] Matched handler: ServerId="${selectedForm?.ServerId}", Caption="${selectedForm?.Caption}"`);
       }
     } else {
-      logger.error('[HandlerParser] No formId provided, using first handler (old behavior)');
+      logger.debug('[HandlerParser] No formId provided, using first handler (old behavior)');
       // No formId provided, use first handler (old behavior)
       formToShowHandler = formToShowHandlers[0];
     }

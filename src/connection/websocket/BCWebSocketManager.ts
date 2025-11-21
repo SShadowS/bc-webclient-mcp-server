@@ -141,7 +141,7 @@ export class BCWebSocketManager implements IBCWebSocketManager {
         )
           return;
         cleanup();
-        logger.info('✓ Raw WebSocket connection established');
+        logger.info('Raw WebSocket connection established');
         resolve();
       };
 
@@ -197,7 +197,7 @@ export class BCWebSocketManager implements IBCWebSocketManager {
       ws.on('message', (data: WebSocket.Data) => {
         try {
           const message = data.toString();
-          logger.info(`← Received: ${message.substring(0, 200)}...`);
+          logger.info(`<- Received: ${message.substring(0, 200)}...`);
 
           const response = JSON.parse(message) as any;
 
@@ -313,7 +313,7 @@ export class BCWebSocketManager implements IBCWebSocketManager {
       this.ws.close();
       this.ws = null;
       this.connected = false;
-      logger.info('✓ WebSocket connection closed');
+      logger.info('WebSocket connection closed');
     }
   }
 
@@ -398,7 +398,7 @@ export class BCWebSocketManager implements IBCWebSocketManager {
 
       // Send request
       const message = JSON.stringify(rpcRequest);
-      logger.info(`→ Sending: ${message.substring(0, 200)}...`);
+      logger.info(`-> Sending: ${message.substring(0, 200)}...`);
 
       // 🐛 Debug: Log outgoing WebSocket messages
       debugWebSocket('WebSocket request sent', {

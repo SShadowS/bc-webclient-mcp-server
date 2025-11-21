@@ -261,7 +261,7 @@ export class CreateRecordByFieldNameTool extends BaseMCPTool {
         );
 
         actualListFormId = formToShowData;
-        logger.info(`✓ List form opened: ${actualListFormId}`);
+        logger.info(`List form opened: ${actualListFormId}`);
       }
 
       // Ensure we have a list form ID
@@ -294,7 +294,7 @@ export class CreateRecordByFieldNameTool extends BaseMCPTool {
         { timeoutMs: 5000 }
       );
 
-      logger.info(`✓ Card form opened: ${cardFormId}`);
+      logger.info(`Card form opened: ${cardFormId}`);
 
       // Step 4: Load form metadata
       logger.info(`Loading form metadata...`);
@@ -309,10 +309,10 @@ export class CreateRecordByFieldNameTool extends BaseMCPTool {
           logger.info(`Setting field "${fieldKey}" = "${value}"...`);
           await crudService.saveField(cardFormId, fieldKey, value, { timeoutMs: 5000 });
           setFields.push(fieldKey);
-          logger.info(`✓ Field "${fieldKey}" set successfully`);
+          logger.info(`Field "${fieldKey}" set successfully`);
         } catch (error) {
           const errorMsg = error instanceof Error ? error.message : String(error);
-          logger.warn(`✗ Failed to set field "${fieldKey}": ${errorMsg}`);
+          logger.warn(`Failed to set field "${fieldKey}": ${errorMsg}`);
           failedFields.push({ field: fieldKey, error: errorMsg });
         }
       }
@@ -321,7 +321,7 @@ export class CreateRecordByFieldNameTool extends BaseMCPTool {
       logger.info(`Closing and saving record...`);
       await crudService.closeForm(cardFormId, { timeoutMs: 5000 });
 
-      logger.info(`✓ Record created successfully with ${setFields.length}/${Object.keys(fields).length} fields set`);
+      logger.info(`Record created successfully with ${setFields.length}/${Object.keys(fields).length} fields set`);
 
       return ok({
         success: failedFields.length === 0,
@@ -336,7 +336,7 @@ export class CreateRecordByFieldNameTool extends BaseMCPTool {
       });
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      logger.error(`Failed to create record: ${errorMessage}`);
+      logger.info(`Failed to create record: ${errorMessage}`);
       return err(
         new ProtocolError(`Failed to create record: ${errorMessage}`, {
           pageId,

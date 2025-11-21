@@ -221,7 +221,7 @@ export class BCCrudService {
 
           // Initialize FormState from FormToShow - this builds the control tree
           this.formStateService.initFromFormToShow(formId, formData);
-          logger.info(`[BCCrudService] ✓ FormState initialized from FormToShow`);
+          logger.info(`[BCCrudService] FormState initialized from FormToShow`);
         }
 
         // Apply all immediate AND async changes to FormState
@@ -255,7 +255,7 @@ export class BCCrudService {
           }
         }
 
-        logger.info(`[BCCrudService] ✓ Form ${formId} loaded and indexed with ${state.pathIndex.size} controls`);
+        logger.info(`[BCCrudService] Form ${formId} loaded and indexed with ${state.pathIndex.size} controls`);
       }
     });
   }
@@ -331,7 +331,7 @@ export class BCCrudService {
         { timeoutMs: opts.timeoutMs }
       );
 
-      logger.info(`[BCCrudService] ✓ Field "${fieldKey}" saved successfully`);
+      logger.info(`[BCCrudService] Field "${fieldKey}" saved successfully`);
 
       // Update FormState with any changes
       const handlers = await this.client.waitForHandlers(
@@ -383,7 +383,7 @@ export class BCCrudService {
         { timeoutMs }
       );
 
-      logger.info(`[BCCrudService] ✓ SystemAction ${systemAction} completed`);
+      logger.info(`[BCCrudService] SystemAction ${systemAction} completed`);
 
       return handlers;
     });
@@ -419,7 +419,7 @@ export class BCCrudService {
       // Click button (systemAction 380 for dialog confirmation)
       await this.invokeSystemAction(dialogFormId, 380, button.controlPath, { timeoutMs });
 
-      logger.info(`[BCCrudService] ✓ Dialog confirmed with "${button.caption}"`);
+      logger.info(`[BCCrudService] Dialog confirmed with "${button.caption}"`);
     });
   }
 
@@ -452,7 +452,7 @@ export class BCCrudService {
       // Remove from FormState cache
       this.formStateService.deleteFormState(formId);
 
-      logger.info(`[BCCrudService] ✓ Form ${formId} closed`);
+      logger.info(`[BCCrudService] Form ${formId} closed`);
     });
   }
 

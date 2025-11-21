@@ -106,7 +106,7 @@ export class BCAuthenticationService implements IBCAuthenticationService {
       );
     }
 
-    logger.info('  ✓ Got CSRF token from login page');
+    logger.info('  Got CSRF token from login page');
 
     // Step 1b: POST credentials to login
     logger.info('  Submitting credentials...');
@@ -148,7 +148,7 @@ export class BCAuthenticationService implements IBCAuthenticationService {
       }
     });
 
-    logger.info('  ✓ Login successful');
+    logger.info('  Login successful');
 
     // Extract CSRF token from Antiforgery cookie
     const antiforgCookie = this.sessionCookies.find(c => c.startsWith('.AspNetCore.Antiforgery.'));
@@ -156,12 +156,12 @@ export class BCAuthenticationService implements IBCAuthenticationService {
       const tokenValue = antiforgCookie.split('=')[1];
       if (tokenValue && tokenValue.startsWith('CfDJ8')) {
         this.csrfToken = tokenValue;
-        logger.info(`  ✓ Extracted CSRF token from Antiforgery cookie`);
+        logger.info(`  Extracted CSRF token from Antiforgery cookie`);
       }
     }
 
     this.authenticated = true;
-    logger.info('✓ Web authentication complete\n');
+    logger.info('Web authentication complete\n');
   }
 
   /**

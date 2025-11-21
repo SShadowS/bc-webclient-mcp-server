@@ -87,7 +87,7 @@ export class BCPageConnection implements IBCConnection {
    * Creates a new WebSocket connection and authenticates.
    */
   private async createNewConnection(): Promise<BCRawWebSocketClient> {
-    logger.error(`[BCPageConnection] 🔌 Creating NEW WebSocket connection...`);
+    logger.info(`[BCPageConnection] Creating NEW WebSocket connection...`);
 
     const client = new BCRawWebSocketClient(
       { baseUrl: this.config.baseUrl } as any,
@@ -110,13 +110,14 @@ export class BCPageConnection implements IBCConnection {
       clientTimeZone: 'UTC',
     });
 
-    logger.info(`[BCPageConnection] ✓ New connection established`);
+    logger.info(`[BCPageConnection] New connection established`);
     return client;
   }
 
   /**
    * Sends an interaction and waits for response.
-   * Reuses existing connection for all operations (matches BC web client behavior).
+   * Creates fresh connection for each main page OpenForm (Connection Per Page architecture).
+   * Reuses connection for other interactions within the same page context.
    */
   public async invoke(interaction: BCInteraction): Promise<Result<readonly Handler[], BCError>> {
     try {
@@ -129,14 +130,21 @@ export class BCPageConnection implements IBCConnection {
         const queryString = String(namedParams.query || '');
         const pageMatch = queryString.match(/page=(\d+)/);
         if (pageMatch) {
-          this.currentPageId = pageMatch[1];
-          logger.error(`[BCPageConnection] 📄 Opening Page ${this.currentPageId} on existing connection`);
+          const newPageId = pageMatch[1];
+          // Force fresh connection for main page OpenForm to clear BC server state
+          // BC caches page state per connection - reusing connection causes empty FormToShow
+          if (this.currentClient) {
+            logger.info(`[BCPageConnection] Closing connection for new page ${newPageId} (was ${this.currentPageId})`);
+            await this.close();
+          }
+          this.currentPageId = newPageId;
+          logger.info(`[BCPageConnection] Opening Page ${this.currentPageId} with fresh connection`);
         }
       }
 
       // Ensure we have a connection (create only if needed)
       if (!this.currentClient) {
-        logger.error(`[BCPageConnection] 🆕 Creating initial connection...`);
+        logger.info(`[BCPageConnection] Creating initial connection...`);
         this.currentClient = await this.createNewConnection();
       }
 
@@ -175,7 +183,7 @@ export class BCPageConnection implements IBCConnection {
         const formId = this.extractFormId(response);
         if (formId && this.currentPageId) {
           this.openForms.set(this.currentPageId, formId);
-          logger.error(`[BCPageConnection] 📝 Tracking form: Page ${this.currentPageId} → formId ${formId}`);
+          logger.debug(`[BCPageConnection] Tracking form: Page ${this.currentPageId} -> formId ${formId}`);
           // CRITICAL: Add form to openFormIds so BC actions work on this form
           const rawClient = this.getRawClient();
           if (rawClient) {
@@ -264,7 +272,7 @@ export class BCPageConnection implements IBCConnection {
     for (const h of handlers as any[]) visit(h);
     if (maxSeq > this.lastAckSequence) {
       this.lastAckSequence = maxSeq;
-      logger.error(`[BCPageConnection] ↔︎ Updated lastAckSequence=${this.lastAckSequence}`);
+      logger.debug(`[BCPageConnection] Updated lastAckSequence=${this.lastAckSequence}`);
     }
   }
 
@@ -281,7 +289,7 @@ export class BCPageConnection implements IBCConnection {
       );
     }
 
-    logger.error(`[BCPageConnection] Loading ${childForms.length} child forms...`);
+    logger.info(`[BCPageConnection] Loading ${childForms.length} child forms...`);
 
     const allHandlers: Handler[] = [];
     let callbackId = 0;
@@ -300,17 +308,17 @@ export class BCPageConnection implements IBCConnection {
 
         if (Array.isArray(response)) {
           allHandlers.push(...response);
-          logger.error(`[BCPageConnection] ✓ Loaded ${child.serverId}: ${response.length} handlers`);
+          logger.debug(`[BCPageConnection] Loaded ${child.serverId}: ${response.length} handlers`);
 
           // Track the loaded child form so openFormIds stays in sync
           if (this.currentPageId) {
             this.openForms.set(`${this.currentPageId}_child_${child.serverId}`, child.serverId);
-            logger.error(`[BCPageConnection] 📝 Tracked child form: ${child.serverId}`);
+            logger.debug(`[BCPageConnection] Tracked child form: ${child.serverId}`);
           }
         }
       } catch (error) {
         // Child form load failures are non-fatal (FactBoxes/Parts require parent record context)
-        logger.error(`[BCPageConnection] ⚠️  Skipped ${child.serverId} (${String(error)}) - continuing without it`);
+        logger.warn(`[BCPageConnection] Skipped ${child.serverId} (${String(error)}) - continuing without it`);
       }
     }
 

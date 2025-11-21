@@ -105,7 +105,7 @@ export class PageContextCache {
       // Create cache directory if it doesn't exist
       try {
         await fs.mkdir(this.cacheDir, { recursive: true });
-        logger.info(`✓ Cache directory ready`);
+        logger.info(`Cache directory ready`);
       } catch (error) {
         logger.error(`Failed to create cache directory: ${error}`);
         throw error;
@@ -115,7 +115,7 @@ export class PageContextCache {
       await this.cleanup();
 
       this.initialized = true;
-      logger.info(`✓ PageContextCache initialized`);
+      logger.info(`PageContextCache initialized`);
     })();
 
     return this.initializationPromise;
@@ -144,7 +144,7 @@ export class PageContextCache {
 
     try {
       await fs.writeFile(filePath, JSON.stringify(cachedContext, null, 2), 'utf8');
-      logger.info(`✓ Saved pageContext: ${pageContextId} (expires in ${this.ttlMs / 1000}s)`);
+      logger.info(`Saved pageContext: ${pageContextId} (expires in ${this.ttlMs / 1000}s)`);
     } catch (error) {
       logger.error(`Failed to save pageContext ${pageContextId}: ${error}`);
       throw error;
@@ -169,13 +169,13 @@ export class PageContextCache {
 
       // Check if expired
       if (Date.now() > context.expiresAt) {
-        logger.info(`⏰ PageContext expired: ${pageContextId}`);
+        logger.info(`PageContext expired: ${pageContextId}`);
         await this.delete(pageContextId);
         return null;
       }
 
       const age = Math.round((Date.now() - context.savedAt) / 1000);
-      logger.info(`✓ Loaded pageContext: ${pageContextId} (age: ${age}s)`);
+      logger.info(`Loaded pageContext: ${pageContextId} (age: ${age}s)`);
       return context;
     } catch (error: any) {
       if (error.code === 'ENOENT') {
@@ -196,7 +196,7 @@ export class PageContextCache {
 
     try {
       await fs.unlink(filePath);
-      logger.info(`✓ Deleted pageContext: ${pageContextId}`);
+      logger.info(`Deleted pageContext: ${pageContextId}`);
     } catch (error: any) {
       if (error.code !== 'ENOENT') {
         logger.error(`Failed to delete pageContext ${pageContextId}: ${error}`);
@@ -244,9 +244,9 @@ export class PageContextCache {
       }
 
       if (deletedCount > 0) {
-        logger.info(`✓ Cleanup complete: removed ${deletedCount} expired entries`);
+        logger.info(`Cleanup complete: removed ${deletedCount} expired entries`);
       } else {
-        logger.info(`✓ Cleanup complete: no expired entries`);
+        logger.info(`Cleanup complete: no expired entries`);
       }
 
       return deletedCount;
@@ -316,7 +316,7 @@ export class PageContextCache {
         }
       }
 
-      logger.info(`✓ Cache cleared`);
+      logger.info(`Cache cleared`);
     } catch (error) {
       logger.error(`Failed to clear cache: ${error}`);
     }

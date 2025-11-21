@@ -253,11 +253,11 @@ Follow this workflow to open a specific record's Card/Document page:
 ## Step 1: Identify the List Page
 
 Based on the entity type "{{entityType}}", determine the appropriate List page:
-- Customer → Customer List (Page 22)
-- Vendor → Vendor List (Page 27)
-- Item → Item List (Page 31)
-- Sales Order → Sales Orders (Page 43)
-- Purchase Order → Purchase Orders (Page 51)
+- Customer -> Customer List (Page 22)
+- Vendor -> Vendor List (Page 27)
+- Item -> Item List (Page 31)
+- Sales Order -> Sales Orders (Page 43)
+- Purchase Order -> Purchase Orders (Page 51)
 
 Use \`search_pages\` if you're unsure of the page ID:
 - \`query\`: "{{entityType}} list"
@@ -342,12 +342,12 @@ Use \`write_page_data\` with:
 
 ## When to Use This Pattern
 
-✅ Use drill-down when:
+Use drill-down when:
 - User says "open", "show", or "edit the card/document"
 - Fields needed are only available on the Card/Document page
 - User wants full detail view for a specific record
 
-❌ Don't use drill-down when:
+Avoid drill-down when:
 - Just reading data available in List view
 - Performing batch operations on multiple records
 - User doesn't need the Card UI

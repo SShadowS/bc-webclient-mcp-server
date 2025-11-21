@@ -160,7 +160,7 @@ export class CreateRecordTool extends BaseMCPTool {
       // Extract sessionId from pageContextId (format: sessionId:page:pageId:timestamp)
       const pageContextId = (metadataResult.value as GetPageMetadataOutput).pageContextId;
       const [actualSessionId] = pageContextId.split(':');
-      logger.info(`✓ Page opened, sessionId: ${actualSessionId}`);
+      logger.info(`Page opened, sessionId: ${actualSessionId}`);
 
       // Step 2: Execute "New" action to create blank record
       logger.info(`Executing "New" action...`);
@@ -175,7 +175,7 @@ export class CreateRecordTool extends BaseMCPTool {
         return err(newActionResult.error);
       }
 
-      logger.info(`✓ New record created`);
+      logger.info(`New record created`);
 
       // Step 3: Write field values to the new record
       logger.info(`Setting ${Object.keys(fields).length} field(s)...`);
@@ -190,7 +190,7 @@ export class CreateRecordTool extends BaseMCPTool {
         return err(writeResult.error);
       }
 
-      logger.info(`✓ Fields set successfully`);
+      logger.info(`Fields set successfully`);
 
       const writeOutput = writeResult.value as WritePageDataOutput;
       return ok({

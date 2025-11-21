@@ -68,7 +68,7 @@ async function main() {
   const { baseUrl, username, password, tenantId } = bcConfig;
 
   if (!password) {
-    logger.error('❌ ERROR: BC_PASSWORD environment variable not set');
+    logger.error('BC_PASSWORD environment variable not set');
     process.exit(1);
   }
 
@@ -83,12 +83,12 @@ async function main() {
   const connectResult = await connection.connect();
 
   if (!isOk(connectResult)) {
-    logger.error('❌ Failed to connect to BC:', connectResult.error.message);
+    logger.error(`Failed to connect to BC: ${connectResult.error.message}`);
     process.exit(1);
   }
 
   // Create connection pool for Tell Me searches
-  logger.error('Initializing connection pool...');
+  logger.info('Initializing connection pool...');
   const connectionPool = new BCConnectionPool(
     { baseUrl } as any,
     username,
@@ -104,17 +104,17 @@ async function main() {
   );
 
   await connectionPool.initialize();
-  logger.error(`✓ Connection pool initialized (${connectionPool.getStats().available} connections ready)`);
+  logger.info(`Connection pool initialized (${connectionPool.getStats().available} connections ready)`);
 
   // Create cache manager
-  logger.error('Initializing cache manager...');
+  logger.info('Initializing cache manager...');
   const cacheManager = new CacheManager({
     maxEntries: 1000,
     defaultTtlMs: 300000, // 5 minutes for searches
     cleanupIntervalMs: 60000, // 1 minute
     enableCoalescing: true,
   });
-  logger.error('✓ Cache manager initialized');
+  logger.info('Cache manager initialized');
 
   // Create MCP server
   const server = new MCPServer(logger);
@@ -146,7 +146,7 @@ async function main() {
   const initResult = await server.initialize();
 
   if (!isOk(initResult)) {
-    logger.error('❌ Failed to initialize server:', initResult.error.message);
+    logger.error(`Failed to initialize server: ${initResult.error.message}`);
     cacheManager.shutdown();
     await connectionPool.shutdown();
     await connection.close();
@@ -162,7 +162,7 @@ async function main() {
   const transportResult = await transport.start();
 
   if (!isOk(transportResult)) {
-    logger.error('❌ Failed to start transport:', transportResult.error.message);
+    logger.error(`Failed to start transport: ${transportResult.error.message}`);
     cacheManager.shutdown();
     await connectionPool.shutdown();
     await connection.close();
@@ -173,37 +173,35 @@ async function main() {
   const startResult = await server.start();
 
   if (!isOk(startResult)) {
-    logger.error('❌ Failed to start server:', startResult.error.message);
+    logger.error(`Failed to start server: ${startResult.error.message}`);
     cacheManager.shutdown();
     await connectionPool.shutdown();
     await connection.close();
     process.exit(1);
   }
 
-  logger.error('✓ BC MCP Server ready');
+  logger.info('BC MCP Server ready');
 
   // Handle graceful shutdown
   process.on('SIGINT', async () => {
-    logger.error('');
-    logger.error('Received SIGINT, shutting down...');
+    logger.info('Received SIGINT, shutting down...');
     await transport.stop();
     await server.stop();
     cacheManager.shutdown();
     await connectionPool.shutdown();
     await connection.close();
-    logger.error('✓ Shutdown complete');
+    logger.info('Shutdown complete');
     process.exit(0);
   });
 
   process.on('SIGTERM', async () => {
-    logger.error('');
-    logger.error('Received SIGTERM, shutting down...');
+    logger.info('Received SIGTERM, shutting down...');
     await transport.stop();
     await server.stop();
     cacheManager.shutdown();
     await connectionPool.shutdown();
     await connection.close();
-    logger.error('✓ Shutdown complete');
+    logger.info('Shutdown complete');
     process.exit(0);
   });
 

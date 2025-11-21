@@ -127,7 +127,7 @@ export class ExecuteActionTool extends BaseMCPTool {
     }
 
     const connection = existing;
-    logger.info(`♻️  Reusing session from pageContext: ${actualSessionId}`);
+    logger.info(`Reusing session from pageContext: ${actualSessionId}`);
 
     // Get pageContext to access formId
     const pageContext = (connection as any).pageContexts?.get(pageContextId);
@@ -217,13 +217,13 @@ export class ExecuteActionTool extends BaseMCPTool {
       if (Array.isArray(event)) {
         accumulatedHandlers.push(...event);
         handlerCount++;
-        console.log(`[ExecuteAction] 📨 Received async handler batch #${handlerCount}: ${event.length} handlers (direct array)`);
-        logger.info(`📨 Received async handler batch #${handlerCount}: ${event.length} handlers`);
+        console.log(`[ExecuteAction] Received async handler batch #${handlerCount}: ${event.length} handlers (direct array)`);
+        logger.info(`Received async handler batch #${handlerCount}: ${event.length} handlers`);
       } else if (event.kind === 'RawHandlers') {
         accumulatedHandlers.push(...event.handlers);
         handlerCount++;
-        console.log(`[ExecuteAction] 📨 Received async handler batch #${handlerCount}: ${event.handlers.length} handlers (wrapped)`);
-        logger.info(`📨 Received async handler batch #${handlerCount}: ${event.handlers.length} handlers`);
+        console.log(`[ExecuteAction] Received async handler batch #${handlerCount}: ${event.handlers.length} handlers (wrapped)`);
+        logger.info(`Received async handler batch #${handlerCount}: ${event.handlers.length} handlers`);
       }
     });
 
@@ -234,20 +234,20 @@ export class ExecuteActionTool extends BaseMCPTool {
 
       if (isOk(invokeResult)) {
         const responseHandlers = invokeResult.value;
-        console.log(`[ExecuteAction] ✓ invoke() returned ${responseHandlers.length} handlers`);
-        logger.info(`✓ invoke() returned ${responseHandlers.length} handlers`);
+        console.log(`[ExecuteAction] invoke() returned ${responseHandlers.length} handlers`);
+        logger.info(`invoke() returned ${responseHandlers.length} handlers`);
         accumulatedHandlers.push(...responseHandlers);
       } else {
-        console.log(`[ExecuteAction] ⚠️  Invoke error: ${invokeResult.error.message}`);
-        logger.info(`⚠️  Invoke error: ${invokeResult.error.message}`);
+        console.log(`[ExecuteAction] Invoke error: ${invokeResult.error.message}`);
+        logger.info(`Invoke error: ${invokeResult.error.message}`);
       }
 
       // Also wait briefly for any additional async handlers
       console.log(`[ExecuteAction] Waiting ${ACCUMULATION_WINDOW_MS}ms for additional handlers...`);
       await new Promise((resolve) => setTimeout(resolve, ACCUMULATION_WINDOW_MS));
 
-      console.log(`[ExecuteAction] ✓ Accumulated ${accumulatedHandlers.length} total handlers from ${handlerCount} batches`);
-      logger.info(`✓ Action executed, accumulated ${accumulatedHandlers.length} total handlers from ${handlerCount} batches`);
+      console.log(`[ExecuteAction] Accumulated ${accumulatedHandlers.length} total handlers from ${handlerCount} batches`);
+      logger.info(`Action executed, accumulated ${accumulatedHandlers.length} total handlers from ${handlerCount} batches`);
     } finally {
       // Clean up listener
       console.log('[ExecuteAction] Cleaning up listener');
@@ -281,17 +281,17 @@ export class ExecuteActionTool extends BaseMCPTool {
       logger.info(`Setting needsRefresh flag on pageContext (exists: ${!!pageContext})`);
       if (pageContext) {
         pageContext.needsRefresh = true;
-        logger.info(`✓ Marked pageContext as needing refresh (needsRefresh=${pageContext.needsRefresh})`);
+        logger.info(`Marked pageContext as needing refresh (needsRefresh=${pageContext.needsRefresh})`);
       } else {
-        logger.info(`⚠️  pageContext is null/undefined, cannot set needsRefresh`);
+        logger.info(`pageContext is null/undefined, cannot set needsRefresh`);
       }
 
       // Also clear persistent cache (it stores stale data)
       const cache = PageContextCache.getInstance();
       await cache.delete(pageContextId);
-      logger.info(`✓ Invalidated persistent cache for pageContext: ${pageContextId}`);
+      logger.info(`Invalidated persistent cache for pageContext: ${pageContextId}`);
     } catch (cacheError) {
-      logger.info(`⚠️ Failed to invalidate cache: ${cacheError}`);
+      logger.info(`Failed to invalidate cache: ${cacheError}`);
       // Non-fatal - continue with success
     }
 

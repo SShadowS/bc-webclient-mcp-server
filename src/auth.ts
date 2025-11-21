@@ -57,7 +57,7 @@ export class BCAuth {
         throw new Error('No access token received');
       }
 
-      logger.info('✓ Authentication successful');
+      logger.info('Authentication successful');
       logger.info(`  User: ${response.account?.username || 'Unknown'}`);
       logger.info(`  Token expires: ${response.expiresOn?.toLocaleString() || 'Unknown'}\n`);
 
@@ -88,7 +88,7 @@ export class BCAuth {
         throw new Error('No access token received');
       }
 
-      logger.info('✓ Authentication successful');
+      logger.info('Authentication successful');
       return response.accessToken;
     } catch (error) {
       if (error instanceof Error) {

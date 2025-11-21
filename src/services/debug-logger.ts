@@ -85,7 +85,7 @@ class DebugLogger {
       // Create log directory
       console.error(`[DebugLogger] Creating log directory: ${resolvedLogDir}`);
       await fs.mkdir(resolvedLogDir, { recursive: true });
-      console.error(`[DebugLogger] ✓ Log directory created/verified`);
+      console.error(`[DebugLogger] Log directory created/verified`);
 
       // Open log files for each enabled channel
       for (const channel of config.debug.channels) {
@@ -96,21 +96,21 @@ class DebugLogger {
 
         const handle = await fs.open(logPath, 'a');
         this.logStreams.set(channel, handle);
-        console.error(`[DebugLogger] ✓ File handle opened for ${channel}`);
+        console.error(`[DebugLogger] File handle opened for ${channel}`);
 
         // Get current file size
         const stats = await handle.stat();
         this.logSizes.set(channel, stats.size);
-        console.error(`[DebugLogger] ✓ Current size for ${channel}: ${stats.size} bytes`);
+        console.error(`[DebugLogger] Current size for ${channel}: ${stats.size} bytes`);
 
         // Write session header immediately (creates placeholder)
         await this.writeHeader(channel, handle);
-        console.error(`[DebugLogger] ✓ Session header written for ${channel}`);
+        console.error(`[DebugLogger] Session header written for ${channel}`);
       }
 
       this.initialized = true;
 
-      console.error(`[DebugLogger] ✓✓✓ Debug logging fully initialized ✓✓✓`);
+      console.error(`[DebugLogger] Debug logging fully initialized`);
       console.error(`[DebugLogger] Files created in: ${resolvedLogDir}`);
 
       logger.info({
@@ -119,7 +119,7 @@ class DebugLogger {
       }, 'Debug logging initialized');
     } catch (error) {
       // 🐛 VERBOSE: Log error details to stderr
-      console.error('[DebugLogger] ✗✗✗ INITIALIZATION FAILED ✗✗✗');
+      console.error('[DebugLogger] INITIALIZATION FAILED');
       console.error('[DebugLogger] Error details:', error);
       logger.error({ error }, 'Failed to initialize debug logging');
       throw error;
@@ -235,17 +235,17 @@ class DebugLogger {
         const footer = `\n${'='.repeat(80)}\nDebug Session Ended: ${new Date().toISOString()}\n${'='.repeat(80)}\n\n`;
         await handle.write(footer);
         await handle.close();
-        console.error(`[DebugLogger] ✓ Closed ${channel}.log`);
+        console.error(`[DebugLogger] Closed ${channel}.log`);
       }
 
       this.logStreams.clear();
       this.logSizes.clear();
       this.initialized = false;
 
-      console.error('[DebugLogger] ✓ Debug logging shut down successfully');
+      console.error('[DebugLogger] Debug logging shut down successfully');
       logger.info('Debug logging shut down');
     } catch (error) {
-      console.error('[DebugLogger] ✗ Shutdown error:', error);
+      console.error('[DebugLogger] Shutdown error:', error);
       logger.error({ error }, 'Failed to shutdown debug logging');
     }
   }

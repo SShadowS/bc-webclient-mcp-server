@@ -210,4 +210,6 @@ async function runPhase3Tests() {
 }
 
 // Run if executed directly
-runPhase3Tests();
+runPhase3Tests().then(stats => {
+  process.exit(stats.failed > 0 ? 1 : 0);
+});

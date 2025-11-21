@@ -120,6 +120,7 @@ export class ControlParser implements IControlParser {
       caption: control.Caption ? String(control.Caption) : undefined,
       name: control.DesignName ? String(control.DesignName) : (control.Name ? String(control.Name) : undefined),
       controlId: control.ControlIdentifier ? String(control.ControlIdentifier) : undefined,
+      controlPath: (control as any).controlPath,  // CRITICAL: needed for cache updates in write_page_data
       enabled: (control.Enabled ?? true) as boolean,
       visible: (control.Visible ?? true) as boolean,
     };
@@ -182,7 +183,7 @@ export class ControlWalker implements IControlWalker {
    * Recursively walks a control and its children.
    * Also walks special action arrays: HeaderActions (/ha[N]) and Actions (/a[N]).
    *
-   * ⚠️ CRITICAL: Walk HeaderActions/Actions BEFORE Children
+   * CRITICAL: Walk HeaderActions/Actions BEFORE Children
    * BC puts canonical action controls in HeaderActions/Actions arrays.
    * The same actions may also appear in Children (for UI layout), but those
    * paths don't trigger navigation. We must find HeaderActions/Actions first.
@@ -200,7 +201,7 @@ export class ControlWalker implements IControlWalker {
       return;
     }
 
-    // ⚠️ WALK ACTIONS FIRST (before Children)
+    // WALK ACTIONS FIRST (before Children)
     // HeaderActions/Actions contain canonical control paths that BC expects.
     // Children may contain duplicate actions with wrong paths.
 

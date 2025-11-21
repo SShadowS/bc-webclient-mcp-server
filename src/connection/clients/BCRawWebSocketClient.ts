@@ -2,12 +2,12 @@
  * BC Raw WebSocket Client (Week 2 Refactored)
  *
  * This is the transitional state after Week 2 refactoring:
- * ✅ Uses BCAuthenticationService (extracted)
- * ✅ Uses BCHandlerEventEmitter (extracted)
- * ✅ Uses BCProtocolAdapter (extracted)
- * ⏳ Still contains WebSocket management (Week 3 will extract)
- * ⏳ Still contains session management (Week 4 will extract)
- * ⏳ Still contains filter cache (Week 4 will extract)
+ * Uses BCAuthenticationService (extracted)
+ * Uses BCHandlerEventEmitter (extracted)
+ * Uses BCProtocolAdapter (extracted)
+ * Still contains WebSocket management (Week 3 will extract)
+ * Still contains session management (Week 4 will extract)
+ * Still contains filter cache (Week 4 will extract)
  *
  * After Week 4, this will become a thin facade (< 200 lines).
  */
@@ -34,8 +34,8 @@ import type { HandlerEvent, BCHandler } from '../interfaces.js';
  * BC Raw WebSocket Client
  *
  * Week 3 refactored version - delegates WebSocket management too.
- * - Week 2: Extracted auth, events, protocol ✅
- * - Week 3: Extracted WebSocket management ✅
+ * - Week 2: Extracted auth, events, protocol
+ * - Week 3: Extracted WebSocket management
  * - Week 4: Will extract session & filter cache
  */
 export class BCRawWebSocketClient {
@@ -336,7 +336,7 @@ export class BCRawWebSocketClient {
       this.openFormIds = [this.roleCenterFormId!]; // Non-null assertion safe here (checked in if condition)
     }
 
-    logger.info('✓ BC session opened\n');
+    logger.info('BC session opened\n');
   }
 
   /**
@@ -516,7 +516,7 @@ export class BCRawWebSocketClient {
     if (fieldCount > 0) {
       this.filterMetadataCache.set(formId, formCache);
       logger.info(
-        `  ✓ Cached ${fieldCount} filterable field(s) for form ${formId}`
+        `  Cached ${fieldCount} filterable field(s) for form ${formId}`
       );
     }
 
@@ -605,7 +605,7 @@ export class BCRawWebSocketClient {
       signal: params.signal,
     });
 
-    logger.info(`✓ Filter applied`);
+    logger.info(`Filter applied`);
 
     return { success: true };
   }

@@ -46,23 +46,23 @@ export class PageMetadataParser implements IPageMetadataParser {
    */
   public parse(handlers: readonly Handler[]): Result<PageMetadata, BCError> {
     // DEBUG: Log ALL handler types to understand what BC is sending
-    logger.error({ count: handlers.length }, '[PageMetadataParser] ═══ Received handlers ═══');
+    logger.debug({ count: handlers.length }, '[PageMetadataParser] Received handlers');
     handlers.forEach((h, i) => {
-      logger.error(`[PageMetadataParser]   Handler ${i}: ${h.handlerType}`);
+      logger.debug(`[PageMetadataParser]   Handler ${i}: ${h.handlerType}`);
       if (h.handlerType === 'DN.LogicalClientEventRaisingHandler') {
         const eventHandler = h as LogicalClientEventRaisingHandler;
-        logger.error(`[PageMetadataParser]     Event: ${eventHandler.parameters?.[0]}`);
+        logger.debug(`[PageMetadataParser]     Event: ${eventHandler.parameters?.[0]}`);
       }
     });
 
     // Extract formId from CallbackResponseProperties (identifies which form was opened)
     const formId = this.handlerParser.extractFormId(handlers);
-    logger.error({ formId }, '[PageMetadataParser] Extracted formId');
+    logger.debug({ formId }, '[PageMetadataParser] Extracted formId');
 
     // Extract LogicalForm from FormToShow event (filtered by formId to get correct page)
     const logicalFormResult = this.handlerParser.extractLogicalForm(handlers, formId);
     if (logicalFormResult.ok) {
-      logger.error({ ServerId: logicalFormResult.value.ServerId, Caption: logicalFormResult.value.Caption }, '[PageMetadataParser] Selected form');
+      logger.debug({ ServerId: logicalFormResult.value.ServerId, Caption: logicalFormResult.value.Caption }, '[PageMetadataParser] Selected form');
     }
 
     // Chain parsing operations using Result's andThen

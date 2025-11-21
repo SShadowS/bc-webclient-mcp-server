@@ -192,4 +192,6 @@ async function runPhase1Tests() {
 }
 
 // Run if executed directly
-runPhase1Tests();
+runPhase1Tests().then(stats => {
+  process.exit(stats.failed > 0 ? 1 : 0);
+});

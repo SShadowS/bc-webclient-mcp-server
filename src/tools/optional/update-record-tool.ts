@@ -193,7 +193,7 @@ export class UpdateRecordTool extends BaseMCPTool {
         }
 
         pageContextId = (metadataResult.value as GetPageMetadataOutput).pageContextId;
-        logger.info(`✓ Page opened with context: ${pageContextId}`);
+        logger.info(`Page opened with context: ${pageContextId}`);
       }
 
       // Step 2: Execute Edit action if autoEdit is enabled
@@ -206,10 +206,10 @@ export class UpdateRecordTool extends BaseMCPTool {
         });
 
         if (!isOk(editResult)) {
-          logger.info(`⚠️  Edit action failed: ${editResult.error.message}`);
+          logger.info(`Edit action failed: ${editResult.error.message}`);
           // Don't fail - page might already be in edit mode
         } else {
-          logger.info(`✓ Edit mode activated`);
+          logger.info(`Edit mode activated`);
         }
       }
 
@@ -229,7 +229,7 @@ export class UpdateRecordTool extends BaseMCPTool {
       }
 
       const writeOutput = writeResult.value as WritePageDataOutput;
-      logger.info(`✓ Fields updated: ${writeOutput.updatedFields?.length || 0} succeeded, ${writeOutput.failedFields?.length || 0} failed`);
+      logger.info(`Fields updated: ${writeOutput.updatedFields?.length || 0} succeeded, ${writeOutput.failedFields?.length || 0} failed`);
 
       // Step 4: Execute Save action if save is enabled and any fields were updated
       let saved = false;
@@ -243,15 +243,15 @@ export class UpdateRecordTool extends BaseMCPTool {
         });
 
         if (!isOk(saveResult)) {
-          logger.info(`⚠️  Save action failed: ${saveResult.error.message}`);
+          logger.info(`Save action failed: ${saveResult.error.message}`);
           // Don't fail completely - fields were updated
         } else {
           saved = true;
-          logger.info(`✓ Changes saved`);
+          logger.info(`Changes saved`);
         }
       }
 
-      logger.info(`✓ Record update completed`);
+      logger.info(`Record update completed`);
 
       const finalPageId = pageId || pageContextId.split(':')[2];
       return ok({
