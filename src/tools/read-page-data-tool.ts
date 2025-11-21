@@ -438,19 +438,34 @@ export class ReadPageDataTool extends BaseMCPTool {
     // Check if page needs refresh (e.g., after execute_action changed state)
     const needsRefresh = pageContext?.needsRefresh === true;
 
-    // Use cached handlers if available AND not stale (avoids RefreshForm which can cause errors)
+    // Validate that cached handlers contain actual data (not just metadata)
+    const hasDataHandlers = Array.isArray(cachedHandlers) && cachedHandlers.some((h: any) =>
+      h.handlerType === 'DN.LogicalClientChangeHandler' && Array.isArray(h.parameters?.[1]) &&
+      h.parameters[1].some((c: any) =>
+        ((c.t === 'DataRefreshChange' || c.t === 'InitializeChange') &&
+         Array.isArray(c.RowChanges) && c.RowChanges.length > 0) ||
+        (c.t === 'PropertyChanges' && c.Changes && (
+          c.Changes.StringValue !== undefined ||
+          c.Changes.ObjectValue !== undefined ||
+          c.Changes.DecimalValue !== undefined
+        ))
+      )
+    );
+
+    // Use cached handlers if available, not stale, AND contains actual data
     // get_page_metadata now calls LoadForm and caches all handlers including async data
-    if (cachedHandlers && cachedHandlers.length > 0 && !needsRefresh) {
-      logger.info(`✓ Using ${cachedHandlers.length} cached handlers from get_page_metadata (includes LoadForm data)`);
+    if (cachedHandlers && cachedHandlers.length > 0 && !needsRefresh && hasDataHandlers) {
+      logger.info(`✓ Using ${cachedHandlers.length} cached handlers (includes data changes)`);
       handlers = cachedHandlers;
-    } else if (needsRefresh) {
-      // After action execution, we need fresh data - call LoadForm
-      logger.info(`🔄 Page marked as needing refresh, calling LoadForm for fresh data...`);
+    } else if (needsRefresh || (cachedHandlers && !hasDataHandlers)) {
+      // After action execution OR cached handlers lack data - call LoadForm
+      logger.info(`🔄 ${needsRefresh ? 'Page needs refresh' : 'Cached handlers missing data'}, calling LoadForm...`);
       const mainFormId = formIds[0];
       const loadFormResult = await connection.invoke({
         interactionName: 'LoadForm',
         formId: mainFormId,
         controlPath: `server:`,
+        callbackId: '0',
         namedParameters: { loadData: true },
       });
 
@@ -601,12 +616,21 @@ export class ReadPageDataTool extends BaseMCPTool {
         const { records, totalCount } = syncExtractionResult.value;
         logger.info(`Extracted ${totalCount} records from list page (synchronous)`);
 
+        // Flatten records: {bookmark, fields: {name: FieldValue}} -> {bookmark, name: value}
+        const flatRecords = records.map(r => {
+          const flatFields: Record<string, any> = {};
+          for (const [name, fieldValue] of Object.entries(r.fields)) {
+            flatFields[name] = fieldValue.value;
+          }
+          return { bookmark: r.bookmark, ...flatFields };
+        });
+
         return ok({
           pageId: String(pageId),
           pageContextId,
           caption,
           pageType: 'List',
-          records,
+          records: flatRecords,
           totalCount,
         });
       }
@@ -667,12 +691,21 @@ export class ReadPageDataTool extends BaseMCPTool {
           const { records, totalCount } = asyncExtractionResult.value;
           logger.info(`Extracted ${totalCount} records from list page (asynchronous)`);
 
+          // Flatten records: {bookmark, fields: {name: FieldValue}} -> {bookmark, name: value}
+          const flatRecords = records.map(r => {
+            const flatFields: Record<string, any> = {};
+            for (const [name, fieldValue] of Object.entries(r.fields)) {
+              flatFields[name] = fieldValue.value;
+            }
+            return { bookmark: r.bookmark, ...flatFields };
+          });
+
           return ok({
             pageId: String(pageId),
             pageContextId,
             caption,
             pageType: 'List',
-            records,
+            records: flatRecords,
             totalCount,
           });
         } catch (error) {
@@ -695,7 +728,10 @@ export class ReadPageDataTool extends BaseMCPTool {
       // Card page - data is directly in LogicalForm
       logger.info(`Extracting card page data...`);
 
-      const extractionResult = this.dataExtractor.extractCardPageData(logicalForm, handlers);
+      // Apply PropertyChanges from handlers to logicalForm before extraction
+      const { updatedForm } = this.dataExtractor.applyPropertyChangesToLogicalForm(logicalForm, handlers);
+
+      const extractionResult = this.dataExtractor.extractCardPageData(updatedForm, handlers);
 
       if (!isOk(extractionResult)) {
         return extractionResult as Result<never, BCError>;
@@ -705,12 +741,21 @@ export class ReadPageDataTool extends BaseMCPTool {
 
       logger.info(`Extracted ${Object.keys(records[0]?.fields || {}).length} fields from card page`);
 
+      // Flatten records: {bookmark, fields: {name: FieldValue}} -> {bookmark, name: value}
+      const flatRecords = records.map(r => {
+        const flatFields: Record<string, any> = {};
+        for (const [name, fieldValue] of Object.entries(r.fields)) {
+          flatFields[name] = fieldValue.value;
+        }
+        return { bookmark: r.bookmark, ...flatFields };
+      });
+
       return ok({
         pageId: String(pageId),
         pageContextId,
         caption,
         pageType: 'Card',
-        records,
+        records: flatRecords,
         totalCount,
       });
     }
