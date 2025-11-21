@@ -220,6 +220,8 @@ export const ExecuteActionInputSchema = z.object({
   pageContextId: PageContextIdSchema,
   actionName: ActionNameSchema,
   controlPath: z.string().trim().optional(),
+  systemAction: z.number().optional(),
+  key: z.string().trim().optional(), // Record bookmark for row-specific actions
 });
 
 export type ExecuteActionInput = z.infer<typeof ExecuteActionInputSchema>;

@@ -40,6 +40,7 @@ import { PageIdSchema, PageContextIdSchema } from '../validation/schemas.js';
 const GetPageMetadataInputZodSchema = z.object({
   pageId: PageIdSchema.optional(),
   pageContextId: PageContextIdSchema.optional(),
+  filters: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
 }).refine(
   (data) => data.pageId !== undefined || data.pageContextId !== undefined,
   {
@@ -82,6 +83,14 @@ export class GetPageMetadataTool extends BaseMCPTool {
         type: 'string',
         description: 'Existing page context ID to retrieve cached metadata (from drill-down or previous get_page_metadata)',
       },
+      filters: {
+        type: 'object',
+        description: 'Optional filters to open a specific record (e.g., {"No.": "10000"} for Customer 10000). ' +
+          'For Document pages like Sales Orders, use {"No.": "101001"} to open that specific order.',
+        additionalProperties: {
+          type: ['string', 'number'],
+        },
+      },
     },
     // At least one of pageId or pageContextId is required
   };
@@ -110,7 +119,10 @@ export class GetPageMetadataTool extends BaseMCPTool {
    */
   protected async executeInternal(input: unknown): Promise<Result<GetPageMetadataOutput, BCError>> {
     // Input is already validated by BaseMCPTool with Zod
-    let { pageId, pageContextId: inputPageContextId } = input as GetPageMetadataInputValidated;
+    let { pageId, pageContextId: inputPageContextId, filters } = input as GetPageMetadataInputValidated;
+
+    // Track existing formIds from pageContext to preserve them (avoid overwriting with getAllOpenFormIds)
+    let existingFormIds: string[] | null = null;
 
     // If pageId not provided but pageContextId is, extract pageId from pageContextId
     // Format: sessionId:page:pageId:timestamp
@@ -265,6 +277,13 @@ export class GetPageMetadataTool extends BaseMCPTool {
         }
 
         if (pageContext) {
+          // CRITICAL: Preserve existing formIds to avoid overwriting with getAllOpenFormIds()
+          // This prevents execute_action from using wrong formId after drill-down
+          if (Array.isArray(pageContext.formIds) && pageContext.formIds.length > 0) {
+            existingFormIds = pageContext.formIds;
+            logger.info(`📋 Preserving existing formIds from pageContext: ${JSON.stringify(existingFormIds)}`);
+          }
+
           // Reuse cached handlers + metadata
           const cachedHandlers = pageContext.handlers as Handler[] | undefined;
           if (cachedHandlers && cachedHandlers.length > 0) {
@@ -318,7 +337,20 @@ export class GetPageMetadataTool extends BaseMCPTool {
 
     // Step 1: OpenForm to create shell/container form with complete parameters
     // BC expects namedParameters as JSON string with a "query" property containing URL-encoded parameters
-    const queryString = `tenant=${encodeURIComponent(tenant)}&company=${encodeURIComponent(company)}&page=${String(pageId)}&runinframe=1&dc=${String(dc)}&startTraceId=${startTraceId}&bookmark=`;
+
+    // Build filter parameters for the URL
+    // BC URL filter format uses individual field=value parameters, not a "filter" parameter
+    let filterParams = '';
+    if (filters && Object.keys(filters).length > 0) {
+      const filterParts = Object.entries(filters).map(([field, value]) => {
+        // BC URL format: field=value (URL encoded)
+        return `${encodeURIComponent(field)}=${encodeURIComponent(String(value))}`;
+      });
+      filterParams = '&' + filterParts.join('&');
+      logger.info(`📋 Applying filters: ${filterParams}`);
+    }
+
+    const queryString = `tenant=${encodeURIComponent(tenant)}&company=${encodeURIComponent(company)}&page=${String(pageId)}&runinframe=1&dc=${String(dc)}&startTraceId=${startTraceId}${filterParams}&bookmark=`;
 
     logger.info(`📝 OpenForm query string: ${queryString}`);
 
@@ -445,7 +477,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
     const pageContextData = {
       sessionId: actualSessionId,
       pageId: metadata.pageId,
-      formIds: connection.getAllOpenFormIds(),
+      formIds: existingFormIds || connection.getAllOpenFormIds(),
       openedAt: Date.now(),
       pageType, // Cache page type
       logicalForm, // Cache LogicalForm for read_page_data
@@ -489,6 +521,8 @@ export class GetPageMetadataTool extends BaseMCPTool {
         caption: action.caption ?? 'No caption',
         enabled: action.enabled,
         description: action.synopsis,
+        controlPath: action.controlPath, // Required for InvokeAction
+        systemAction: action.systemAction, // BC numeric action code
       })),
     };
 

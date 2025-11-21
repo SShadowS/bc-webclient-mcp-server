@@ -136,10 +136,24 @@ export class ControlParser implements IControlParser {
 
     const iconId = (control as { Icon?: { Identifier?: string } }).Icon?.Identifier;
     const synopsis = (control as { Synopsis?: string }).Synopsis;
+    // SystemAction can be directly on control OR in ActionReference.TargetId
+    let systemAction = (control as { SystemAction?: number }).SystemAction;
+    const actionRef = (control as any).ActionReference;
+    if (systemAction === undefined && actionRef?.TargetId !== undefined) {
+      systemAction = actionRef.TargetId;
+    }
+
+    // Debug: Log action with SystemAction to understand the data
+    // Note: Real Release action has Caption "Re&lease" (with &)
+    const caption = String(control.Caption);
+    if (caption.toLowerCase().replace(/&/g, '').includes('release')) {
+      console.log(`[ControlParser] Found Release action: type=${control.t}, Caption=${caption}, SystemAction=${systemAction}, controlPath=${control.controlPath}`);
+      if (actionRef) console.log(`[ControlParser] ActionReference: ${JSON.stringify(actionRef)}`);
+    }
 
     return {
       caption: String(control.Caption),
-      systemAction: (control as { SystemAction?: number }).SystemAction,
+      systemAction,
       enabled: (control.Enabled ?? true) as boolean,
       controlId: control.ControlIdentifier ? String(control.ControlIdentifier) : undefined,
       icon: iconId ? String(iconId) : undefined,
@@ -190,12 +204,15 @@ export class ControlWalker implements IControlWalker {
     // HeaderActions/Actions contain canonical control paths that BC expects.
     // Children may contain duplicate actions with wrong paths.
 
+    // BC path format: server:c[0]/c[1]/c[2] - colon after "server", slashes for rest
+    const separator = currentPath === 'server' ? ':' : '/';
+
     // Walk HeaderActions array (e.g., Edit, View, Delete actions)
     // BC uses /ha[N] notation for these
     const headerActions = (control as any).HeaderActions;
     if (headerActions && Array.isArray(headerActions)) {
       for (let i = 0; i < headerActions.length; i++) {
-        const actionPath = `${currentPath}/ha[${i}]`;
+        const actionPath = `${currentPath}${separator}ha[${i}]`;
         this.walkControl(headerActions[i], visitor, depth + 1, actionPath);
       }
     }
@@ -205,15 +222,16 @@ export class ControlWalker implements IControlWalker {
     const actions = (control as any).Actions;
     if (actions && Array.isArray(actions)) {
       for (let i = 0; i < actions.length; i++) {
-        const actionPath = `${currentPath}/a[${i}]`;
+        const actionPath = `${currentPath}${separator}a[${i}]`;
         this.walkControl(actions[i], visitor, depth + 1, actionPath);
       }
     }
 
     // Walk children LAST (after HeaderActions/Actions)
+    // BC expects paths like server:c[0]/c[1]/c[2] - colon after server, slashes for nested
     if (control.Children && Array.isArray(control.Children)) {
       for (let i = 0; i < control.Children.length; i++) {
-        const childPath = `${currentPath}:c[${i}]`;
+        const childPath = `${currentPath}${separator}c[${i}]`;
         this.walkControl(control.Children[i], visitor, depth + 1, childPath);
       }
     }
@@ -224,18 +242,19 @@ export class ControlWalker implements IControlWalker {
  * Visitor that collects controls of a specific type.
  */
 export class TypeFilterVisitor implements IControlVisitor {
-  private readonly controls: Control[] = [];
+  private readonly controls: (Control & { controlPath?: string })[] = [];
 
   public constructor(private readonly types: readonly ControlType[]) {}
 
-  public visit(control: Control, _depth?: number, _path?: string): boolean {
+  public visit(control: Control, _depth?: number, path?: string): boolean {
     if (this.types.includes(control.t as ControlType)) {
-      this.controls.push(control);
+      // Attach the controlPath to the control so it can be used later
+      this.controls.push({ ...control, controlPath: path });
     }
     return true; // Continue visiting
   }
 
-  public getControls(): readonly Control[] {
+  public getControls(): readonly (Control & { controlPath?: string })[] {
     return this.controls;
   }
 }

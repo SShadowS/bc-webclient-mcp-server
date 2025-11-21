@@ -176,6 +176,11 @@ export class BCPageConnection implements IBCConnection {
         if (formId && this.currentPageId) {
           this.openForms.set(this.currentPageId, formId);
           logger.error(`[BCPageConnection] 📝 Tracking form: Page ${this.currentPageId} → formId ${formId}`);
+          // CRITICAL: Add form to openFormIds so BC actions work on this form
+          const rawClient = this.getRawClient();
+          if (rawClient) {
+            rawClient.addOpenForm(formId);
+          }
         }
       }
 

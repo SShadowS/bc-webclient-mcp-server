@@ -427,8 +427,12 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
 
     // Step 5.5: Load child forms to get record data (same pattern as get_page_metadata)
     // BC sends FormToShow for navigation, but the actual record data comes in LoadForm responses
+    // Also extract shellFormId for use in targetPageContext.formIds
+    let targetShellFormId: string | null = null;
     try {
-      const { childFormIds } = extractServerIds(allNavigationHandlers);
+      const { shellFormId, childFormIds } = extractServerIds(allNavigationHandlers);
+      targetShellFormId = shellFormId; // Save for pageContext formIds
+      logger.info(`📋 Extracted shellFormId for target page: ${shellFormId}`);
       const formsToLoad = filterFormsToLoad(childFormIds);
 
       if (formsToLoad.length > 0) {
@@ -508,10 +512,14 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
     const targetLogicalForm = this.extractLogicalFormFromHandlers(dataToProcess);
 
     // Prepare target page context data
+    // CRITICAL: Use only the target page's formId, not all open forms!
+    // Using getAllOpenFormIds() was causing execute_action to use wrong formId
+    const targetFormIds = targetShellFormId ? [targetShellFormId] : connection.getAllOpenFormIds();
+    logger.info(`📋 Creating pageContext with formIds: ${JSON.stringify(targetFormIds)} (shellFormId=${targetShellFormId})`);
     const targetPageContextData = {
       sessionId: actualSessionId,
       pageId: targetPageId,
-      formIds: connection.getAllOpenFormIds(),
+      formIds: targetFormIds,
       openedAt: Date.now(),
       pageType: targetPageType as 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report',
       logicalForm: targetLogicalForm,

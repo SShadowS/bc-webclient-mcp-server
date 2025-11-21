@@ -337,14 +337,30 @@ export class BCRawWebSocketClient {
     }
 
     logger.info('✓ BC session opened\n');
+  }
 
-    // Return user settings (for compatibility)
-    return {
-      serverSessionId: this.serverSessionId || '',
-      sessionKey: this.sessionKey || '',
-      companyName: this.companyName || '',
-      roleCenterFormId: this.roleCenterFormId || '',
-    };
+  /**
+   * Add a form to the openFormIds list.
+   * Must be called when a new form is opened (FormToShow event).
+   * BC requires ALL open forms to be listed in openFormIds for actions to work.
+   */
+  addOpenForm(formId: string): void {
+    if (!this.openFormIds.includes(formId)) {
+      this.openFormIds.push(formId);
+      logger.info(`[BCRawWebSocketClient] Added form ${formId} to openFormIds: ${JSON.stringify(this.openFormIds)}`);
+    }
+  }
+
+  /**
+   * Remove a form from the openFormIds list.
+   * Should be called when a form is closed.
+   */
+  removeOpenForm(formId: string): void {
+    const index = this.openFormIds.indexOf(formId);
+    if (index !== -1) {
+      this.openFormIds.splice(index, 1);
+      logger.info(`[BCRawWebSocketClient] Removed form ${formId} from openFormIds: ${JSON.stringify(this.openFormIds)}`);
+    }
   }
 
   /**

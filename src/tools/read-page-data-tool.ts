@@ -435,11 +435,38 @@ export class ReadPageDataTool extends BaseMCPTool {
 
     let handlers: readonly unknown[];
 
-    // Use cached handlers if available (avoids RefreshForm which can cause errors)
+    // Check if page needs refresh (e.g., after execute_action changed state)
+    const needsRefresh = pageContext?.needsRefresh === true;
+
+    // Use cached handlers if available AND not stale (avoids RefreshForm which can cause errors)
     // get_page_metadata now calls LoadForm and caches all handlers including async data
-    if (cachedHandlers && cachedHandlers.length > 0) {
+    if (cachedHandlers && cachedHandlers.length > 0 && !needsRefresh) {
       logger.info(`✓ Using ${cachedHandlers.length} cached handlers from get_page_metadata (includes LoadForm data)`);
       handlers = cachedHandlers;
+    } else if (needsRefresh) {
+      // After action execution, we need fresh data - call LoadForm
+      logger.info(`🔄 Page marked as needing refresh, calling LoadForm for fresh data...`);
+      const mainFormId = formIds[0];
+      const loadFormResult = await connection.invoke({
+        interactionName: 'LoadForm',
+        formId: mainFormId,
+        controlPath: `server:`,
+        namedParameters: { loadData: true },
+      });
+
+      if (isOk(loadFormResult)) {
+        logger.info(`✓ LoadForm returned ${loadFormResult.value.length} handlers`);
+        handlers = loadFormResult.value;
+        // Update cached handlers and clear refresh flag
+        if (pageContext) {
+          pageContext.handlers = handlers as any;
+          pageContext.needsRefresh = false;
+          logger.info(`✓ Updated cached handlers and cleared refresh flag`);
+        }
+      } else {
+        logger.info(`⚠️  LoadForm failed, using stale cached handlers: ${loadFormResult.error.message}`);
+        handlers = cachedHandlers || [];
+      }
     } else {
       // Legacy fallback: Call RefreshForm to get current data
       logger.info(`⚠️  No cached handlers, falling back to RefreshForm`);

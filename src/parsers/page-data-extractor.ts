@@ -262,6 +262,28 @@ export class PageDataExtractor {
         logger.info(`📝 First 5 columnMappings: ${JSON.stringify(first5).substring(0, 200)}`);
       }
 
+      // Build controlId → semanticName map for Card pages (prefer Table/Column metadata)
+      // This prevents Status values from appearing under "Your Reference" or other caption-based keys
+      const controlIdToName = new Map<string, string>();
+
+      // 1) From fieldMetadata (DesignName/Name ↔ ControlIdentifier)
+      for (const [semanticName, meta] of fieldMetadata.entries()) {
+        if (meta.controlId) {
+          controlIdToName.set(String(meta.controlId), semanticName);
+        }
+      }
+
+      // 2) From ColumnBinder-based mappings (runtimeId ↔ controlId)
+      if (columnMappings && columnMappings.size > 0) {
+        for (const mapping of columnMappings.values()) {
+          if (mapping.controlId != null) {
+            controlIdToName.set(String(mapping.controlId), mapping.semanticName);
+          }
+        }
+      }
+
+      logger.info(`📝 controlIdToName (Card) size: ${controlIdToName.size}`);
+
       // Card pages use PropertyChanges for field data (not DataRowUpdated)
       // DataRowUpdated is only for child list controls within Card pages
       logger.info('📊 Extracting Card data using PropertyChanges pattern');
@@ -280,38 +302,76 @@ export class PageDataExtractor {
 
       // Walk control tree and extract field values from field controls only
       const fieldEncounters = new Map<string, number>();  // Track duplicate field names
-      this.walkControls(effectiveForm, (control) => {
+      this.walkControls(effectiveForm, (control: any) => {
         if (this.isFieldControl(control.t as ControlType)) {
-          const fieldName = this.getFieldName(control);
-          if (fieldName) {
-            const fieldValue = this.extractFieldValueFromControl(control);
-            if (fieldValue !== null) {
-              // Track if we're overwriting a field
-              const encounterCount = (fieldEncounters.get(fieldName) || 0) + 1;
-              fieldEncounters.set(fieldName, encounterCount);
+          // Derive a stable control ID (BC tends to use ControlIdentifier or ControlId/ControlID)
+          const controlId =
+            control.ControlIdentifier != null
+              ? String(control.ControlIdentifier)
+              : control.ControlId != null
+              ? String(control.ControlId)
+              : control.ControlID != null
+              ? String(control.ControlID)
+              : undefined;
 
-              // Handle duplicate field names: Don't overwrite non-empty value with empty value
-              const existingValue = fields[fieldName];
-              const newValueIsEmpty = fieldValue.value === null || fieldValue.value === '' || fieldValue.value === undefined;
-              const existingValueIsNotEmpty = existingValue && existingValue.value !== null && existingValue.value !== '' && existingValue.value !== undefined;
+          let fieldName: string | null = null;
 
-              if (encounterCount > 1) {
-                if (existingValueIsNotEmpty && newValueIsEmpty) {
-                  logger.debug(`⏭️  Field "${fieldName}" encountered ${encounterCount} times - SKIPPING empty value (keeping existing non-empty value)`);
-                  return;  // Skip this control, keep existing value
-                } else {
-                  logger.warn(`⚠️  Field "${fieldName}" encountered ${encounterCount} times! Previous value will be overwritten.`);
-                  logger.warn(`   Previous value: ${JSON.stringify(existingValue?.value)}, New value: ${JSON.stringify(fieldValue.value)}`);
-                }
-              }
+          // 1) Prefer semantic name from controlId→name mapping when available
+          if (controlId && controlIdToName.has(controlId)) {
+            fieldName = controlIdToName.get(controlId)!;
+          } else {
+            // 2) Fallback to heuristic name resolution
+            fieldName = this.getFieldName(control);
+          }
 
-              fields[fieldName] = fieldValue;
+          if (!fieldName) {
+            return;
+          }
+
+          const fieldValue = this.extractFieldValueFromControl(control);
+          if (fieldValue === null) {
+            return;
+          }
+
+          // Debug: Log when we find "ÅBEN" to track Status field
+          if (fieldValue.value === 'ÅBEN' || String(fieldValue.value).includes('ÅBEN')) {
+            logger.info(
+              `🔎 Status candidate control found in extractCardPageData: ` +
+              `t=${control.t}, DesignName=${control.DesignName}, Name=${control.Name}, Caption=${control.Caption}, ` +
+              `controlId=${control.ControlIdentifier ?? control.ControlId ?? control.ControlID}, ` +
+              `resolvedFieldName=${fieldName}`
+            );
+          }
+
+          // Track if we're overwriting a field
+          const encounterCount = (fieldEncounters.get(fieldName) || 0) + 1;
+          fieldEncounters.set(fieldName, encounterCount);
+
+          // Handle duplicate field names: Don't overwrite non-empty value with empty value
+          const existingValue = fields[fieldName];
+          const newValueIsEmpty = fieldValue.value === null || fieldValue.value === '' || fieldValue.value === undefined;
+          const existingValueIsNotEmpty = existingValue && existingValue.value !== null && existingValue.value !== '' && existingValue.value !== undefined;
+
+          if (encounterCount > 1) {
+            if (existingValueIsNotEmpty && newValueIsEmpty) {
+              logger.debug(`⏭️  Field "${fieldName}" encountered ${encounterCount} times - SKIPPING empty value (keeping existing non-empty value)`);
+              return;  // Skip this control, keep existing value
+            } else {
+              logger.warn(`⚠️  Field "${fieldName}" encountered ${encounterCount} times! Previous value will be overwritten.`);
+              logger.warn(`   Previous value: ${JSON.stringify(existingValue?.value)}, New value: ${JSON.stringify(fieldValue.value)}`);
             }
           }
+
+          fields[fieldName] = fieldValue;
         }
       });
 
-      const record: PageRecord = { fields };
+      // Extract bookmark from LogicalForm Properties (card/document pages)
+      // Use effectiveForm which has PropertyChanges applied (Bookmark is set via PropertyChanges)
+      const bookmark = (effectiveForm as any).Properties?.Bookmark as string | undefined;
+      logger.info(`📗 extractCardPageData: effectiveForm.Properties = ${JSON.stringify((effectiveForm as any).Properties)?.substring(0, 200)}`);
+      logger.info(`📗 extractCardPageData: Bookmark = ${bookmark}`);
+      const record: PageRecord = { bookmark, fields };
 
       return ok({
         pageType: 'card',
@@ -538,12 +598,24 @@ export class PageDataExtractor {
 
   /**
    * Gets the field name from a control.
-   * Prefers DesignName, falls back to Caption or Name.
+   * Prefers DesignName → Name → Caption (only as last resort).
+   * Caption should only be used when we have no better identifier to avoid mixing field values.
    */
   private getFieldName(control: Control): string | null {
-    if (typeof control.DesignName === 'string') return control.DesignName;
-    if (typeof control.Name === 'string') return control.Name;
-    if (typeof control.Caption === 'string') return control.Caption;
+    // Prefer underlying design/name over captions to avoid mixing values
+    if (typeof control.DesignName === 'string' && control.DesignName.trim().length > 0) {
+      return control.DesignName;
+    }
+
+    if (typeof control.Name === 'string' && control.Name.trim().length > 0) {
+      return control.Name;
+    }
+
+    // Fallback: only use Caption when there really is no internal name
+    if (typeof control.Caption === 'string' && control.Caption.trim().length > 0) {
+      return control.Caption;
+    }
+
     return null;
   }
 
@@ -617,12 +689,30 @@ export class PageDataExtractor {
    * Extracts value from a select/enum control.
    */
   private extractSelectValue(control: any): FieldValue | null {
-    const currentIndex = control.CurrentIndex;
-    const items = control.Items;
+    // PropertyChanges sets Properties.CurrentIndex/StringValue (drill-down pattern)
+    // OpenForm sets direct CurrentIndex/StringValue
+    const currentIndex = control.Properties?.CurrentIndex ?? control.CurrentIndex;
+    const items = control.Properties?.Items ?? control.Items;
+    const stringValue = control.Properties?.StringValue ?? control.StringValue;
+    const objectValue = control.Properties?.ObjectValue ?? control.ObjectValue;
 
-    if (currentIndex === undefined || !Array.isArray(items)) {
+    // CRITICAL: Prefer explicit StringValue from Properties (set by PropertyChanges)
+    // over Items lookup. BC sends the localized display string via StringValue
+    // when the value changes, and we should respect that.
+    // Only use Items array as fallback when no explicit string value is provided.
+    if (stringValue !== null && stringValue !== undefined && stringValue !== '') {
+      // BC provided explicit string value via PropertyChanges
       return {
-        value: control.StringValue || null,
+        value: stringValue,
+        type: 'string',
+      };
+    }
+
+    // No explicit string value, try to look up from Items array
+    if (currentIndex === undefined || !Array.isArray(items)) {
+      // No Items array available, fallback to object value
+      return {
+        value: objectValue ?? null,
         type: 'string',
       };
     }
@@ -1342,7 +1432,11 @@ export class PageDataExtractor {
       for (const [key, value] of Object.entries(changes)) {
         mutableControl.Properties[key] = value;
         applied++;
-        logger.info(`       • Set Properties.${key} = ${JSON.stringify(value)}`);
+        const c = mutableControl;
+        logger.info(
+          `       • Applied PropertyChange: Properties.${key}=${JSON.stringify(value)} ` +
+          `(t=${c.t}, DesignName=${c.DesignName}, Name=${c.Name}, Caption=${c.Caption})`
+        );
       }
 
       return applied > 0 ? 1 : 0; // Return 1 if any properties were set
