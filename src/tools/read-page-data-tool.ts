@@ -551,17 +551,35 @@ export class ReadPageDataTool extends BaseMCPTool {
       const { header, linesBlocks, totalCount } = extractionResult.value;
       logger.info(`Extracted Document page: ${Object.keys(header.fields || {}).length} header fields, ${linesBlocks.length} lines block(s)`);
 
+      // Flatten header: {bookmark, fields: {name: FieldValue}} -> {bookmark, name: value}
+      const flatHeader: Record<string, any> = { bookmark: header.bookmark };
+      for (const [name, fieldValue] of Object.entries(header.fields)) {
+        flatHeader[name] = fieldValue.value;
+      }
+
+      // Flatten linesBlocks too
+      const flatLinesBlocks = linesBlocks.map(block => ({
+        ...block,
+        lines: block.lines.map(line => {
+          const flatLine: Record<string, any> = { bookmark: line.bookmark };
+          for (const [name, fieldValue] of Object.entries(line.fields)) {
+            flatLine[name] = fieldValue.value;
+          }
+          return flatLine;
+        }),
+      }));
+
       // Return structured output with header + lines
       return ok({
         pageId: String(pageId),
         pageContextId,
         caption,
         pageType: 'Document',
-        header,
-        linesBlocks,
-        records: [header], // Backwards compatibility
+        header: flatHeader,
+        linesBlocks: flatLinesBlocks,
+        records: [flatHeader], // Backwards compatibility
         totalCount,
-      });
+      } as any);
     }
 
     // Use cached page type if available, otherwise detect from LogicalForm

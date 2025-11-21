@@ -225,7 +225,7 @@ export interface ReadPageDataOutput {
 
 export interface PageDataRecord {
   readonly bookmark?: string;
-  readonly fields: Record<string, PageFieldValue>;
+  readonly [key: string]: string | number | boolean | null | undefined;
 }
 
 export interface PageFieldValue {

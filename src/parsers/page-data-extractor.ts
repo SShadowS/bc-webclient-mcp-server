@@ -1313,7 +1313,7 @@ export class PageDataExtractor {
    * @param handlers - Handlers potentially containing PropertyChanges
    * @returns Object with cloned+updated form and count of applied changes
    */
-  private applyPropertyChangesToLogicalForm(
+  public applyPropertyChangesToLogicalForm(
     logicalForm: LogicalForm,
     handlers: readonly unknown[]
   ): { updatedForm: LogicalForm; appliedCount: number } {
