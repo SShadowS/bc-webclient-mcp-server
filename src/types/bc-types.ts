@@ -445,6 +445,10 @@ export interface FieldMetadata {
   readonly visible: boolean;
   readonly readonly?: boolean;
   readonly options?: readonly string[];
+  // Filter-specific metadata - pre-formatted filterColumnId from BC
+  // Format: "{tableId}_{tableName}.{fieldId}" (e.g., "36_Sales Header.3")
+  // Extracted directly from column.ColumnBinderPath in LogicalForm
+  readonly filterColumnId?: string;
 }
 
 export interface ActionMetadata {

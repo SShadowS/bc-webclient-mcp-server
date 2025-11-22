@@ -31,11 +31,14 @@ export class ReadPageDataTool extends BaseMCPTool {
 
   public readonly description =
     'Reads data records from a Business Central page using an existing pageContextId from get_page_metadata. ' +
-    'filters: Optional object where keys are field names/captions (case-insensitive) and values specify filter criteria. ' +
+    'IMPORTANT: BC filters trigger server-side database queries. After applying filters, must wait for DataRefreshChange with filtered results. ' +
+    'For record-specific navigation, use get_page_metadata with bookmark parameter (faster and more reliable). ' +
+    'filters: Optional object where keys are field names/captions and values specify filter criteria. ' +
+    'Filters are sent to BC server and trigger ExecuteFilter() → BindingManager.Fill() → GetPage() with database-level filtering. ' +
     'Simple format: {"No.": "10000"} for equality. Advanced: {"No.": {operator: "=", value: "10000"}}. ' +
     'Supported operators: = (equals), != (not equals), contains, startsWith, >= (greater/equal), <= (less/equal), between (provide [min, max]). ' +
     'Multiple filters are combined with AND logic. ' +
-    'setCurrent: If true and exactly ONE record matches, sets it as the current record for subsequent operations (write_page_data, execute_action). ' +
+    'setCurrent: If true and exactly ONE record matches (after filtering), sets it as the current record for subsequent operations. ' +
     'Returns error if 0 or multiple records match when setCurrent=true. ' +
     'Returns: {records: [...], total?, nextOffset?} for pagination support.';
 
@@ -131,20 +134,67 @@ export class ReadPageDataTool extends BaseMCPTool {
    * Walks the LogicalForm tree and extracts metadata from RepeaterColumnControls
    * and other field controls. This metadata is used for filter pre-validation.
    */
+  /**
+   * Finds the FilterLogicalControl in the LogicalForm metadata.
+   * In BC27, this control has type 'filc' and is typically at server:c[2].
+   *
+   * @param logicalForm The root LogicalForm object
+   * @returns Path to FilterLogicalControl (e.g., "server:c[2]") or null if not found
+   */
+  private findFilterLogicalControl(logicalForm: any): string | null {
+    // Search top-level children for type 'filc' (FilterLogicalControl)
+    if (!Array.isArray(logicalForm.Children)) {
+      return null;
+    }
+
+    for (let i = 0; i < logicalForm.Children.length; i++) {
+      const child = logicalForm.Children[i];
+
+      // BC27: FilterLogicalControl has type 'filc'
+      if (child.t === 'filc') {
+        return `server:c[${i}]`;
+      }
+    }
+
+    return null;
+  }
+
   private extractFieldMetadata(logicalForm: any): Map<string, import('../types/bc-types.js').FieldMetadata> {
     const fields = new Map<string, import('../types/bc-types.js').FieldMetadata>();
 
+    // Recursive walker that extracts field metadata
     const walkControl = (control: any): void => {
       if (!control || typeof control !== 'object') return;
 
       const controlType = control.t as string;
 
-      // Extract field metadata from various control types
-      const fieldTypes = ['rcc', 'sc', 'dc', 'bc', 'i32c', 'sec', 'dtc', 'pc'];
+      // Special handling for repeater control ('rc') with Columns array
+      if (controlType === 'rc' && Array.isArray(control.Columns)) {
+        for (const column of control.Columns) {
+          const fieldName = column.DesignName || column.Caption;
+          if (fieldName) {
+            fields.set(fieldName, {
+              type: column.t || 'rcc',
+              caption: column.Caption,
+              name: column.DesignName || column.Caption,
+              controlId: column.ControlId,
+              enabled: column.Editable !== false,
+              visible: column.Visible !== false,
+              readonly: column.ReadOnly === true,
+              options: column.Options,
+              // CRITICAL: Use pre-formatted ColumnBinderPath as filterColumnId
+              // Format is already "{tableId}_{tableName}.{fieldId}" (e.g., "36_Sales Header.3")
+              filterColumnId: column.ColumnBinderPath,
+            });
+          }
+        }
+      }
+
+      // Also extract from other field control types for non-list pages
+      const fieldTypes = ['sc', 'dc', 'bc', 'i32c', 'sec', 'dtc', 'pc'];
       if (fieldTypes.includes(controlType)) {
-        // Get field name (prefer DesignName, fall back to Name or Caption)
         const fieldName = control.DesignName || control.Name || control.Caption;
-        if (fieldName) {
+        if (fieldName && !fields.has(fieldName)) {
           fields.set(fieldName, {
             type: controlType,
             caption: control.Caption,
@@ -172,6 +222,48 @@ export class ReadPageDataTool extends BaseMCPTool {
   }
 
   /**
+   * Builds filterColumnId in BC's format: "{tableId}_{tableName}.{fieldId}"
+   *
+   * Examples:
+   * - "18_Customer.1" (Customer No.)
+   * - "36_Sales Header.3" (Sales Order No.)
+   * - "36_Sales Header.79.79" (Sales Order Sell-to Customer No.)
+   *
+   * Format rules:
+   * - If fieldId === dataColumnNo: single segment ".{fieldId}"
+   * - If fieldId !== dataColumnNo: double segment ".{dataColumnNo}.{fieldId}"
+   */
+  private buildFilterColumnId(fieldMeta: {
+    sourceTable?: string;
+    sourceTableID?: number;
+    fieldId?: number | null;
+    dataColumnNo?: number | null;
+  }): string {
+    const tablePart = `${fieldMeta.sourceTableID}_${fieldMeta.sourceTable}`;
+
+    const fieldId = fieldMeta.fieldId ?? fieldMeta.dataColumnNo;
+    const dataColumnNo = fieldMeta.dataColumnNo ?? fieldMeta.fieldId;
+
+    if (fieldId == null && dataColumnNo == null) {
+      throw new Error(
+        `Cannot build filterColumnId: both fieldId and dataColumnNo are null/undefined for ${fieldMeta.sourceTable}`
+      );
+    }
+
+    // If both exist and are different, use double segment
+    if (
+      fieldMeta.fieldId != null &&
+      fieldMeta.dataColumnNo != null &&
+      fieldMeta.fieldId !== fieldMeta.dataColumnNo
+    ) {
+      return `${tablePart}.${fieldMeta.dataColumnNo}.${fieldMeta.fieldId}`;
+    }
+
+    // Otherwise use single segment
+    return `${tablePart}.${fieldId}`;
+  }
+
+  /**
    * Applies filters to a list page before reading data.
    * Uses BC's Filter + SaveValue protocol.
    *
@@ -193,17 +285,51 @@ export class ReadPageDataTool extends BaseMCPTool {
     logger: any,
     logicalForm: any,
     formId: string
-  ): Promise<Result<void, BCError>> {
+  ): Promise<Result<{ filteredHandlers?: any[] }, BCError>> {
     if (!filters || Object.keys(filters).length === 0) {
-      return ok(undefined);
+      return ok({});
     }
 
-    logger.info(`Applying ${Object.keys(filters).length} filter(s)...`);
+    logger.info(`Applying ${Object.keys(filters).length} filter(s) using QuickFilter (Path A)...`);
+
+    // CRITICAL: Set up async handler wait BEFORE applying filters
+    // BC sends DataRefreshChange with filtered data AFTER SaveValue completes
+    const asyncDataPromise = connection.waitForHandlers(
+      (handlers: any[]) => {
+        const matched =
+          Array.isArray(handlers) &&
+          handlers.some(
+            (h: any) =>
+              h.handlerType === 'DN.LogicalClientChangeHandler' &&
+              Array.isArray(h.parameters) &&
+              h.parameters.length >= 2 &&
+              Array.isArray(h.parameters[1]) &&
+              h.parameters[1].some((p: any) => p?.t === 'DataRefreshChange')
+          );
+        logger.info(`[applyFilters] DataRefreshChange check: matched=${matched}, handlers=${handlers.length}`);
+        return { matched, data: matched ? handlers : undefined };
+      },
+      { timeoutMs: 10000 } // 10 second timeout
+    );
+
+    // Find FilterLogicalControl for Path A (QuickFilter)
+    const filterControlPath = this.findFilterLogicalControl(logicalForm);
+    if (!filterControlPath) {
+      logger.warn('FilterLogicalControl (filc) not found - QuickFilter not supported on this page');
+      return err(
+        new ProtocolError(
+          'QuickFilter is not supported on this page (no FilterLogicalControl found)',
+          { pageId, filterControlPath: null }
+        )
+      );
+    }
+
+    logger.info(`Found FilterLogicalControl at: ${filterControlPath}`);
 
     // Get cached filter state (Phase 1: Filter State Cache)
     const filterService = FilterMetadataService.getInstance();
     const filterState = filterService.getFilterState(sessionId, pageId);
-    let stateChanged = false;
+    let filtersApplied = false;
 
     // Get or compute field metadata (Phase 3: Field Metadata Cache)
     const fieldMetadata = await filterService.getOrComputeFieldMetadata(
@@ -231,8 +357,16 @@ export class ReadPageDataTool extends BaseMCPTool {
       );
     }
 
+    // Apply each filter atomically using Path A (QuickFilter)
     for (const [columnName, filterSpec] of Object.entries(filters)) {
       try {
+        // Get Control ID for the column - CRITICAL for Path A (QuickFilter)
+        const fieldMeta = fieldMetadata.get(columnName);
+        if (!fieldMeta || !fieldMeta.controlId) {
+          logger.warn(`    Skipping "${columnName}" - could not determine Control ID`);
+          continue;
+        }
+
         // Parse filter spec (simple string/number or { operator, value })
         let operator = '=';
         let value: any;
@@ -251,25 +385,6 @@ export class ReadPageDataTool extends BaseMCPTool {
           continue;
         }
 
-        logger.info(`  Filtering "${columnName}" ${operator} "${value}"`);
-
-        // Step 1: Send Filter interaction to activate filter for this column
-        const filterResult = await connection.invoke({
-          interactionName: 'Filter',
-          namedParameters: {
-            columnName: columnName,
-          },
-          controlPath: repeaterPath,
-          callbackId: '0',
-          formId: formId,
-        });
-
-        if (!isOk(filterResult)) {
-          logger.warn(`    Failed to activate filter for "${columnName}": ${filterResult.error.message}`);
-          continue; // Try next filter
-        }
-
-        // Step 2: Set filter value using SaveValue
         // Translate operator to BC filter syntax
         let bcFilterValue: string;
         switch (operator.toLowerCase()) {
@@ -313,39 +428,117 @@ export class ReadPageDataTool extends BaseMCPTool {
             continue;
         }
 
+        // Get pre-formatted filterColumnId from field metadata
+        const filterColumnId = fieldMeta.filterColumnId;
+
+        if (!filterColumnId) {
+          logger.warn(`    No filterColumnId found for "${columnName}" - skipping filter`);
+          continue;
+        }
+
+        logger.info(`  Filter: "${columnName}" → filterColumnId="${filterColumnId}", value="${bcFilterValue}"`);
+
+        // STEP 1: Filter(AddLine) - Create filter row in BC UI
+        // CRITICAL: namedParameters MUST be JSON STRING, not object!
+        const filterNamedParams = JSON.stringify({
+          filterOperation: 1,           // 1 = AddLine (NOT 0 = Execute!)
+          filterColumnId: filterColumnId,
+        });
+
+        logger.info(`  → Step 1: Filter(AddLine) with params: ${filterNamedParams}`);
+
+        const filterResult = await connection.invoke({
+          interactionName: 'Filter',
+          namedParameters: filterNamedParams,    // JSON string!
+          controlPath: filterControlPath,        // e.g., "server:c[2]" (FilterLogicalControl)
+          callbackId: '0',
+          formId: formId,
+        });
+
+        if (!isOk(filterResult)) {
+          logger.warn(`    Step 1 failed for "${columnName}": ${filterResult.error.message}`);
+          continue;
+        }
+
+        logger.info(`    ✓ Step 1 complete: Filter row created`);
+
+        // STEP 2: SaveValue - Set the actual filter value
+        // Determine SaveValue controlPath (pragmatic pattern for now)
+        // Pattern: "{filterControlPath}/c[2]/c[1]"
+        // Example: "server:c[2]/c[2]/c[1]"
+        const saveValueControlPath = `${filterControlPath}/c[2]/c[1]`;
+
+        const saveValueNamedParams = JSON.stringify({
+          key: null,
+          newValue: bcFilterValue,
+          alwaysCommitChange: true,
+          ignoreForSavingState: true,
+          notifyBusy: 1,
+          telemetry: {
+            'Control name': fieldMeta.caption || fieldMeta.name || columnName,
+            QueuedTime: new Date().toISOString(),
+          },
+        });
+
+        logger.info(`  → Step 2: SaveValue to ${saveValueControlPath} with value="${bcFilterValue}"`);
+
         const saveValueResult = await connection.invoke({
           interactionName: 'SaveValue',
-          namedParameters: {
-            newValue: bcFilterValue,
-          },
-          controlPath: `${repeaterPath}:filter`,
+          namedParameters: saveValueNamedParams,  // JSON string!
+          controlPath: saveValueControlPath,
           callbackId: '0',
           formId: formId,
         });
 
         if (!isOk(saveValueResult)) {
-          logger.warn(`    Failed to set filter value for "${columnName}": ${saveValueResult.error.message}`);
+          logger.warn(`    Step 2 failed for "${columnName}": ${saveValueResult.error.message}`);
           continue;
         }
 
-        logger.info(`    Filter applied: "${columnName}" ${operator} "${value}"`);
+        logger.info(`    ✓ Step 2 complete: Filter value set`);
+        logger.info(`    ✅ Filter applied successfully: "${columnName}" ${operator} "${value}"`);
 
         // UPDATE CACHE: Track successfully applied filter
         filterState.set(columnName, { operator, value });
-        stateChanged = true;
+        filtersApplied = true;
+
+        // Small delay to allow server state to settle if applying multiple filters
+        if (Object.keys(filters).length > 1) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+
       } catch (error) {
         logger.warn(`    Error applying filter for "${columnName}": ${error instanceof Error ? error.message : String(error)}`);
-        continue; // Try next filter
+        continue;
       }
     }
 
-    // Save updated filter state if any filters were applied
-    if (stateChanged) {
+    // Save filter state regardless of whether new filters were applied
+    if (filtersApplied || filterState.size > 0) {
       filterService.setFilterState(sessionId, pageId, filterState);
     }
 
-    logger.info(`Filters applied`);
-    return ok(undefined);
+    if (filtersApplied) {
+      logger.info('✅ All filters applied using two-step protocol (Filter AddLine + SaveValue)');
+      logger.info('   Waiting for BC to send DataRefreshChange with filtered data...');
+
+      // CRITICAL: Wait for the NEW DataRefreshChange with filtered data
+      // This promise was set up BEFORE we started applying filters
+      try {
+        const filteredHandlers = await asyncDataPromise;
+        logger.info(`   ✓ Received DataRefreshChange with filtered data (${(filteredHandlers as any[]).length} handlers)`);
+
+        // Return the new filtered handlers to replace cached ones
+        return ok({ filteredHandlers: filteredHandlers as any[] });
+      } catch (error) {
+        logger.warn(`   Timeout waiting for DataRefreshChange: ${error instanceof Error ? error.message : String(error)}`);
+        logger.warn(`   Filters may not have executed server-side - returning empty result`);
+        return ok({});
+      }
+    } else {
+      logger.info('No new filters applied (all cached or empty)');
+      return ok({});
+    }
   }
 
   /**
@@ -801,6 +994,16 @@ export class ReadPageDataTool extends BaseMCPTool {
           if (!isOk(filterResult)) {
             // Log warning but continue - filtering is best-effort
             logger.warn(`Filter application encountered errors: ${filterResult.error.message}`);
+          } else if (filterResult.value.filteredHandlers) {
+            // Use the filtered handlers returned from applyFilters()
+            // applyFilters() already waited for DataRefreshChange with filtered data
+            logger.info(`Using filtered handlers from applyFilters (${filterResult.value.filteredHandlers.length} handlers)`);
+            handlers = filterResult.value.filteredHandlers;
+            // Update cached handlers
+            if (pageContext) {
+              pageContext.handlers = handlers as any;
+              pageContext.needsRefresh = false;
+            }
           }
         }
       }

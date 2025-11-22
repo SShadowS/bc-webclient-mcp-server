@@ -467,7 +467,7 @@ async function main() {
   await client.connect();
   await client.openSession({
     clientType: 'WebClient',
-    clientVersion: '26.0.0.0',
+    clientVersion: '27.0.0.0',
     clientCulture: 'en-US',
     clientTimeZone: 'UTC'
   });

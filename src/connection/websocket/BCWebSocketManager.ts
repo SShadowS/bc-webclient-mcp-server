@@ -274,7 +274,16 @@ export class BCWebSocketManager implements IBCWebSocketManager {
                 // Return the raw result (caller handles decompression)
                 pending.resolve(response.params[0]);
               } else {
-                logger.warn(`  No pending requests to resolve!`);
+                // CRITICAL FIX: No pending RPC request, but we have async data (e.g., filtered list data)
+                // Forward to protocol adapter via rawMessageHandlers so it can emit handler events
+                logger.info(`  No pending RPC request - forwarding async Message to protocol adapter`);
+                this.rawMessageHandlers.forEach((handler) => {
+                  try {
+                    handler(response);
+                  } catch (error) {
+                    logger.error({ error }, 'Error in raw message handler');
+                  }
+                });
               }
             } else {
               logger.info(`  Message has no compressed data, ignoring (params: ${JSON.stringify(response.params).substring(0, 100)})`);

@@ -1,9 +1,9 @@
-# BC MCP Server - Project Structure
+# BC WebClient MCP - Project Structure
 
 ## Root Directory Layout
 
 ```
-bc-poc/
+bc-webclient-mcp/
 ├── README.md                    # Main project documentation
 ├── package.json                 # Node.js dependencies and scripts
 ├── tsconfig.json               # TypeScript configuration

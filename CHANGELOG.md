@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.4.0] - 2025-01-22
+
+### Added
+
+- **Server-side list filtering**: Full implementation of two-step filter protocol (Filter AddLine + SaveValue)
+  - Filters execute at database level via BC's ExecuteFilter() → BindingManager.Fill() flow
+  - Async DataRefreshChange handlers deliver already-filtered datasets
+  - Support for equality, range, contains, startsWith operators
+  - Filter state caching to prevent redundant operations
+  - Pre-formatted filterColumnId extraction from LogicalForm ColumnBinderPath
+
+### Fixed
+
+- **Critical async timing bug**: Set up `waitForHandlers` promise BEFORE triggering Filter/SaveValue interactions (not after)
+  - Previous implementation missed DataRefreshChange events by setting up listener too late
+  - Now correctly captures filtered data by establishing listener first
+- **TypeScript type error**: Fixed `waitForHandlers` predicate to return `{ matched: boolean; data?: unknown }` instead of boolean
+
+### Changed
+
+- **FieldMetadata interface**: Added `filterColumnId` field for filter column identification
+- **extractFieldMetadata()**: Now extracts from repeater control (`t: 'rc'`) Columns array with ColumnBinderPath
+- **applyFilters()**: Complete refactor with proper async timing and two-step protocol implementation
+
+### Documentation
+
+- **BC_PROTOCOL_PATTERNS.md**: Added Pattern 7 - List Filtering with Server-Side Execution
+- **CLAUDE.md**: Updated Pattern #6 with implementation status and correct async timing examples
+- **FILTER_IMPLEMENTATION_SUMMARY.md**: New comprehensive implementation summary
+
+### Testing
+
+- **test-filter-execution-flow.ts**: Comprehensive filter testing (4/4 tests passing)
+  - Equality filters: "No." = "101002", "No." = "101005"
+  - Range filter: "No." >= "101007"
+- **Integration tests**: Phase 1 tests pass (10/10) with no regressions
+
 ## [2.2.0] - 2025-11-21
 
 ### Fixed
