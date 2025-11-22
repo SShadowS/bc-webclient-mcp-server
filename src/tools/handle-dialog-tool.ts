@@ -225,9 +225,10 @@ export class HandleDialogTool extends BaseMCPTool {
           }
           connection = sessionResult.value.connection;
           actualSessionId = sessionResult.value.sessionId;
-          console.error(
-            `[HandleDialogTool] ${sessionResult.value.isNewSession ? 'New' : 'Reused'} session: ${actualSessionId}`
-          );
+          // TODO: Re-enable for debugging when not using stdio transport
+          // console.error(
+          //   `[HandleDialogTool] ${sessionResult.value.isNewSession ? 'New' : 'Reused'} session: ${actualSessionId}`
+          // );
         }
       }
     } else {
@@ -250,9 +251,10 @@ export class HandleDialogTool extends BaseMCPTool {
         }
         connection = sessionResult.value.connection;
         actualSessionId = sessionResult.value.sessionId;
-        console.error(
-          `[HandleDialogTool] ${sessionResult.value.isNewSession ? 'New' : 'Reused'} session: ${actualSessionId}`
-        );
+        // TODO: Re-enable for debugging when not using stdio transport
+        // console.error(
+        //   `[HandleDialogTool] ${sessionResult.value.isNewSession ? 'New' : 'Reused'} session: ${actualSessionId}`
+        // );
       }
     }
 

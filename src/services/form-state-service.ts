@@ -547,18 +547,20 @@ export class FormStateService {
 
       if (filtered.length === 1) {
         const node = filtered[0];
-        console.warn(
-          `[FormStateService] Ambiguous field "${userKey}" resolved to ${node.path} ` +
-          `(${candidates.length} candidates: ${duplicatePaths.join(', ')})`
-        );
+        // TODO: Re-enable for debugging when not using stdio transport
+        // console.warn(
+        //   `[FormStateService] Ambiguous field "${userKey}" resolved to ${node.path} ` +
+        //   `(${candidates.length} candidates: ${duplicatePaths.join(', ')})`
+        // );
         return { controlPath: node.path, node, ambiguous: true, candidates };
       } else if (filtered.length > 1) {
         // Still ambiguous after filtering - pick first
         const node = filtered[0];
-        console.warn(
-          `[FormStateService] Multiple matches for "${userKey}" after filtering. ` +
-          `Using ${node.path}. Candidates: ${filtered.map(c => c.path).join(', ')}`
-        );
+        // TODO: Re-enable for debugging when not using stdio transport
+        // console.warn(
+        //   `[FormStateService] Multiple matches for "${userKey}" after filtering. ` +
+        //   `Using ${node.path}. Candidates: ${filtered.map(c => c.path).join(', ')}`
+        // );
         return { controlPath: node.path, node, ambiguous: true, candidates };
       }
     }
@@ -645,27 +647,30 @@ export class FormStateService {
       // Prefer primary button
       const primary = matches.find(m => m.isPrimary);
       if (primary) {
-        console.warn(
-          `[FormStateService] Multiple "${intent}" buttons found, using primary: ${primary.caption}`
-        );
+        // TODO: Re-enable for debugging when not using stdio transport
+        // console.warn(
+        //   `[FormStateService] Multiple "${intent}" buttons found, using primary: ${primary.caption}`
+        // );
         return { controlPath: primary.path, caption: primary.caption, ambiguous: true, candidates: matches };
       }
 
       // Pick first
       const first = matches[0];
-      console.warn(
-        `[FormStateService] Multiple "${intent}" buttons, using first: ${first.caption}. ` +
-        `Candidates: ${matches.map(m => m.caption).join(', ')}`
-      );
+      // TODO: Re-enable for debugging when not using stdio transport
+      // console.warn(
+      //   `[FormStateService] Multiple "${intent}" buttons, using first: ${first.caption}. ` +
+      //   `Candidates: ${matches.map(m => m.caption).join(', ')}`
+      // );
       return { controlPath: first.path, caption: first.caption, ambiguous: true, candidates: matches };
     }
 
     // No match - try primary button as fallback
     const primary = buttons.find(b => b.isPrimary);
     if (primary) {
-      console.warn(
-        `[FormStateService] No "${intent}" button found, using primary: ${primary.caption}`
-      );
+      // TODO: Re-enable for debugging when not using stdio transport
+      // console.warn(
+      //   `[FormStateService] No "${intent}" button found, using primary: ${primary.caption}`
+      // );
       return { controlPath: primary.path, caption: primary.caption, ambiguous: false };
     }
 

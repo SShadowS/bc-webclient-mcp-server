@@ -182,8 +182,9 @@ export class ExecuteActionTool extends BaseMCPTool {
     };
 
     const namedParamsJson = JSON.stringify(namedParams);
-    console.log(`[ExecuteAction] Building interaction: controlPath=${controlPath}, formId=${formId}`);
-    console.log(`[ExecuteAction] namedParameters JSON: ${namedParamsJson}`);
+    // TODO: Re-enable for debugging when not using stdio transport
+    // console.log(`[ExecuteAction] Building interaction: controlPath=${controlPath}, formId=${formId}`);
+    // console.log(`[ExecuteAction] namedParameters JSON: ${namedParamsJson}`);
     logger.info(`Building InvokeAction: controlPath=${controlPath}, formId=${formId}, systemAction=${systemAction}, key=${key}`);
 
     logger.info(`Sending InvokeAction interaction...`);
@@ -208,49 +209,59 @@ export class ExecuteActionTool extends BaseMCPTool {
     const ACCUMULATION_WINDOW_MS = 1000; // Wait 1 second to accumulate all handlers
 
     // Set up listener BEFORE calling invoke
-    console.log('[ExecuteAction] Setting up async handler listener...');
+    // TODO: Re-enable for debugging when not using stdio transport
+    // console.log('[ExecuteAction] Setting up async handler listener...');
     const unsubscribe = rawClient.onHandlers((event: any) => {
-      console.log(`[ExecuteAction] onHandlers callback - event:`, JSON.stringify(event).substring(0, 200));
-      console.log(`[ExecuteAction] event.kind: ${event.kind}, isArray: ${Array.isArray(event)}`);
+      // TODO: Re-enable for debugging when not using stdio transport
+      // console.log(`[ExecuteAction] onHandlers callback - event:`, JSON.stringify(event).substring(0, 200));
+      // console.log(`[ExecuteAction] event.kind: ${event.kind}, isArray: ${Array.isArray(event)}`);
 
       // Check if event IS the handlers array (not wrapped in {kind, handlers})
       if (Array.isArray(event)) {
         accumulatedHandlers.push(...event);
         handlerCount++;
-        console.log(`[ExecuteAction] Received async handler batch #${handlerCount}: ${event.length} handlers (direct array)`);
+        // TODO: Re-enable for debugging when not using stdio transport
+        // console.log(`[ExecuteAction] Received async handler batch #${handlerCount}: ${event.length} handlers (direct array)`);
         logger.info(`Received async handler batch #${handlerCount}: ${event.length} handlers`);
       } else if (event.kind === 'RawHandlers') {
         accumulatedHandlers.push(...event.handlers);
         handlerCount++;
-        console.log(`[ExecuteAction] Received async handler batch #${handlerCount}: ${event.handlers.length} handlers (wrapped)`);
+        // TODO: Re-enable for debugging when not using stdio transport
+        // console.log(`[ExecuteAction] Received async handler batch #${handlerCount}: ${event.handlers.length} handlers (wrapped)`);
         logger.info(`Received async handler batch #${handlerCount}: ${event.handlers.length} handlers`);
       }
     });
 
     try {
-      console.log('[ExecuteAction] Firing invoke...');
+      // TODO: Re-enable for debugging when not using stdio transport
+      // console.log('[ExecuteAction] Firing invoke...');
       // AWAIT invoke() to capture response handlers - they come back synchronously!
       const invokeResult = await connection.invoke(interaction);
 
       if (isOk(invokeResult)) {
         const responseHandlers = invokeResult.value;
-        console.log(`[ExecuteAction] invoke() returned ${responseHandlers.length} handlers`);
+        // TODO: Re-enable for debugging when not using stdio transport
+        // console.log(`[ExecuteAction] invoke() returned ${responseHandlers.length} handlers`);
         logger.info(`invoke() returned ${responseHandlers.length} handlers`);
         accumulatedHandlers.push(...responseHandlers);
       } else {
-        console.log(`[ExecuteAction] Invoke error: ${invokeResult.error.message}`);
+        // TODO: Re-enable for debugging when not using stdio transport
+        // console.log(`[ExecuteAction] Invoke error: ${invokeResult.error.message}`);
         logger.info(`Invoke error: ${invokeResult.error.message}`);
       }
 
       // Also wait briefly for any additional async handlers
-      console.log(`[ExecuteAction] Waiting ${ACCUMULATION_WINDOW_MS}ms for additional handlers...`);
+      // TODO: Re-enable for debugging when not using stdio transport
+      // console.log(`[ExecuteAction] Waiting ${ACCUMULATION_WINDOW_MS}ms for additional handlers...`);
       await new Promise((resolve) => setTimeout(resolve, ACCUMULATION_WINDOW_MS));
 
-      console.log(`[ExecuteAction] Accumulated ${accumulatedHandlers.length} total handlers from ${handlerCount} batches`);
+      // TODO: Re-enable for debugging when not using stdio transport
+      // console.log(`[ExecuteAction] Accumulated ${accumulatedHandlers.length} total handlers from ${handlerCount} batches`);
       logger.info(`Action executed, accumulated ${accumulatedHandlers.length} total handlers from ${handlerCount} batches`);
     } finally {
       // Clean up listener
-      console.log('[ExecuteAction] Cleaning up listener');
+      // TODO: Re-enable for debugging when not using stdio transport
+      // console.log('[ExecuteAction] Cleaning up listener');
       unsubscribe();
     }
 

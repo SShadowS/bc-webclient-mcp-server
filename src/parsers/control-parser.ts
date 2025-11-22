@@ -147,10 +147,11 @@ export class ControlParser implements IControlParser {
     // Debug: Log action with SystemAction to understand the data
     // Note: Real Release action has Caption "Re&lease" (with &)
     const caption = String(control.Caption);
-    if (caption.toLowerCase().replace(/&/g, '').includes('release')) {
-      console.log(`[ControlParser] Found Release action: type=${control.t}, Caption=${caption}, SystemAction=${systemAction}, controlPath=${control.controlPath}`);
-      if (actionRef) console.log(`[ControlParser] ActionReference: ${JSON.stringify(actionRef)}`);
-    }
+    // TODO: Re-enable for debugging when not using stdio transport
+    // if (caption.toLowerCase().replace(/&/g, '').includes('release')) {
+    //   console.log(`[ControlParser] Found Release action: type=${control.t}, Caption=${caption}, SystemAction=${systemAction}, controlPath=${control.controlPath}`);
+    //   if (actionRef) console.log(`[ControlParser] ActionReference: ${JSON.stringify(actionRef)}`);
+    // }
 
     return {
       caption: String(control.Caption),

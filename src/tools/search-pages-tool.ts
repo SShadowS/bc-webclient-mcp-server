@@ -202,10 +202,11 @@ export class SearchPagesTool extends BaseMCPTool {
       // Define predicate to detect Tell Me dialog (handles both BC27+ and legacy formats)
       const isTellMeDialogOpen = (handlers: any[]) => {
         // Log all handlers for debugging
-        console.error(`[Tell Me Debug] Received ${handlers.length} handlers:`);
-        handlers.forEach((h, i) => {
-          console.error(`  [${i}] ${h.handlerType}`, h.parameters?.[0] || '');
-        });
+        // TODO: Re-enable for debugging when not using stdio transport
+        // console.error(`[Tell Me Debug] Received ${handlers.length} handlers:`);
+        // handlers.forEach((h, i) => {
+        //   console.error(`  [${i}] ${h.handlerType}`, h.parameters?.[0] || '');
+        // });
 
         // Try legacy FormToShow format first
         // TODO: Find language-independent way to identify Tell Me dialog
@@ -215,7 +216,8 @@ export class SearchPagesTool extends BaseMCPTool {
           h.parameters?.[1]?.ServerId
         );
         if (legacy) {
-          console.error(`[Tell Me Debug] Found FormToShow dialog: ServerId=${legacy.parameters[1].ServerId}, Caption="${legacy.parameters[1].Caption}"`);
+          // TODO: Re-enable for debugging when not using stdio transport
+          // console.error(`[Tell Me Debug] Found FormToShow dialog: ServerId=${legacy.parameters[1].ServerId}, Caption="${legacy.parameters[1].Caption}"`);
           return { matched: true, data: legacy.parameters[1].ServerId };
         }
 

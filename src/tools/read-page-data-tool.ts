@@ -349,6 +349,155 @@ export class ReadPageDataTool extends BaseMCPTool {
   }
 
   /**
+   * Applies setCurrent functionality by navigating BC to a specific record using bookmark-based SetSelection.
+   * Enforces "single match" requirement and calls SetCurrentRowAndRowsSelection interaction.
+   *
+   * @param connection BC WebSocket connection
+   * @param records Array of flat records with bookmark field
+   * @param filters Filter criteria to identify the target record
+   * @param repeaterPath Control path to the repeater (from findRepeaterControlPath)
+   * @param formId Form ID containing the list
+   * @param logger Logger instance
+   * @returns Result with bookmark on success, or error if validation fails
+   */
+  private async applySetCurrent(
+    connection: IBCConnection,
+    records: any[],
+    filters: Record<string, any> | undefined,
+    repeaterPath: string,
+    formId: string,
+    logger: any
+  ): Promise<Result<{ bookmark: string }, BCError>> {
+    // Require filters for setCurrent
+    if (!filters || Object.keys(filters).length === 0) {
+      return err(
+        new ProtocolError(
+          'setCurrent requires filters to identify which record to select',
+          { setCurrent: true, filtersProvided: false }
+        )
+      );
+    }
+
+    // Helper function to check if a record matches all filters
+    const matchesFilters = (record: any): boolean => {
+      for (const [fieldName, filterSpec] of Object.entries(filters)) {
+        const recordValue = record[fieldName];
+
+        // Handle both simple value and operator-based filter specs
+        let operator = '=';
+        let filterValue: any;
+
+        if (typeof filterSpec === 'object' && filterSpec !== null && 'operator' in filterSpec) {
+          operator = filterSpec.operator;
+          filterValue = filterSpec.value;
+        } else {
+          filterValue = filterSpec;
+        }
+
+        // Apply operator-based matching
+        switch (operator) {
+          case '=':
+          case 'equals':
+            if (recordValue !== filterValue) return false;
+            break;
+          case '!=':
+          case 'notEquals':
+            if (recordValue === filterValue) return false;
+            break;
+          case 'contains':
+            if (!String(recordValue).toLowerCase().includes(String(filterValue).toLowerCase())) return false;
+            break;
+          case 'startsWith':
+            if (!String(recordValue).toLowerCase().startsWith(String(filterValue).toLowerCase())) return false;
+            break;
+          case '>=':
+            if (recordValue < filterValue) return false;
+            break;
+          case '<=':
+            if (recordValue > filterValue) return false;
+            break;
+          case 'between':
+            if (!Array.isArray(filterValue) || filterValue.length !== 2) return false;
+            if (recordValue < filterValue[0] || recordValue > filterValue[1]) return false;
+            break;
+          default:
+            logger.warn(`Unknown filter operator: ${operator}, treating as equals`);
+            if (recordValue !== filterValue) return false;
+        }
+      }
+      return true;
+    };
+
+    // Find matching records
+    const matches = records.filter(record => matchesFilters(record));
+
+    // Validate exactly one match
+    if (matches.length === 0) {
+      return err(
+        new ProtocolError(
+          'setCurrent failed: No records match the provided filters',
+          { filters, totalRecords: records.length }
+        )
+      );
+    }
+
+    if (matches.length > 1) {
+      return err(
+        new ProtocolError(
+          `setCurrent failed: Multiple records match filters (found ${matches.length}). Provide more specific filters to select exactly one record`,
+          { filters, matchCount: matches.length }
+        )
+      );
+    }
+
+    // Extract bookmark from the single matching record
+    const targetRecord = matches[0];
+    const bookmark = targetRecord.bookmark;
+
+    if (!bookmark) {
+      return err(
+        new ProtocolError(
+          'setCurrent failed: Record does not have a bookmark field',
+          { record: targetRecord }
+        )
+      );
+    }
+
+    logger.info(`setCurrent: Found single matching record with bookmark: ${bookmark}`);
+
+    // Call SetCurrentRowAndRowsSelection interaction
+    const setCurrentInteraction = {
+      interactionName: 'SetCurrentRowAndRowsSelection',
+      skipExtendingSessionLifetime: false,
+      namedParameters: JSON.stringify({
+        key: bookmark,
+        selectAll: false,
+        rowsToSelect: [bookmark],
+        unselectAll: true,
+        rowsToUnselect: [],
+      }),
+      controlPath: repeaterPath,
+      formId: formId,
+      callbackId: '0',
+    };
+
+    logger.info(`Invoking SetCurrentRowAndRowsSelection with bookmark: ${bookmark}`);
+    const setCurrentResult = await connection.invoke(setCurrentInteraction);
+
+    if (!isOk(setCurrentResult)) {
+      return err(
+        new ProtocolError(
+          `setCurrent failed: SetCurrentRowAndRowsSelection interaction failed: ${setCurrentResult.error.message}`,
+          { bookmark, interaction: 'SetCurrentRowAndRowsSelection' }
+        )
+      );
+    }
+
+    logger.info(`Successfully set current record to bookmark: ${bookmark}`);
+    return ok({ bookmark });
+  }
+
+  /**
    * Executes the tool to read page data.
    * Input is pre-validated by BaseMCPTool using Zod schema.
    */
@@ -557,6 +706,16 @@ export class ReadPageDataTool extends BaseMCPTool {
     if (isDocumentPage) {
       logger.info(`Page type: Document - extracting header + lines`);
 
+      // setCurrent is not supported on Document pages
+      if (setCurrent) {
+        return err(
+          new ProtocolError(
+            'setCurrent is only supported on List pages, not Card/Document pages',
+            { pageType: 'Document', setCurrent: true }
+          )
+        );
+      }
+
       const extractionResult = this.dataExtractor.extractDocumentPageData(logicalForm, handlers);
 
       if (!isOk(extractionResult)) {
@@ -607,28 +766,42 @@ export class ReadPageDataTool extends BaseMCPTool {
     const isListPage = cachedPageType === 'List' || cachedPageType === 'Worksheet' || this.dataExtractor.isListPage(logicalForm);
     logger.info(`Page type: ${isListPage ? 'list' : 'card'}`);
 
-    // Apply filters if provided (only for list pages)
-    if (isListPage && filters && Object.keys(filters).length > 0) {
+    // Compute repeater path if filters or setCurrent are requested (for list pages)
+    const hasFilters = filters && Object.keys(filters).length > 0;
+    let repeaterPath: string | null = null;
+
+    if (isListPage && (hasFilters || setCurrent)) {
       // Find repeater control path from LogicalForm (with Phase 2 cache optimization)
       const filterService = FilterMetadataService.getInstance();
-      const repeaterPath = await filterService.getOrComputeRepeaterPath(
+      repeaterPath = await filterService.getOrComputeRepeaterPath(
         pageId,
         logicalForm,
         (form) => this.findRepeaterControlPath(form)
       );
 
       if (!repeaterPath) {
-        logger.warn(`Could not find repeater control in LogicalForm for filtering`);
-        // Continue without filtering
+        logger.warn(`Could not find repeater control in LogicalForm for filtering/setCurrent`);
+        if (setCurrent) {
+          // setCurrent requires repeater path - abort if not found
+          return err(
+            new ProtocolError(
+              'setCurrent failed: Unable to locate repeater control for this list page',
+              { pageId, setCurrent: true }
+            )
+          );
+        }
+        // For filters only: continue without filtering (best-effort)
       } else {
         logger.info(`Found repeater at path: ${repeaterPath}`);
 
-        // Apply filters (with cache optimization - Phases 1, 2, & 3)
-        const filterResult = await this.applyFilters(connection, filters, repeaterPath, sessionId, pageId, logger, logicalForm, formIds[0]);
+        // Apply filters if provided (with cache optimization - Phases 1, 2, & 3)
+        if (hasFilters) {
+          const filterResult = await this.applyFilters(connection, filters, repeaterPath, sessionId, pageId, logger, logicalForm, formIds[0]);
 
-        if (!isOk(filterResult)) {
-          // Log warning but continue - filtering is best-effort
-          logger.warn(`Filter application encountered errors: ${filterResult.error.message}`);
+          if (!isOk(filterResult)) {
+            // Log warning but continue - filtering is best-effort
+            logger.warn(`Filter application encountered errors: ${filterResult.error.message}`);
+          }
         }
       }
     }
@@ -666,6 +839,33 @@ export class ReadPageDataTool extends BaseMCPTool {
           }
           return { bookmark: r.bookmark, ...flatFields };
         });
+
+        // Apply setCurrent if requested (before returning data)
+        if (setCurrent) {
+          if (!repeaterPath) {
+            return err(
+              new ProtocolError(
+                'setCurrent failed: Unable to locate repeater control for this list page',
+                { pageId, setCurrent: true }
+              )
+            );
+          }
+
+          const setCurrentResult = await this.applySetCurrent(
+            connection,
+            flatRecords,
+            filters,
+            repeaterPath,
+            formIds[0],
+            logger
+          );
+
+          if (!isOk(setCurrentResult)) {
+            return setCurrentResult as Result<never, BCError>;
+          }
+
+          logger.info(`Set current record to bookmark: ${setCurrentResult.value.bookmark}`);
+        }
 
         return ok({
           pageId: String(pageId),
@@ -742,6 +942,33 @@ export class ReadPageDataTool extends BaseMCPTool {
             return { bookmark: r.bookmark, ...flatFields };
           });
 
+          // Apply setCurrent if requested (before returning data)
+          if (setCurrent) {
+            if (!repeaterPath) {
+              return err(
+                new ProtocolError(
+                  'setCurrent failed: Unable to locate repeater control for this list page',
+                  { pageId, setCurrent: true }
+                )
+              );
+            }
+
+            const setCurrentResult = await this.applySetCurrent(
+              connection,
+              flatRecords,
+              filters,
+              repeaterPath,
+              formIds[0],
+              logger
+            );
+
+            if (!isOk(setCurrentResult)) {
+              return setCurrentResult as Result<never, BCError>;
+            }
+
+            logger.info(`Set current record to bookmark: ${setCurrentResult.value.bookmark}`);
+          }
+
           return ok({
             pageId: String(pageId),
             pageContextId,
@@ -769,6 +996,16 @@ export class ReadPageDataTool extends BaseMCPTool {
     } else {
       // Card page - data is directly in LogicalForm
       logger.info(`Extracting card page data...`);
+
+      // setCurrent is not supported on Card pages
+      if (setCurrent) {
+        return err(
+          new ProtocolError(
+            'setCurrent is only supported on List pages, not Card/Document pages',
+            { pageType: 'Card', setCurrent: true }
+          )
+        );
+      }
 
       // Apply PropertyChanges from handlers to logicalForm before extraction
       const { updatedForm } = this.dataExtractor.applyPropertyChangesToLogicalForm(logicalForm, handlers);

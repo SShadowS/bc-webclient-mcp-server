@@ -149,9 +149,19 @@ export class MCPTestClient {
 
   /**
    * Get page metadata and return pageContextId.
+   *
+   * @param {string|number} pageId - Page ID to open
+   * @param {object} filters - (LEGACY) Filter object for navigation (use bookmark instead)
+   * @param {string} bookmark - (RECOMMENDED) BC bookmark for direct record navigation
    */
-  async getPageMetadata(pageId) {
-    return this.callTool('get_page_metadata', { pageId: String(pageId) });
+  async getPageMetadata(pageId, filters = null, bookmark = null) {
+    const params = { pageId: String(pageId) };
+    if (bookmark) {
+      params.bookmark = bookmark;
+    } else if (filters) {
+      params.filters = filters;
+    }
+    return this.callTool('get_page_metadata', params);
   }
 
   /**

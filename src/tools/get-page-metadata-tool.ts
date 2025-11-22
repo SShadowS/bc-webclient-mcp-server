@@ -40,6 +40,7 @@ import { PageIdSchema, PageContextIdSchema } from '../validation/schemas.js';
 const GetPageMetadataInputZodSchema = z.object({
   pageId: PageIdSchema.optional(),
   pageContextId: PageContextIdSchema.optional(),
+  bookmark: z.string().optional(),
   filters: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
 }).refine(
   (data) => data.pageId !== undefined || data.pageContextId !== undefined,
@@ -64,13 +65,18 @@ export class GetPageMetadataTool extends BaseMCPTool {
     'EITHER pageId OR pageContextId is required (not both): ' +
     'pageId: The BC page ID (e.g., 21 for Customer Card, 22 for Customer List) - opens a new page. ' +
     'pageContextId: Existing page context ID from previous get_page_metadata or drill-down - retrieves cached metadata for already-open page. ' +
+    'bookmark (optional, RECOMMENDED): BC bookmark string for direct record navigation (e.g., "1D_JAAAAACLAQAAAAJ7BjEAMAAxADAAMAAwADEA"). ' +
+    'Bookmarks provide the native BC pattern for opening pages at specific records. Get bookmarks from read_page_data results. ' +
+    'CRITICAL: After state-changing actions (like Release, Post, Delete), use bookmark to open a fresh page session at the updated record. ' +
+    'filters (optional, LEGACY): Navigate using field filters (e.g., {"No.": "10000"}). Only works on List pages. Use bookmark instead for Card/Document pages. ' +
     'Returns: pageContextId (use with read_page_data, write_page_data, execute_action), ' +
     'pageType ("List"|"Card"|"Document"|"Worksheet"), ' +
     'fields array with metadata (name, caption, type, editable, required), ' +
     'actions array (available buttons/operations), and page structure information. ' +
-    'Side effects: Creates or updates a short-lived page context bound to the underlying BC session. ' +
+    'Side effects: Creates a new page context bound to the underlying BC session. ' +
+    'When bookmark provided, BC creates a fresh session positioned at that specific record (always returns current data). ' +
     'Context may expire if session ends or navigation leaves the page. ' +
-    'Typical workflow: search_pages → get_page_metadata → read_page_data / write_page_data / execute_action.';
+    'Typical workflow: search_pages → get_page_metadata → read_page_data (save bookmark) → execute_action → get_page_metadata with bookmark.';
 
   public readonly inputSchema = {
     type: 'object',
@@ -83,10 +89,15 @@ export class GetPageMetadataTool extends BaseMCPTool {
         type: 'string',
         description: 'Existing page context ID to retrieve cached metadata (from drill-down or previous get_page_metadata)',
       },
+      bookmark: {
+        type: 'string',
+        description: 'BC bookmark for direct record navigation (RECOMMENDED). Get bookmarks from read_page_data results. ' +
+          'Example: "1D_JAAAAACLAQAAAAJ7BjEAMAAxADAAMAAwADEA". Use this for refreshing data after actions.',
+      },
       filters: {
         type: 'object',
-        description: 'Optional filters to open a specific record (e.g., {"No.": "10000"} for Customer 10000). ' +
-          'For Document pages like Sales Orders, use {"No.": "101001"} to open that specific order.',
+        description: 'LEGACY: Optional filters to open a specific record (e.g., {"No.": "10000"}). ' +
+          'Only works on List pages. Prefer using bookmark instead for reliable navigation.',
         additionalProperties: {
           type: ['string', 'number'],
         },
@@ -119,7 +130,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
    */
   protected async executeInternal(input: unknown): Promise<Result<GetPageMetadataOutput, BCError>> {
     // Input is already validated by BaseMCPTool with Zod
-    let { pageId, pageContextId: inputPageContextId, filters } = input as GetPageMetadataInputValidated;
+    let { pageId, pageContextId: inputPageContextId, filters, bookmark } = input as GetPageMetadataInputValidated;
 
     // Track existing formIds from pageContext to preserve them (avoid overwriting with getAllOpenFormIds)
     let existingFormIds: string[] | null = null;
@@ -153,6 +164,10 @@ export class GetPageMetadataTool extends BaseMCPTool {
     // Create logger for this execution
     const logger = createToolLogger('GetPageMetadata', inputPageContextId);
     logger.info(`Requesting metadata for BC Page: "${pageId}"${inputPageContextId ? ` (from pageContextId: ${inputPageContextId})` : ''}`);
+
+    // REMOVED: Card→List navigation delegation
+    // We now use BC's native bookmark-based navigation pattern instead
+    // See docs/BOOKMARK_NAVIGATION.md for details
 
     const manager = ConnectionManager.getInstance();
     let connection: IBCConnection;
@@ -338,19 +353,33 @@ export class GetPageMetadataTool extends BaseMCPTool {
     // Step 1: OpenForm to create shell/container form with complete parameters
     // BC expects namedParameters as JSON string with a "query" property containing URL-encoded parameters
 
-    // Build filter parameters for the URL
-    // BC URL filter format uses individual field=value parameters, not a "filter" parameter
-    let filterParams = '';
-    if (filters && Object.keys(filters).length > 0) {
+    // Build bookmark or filter parameters for the URL
+    // PRIORITY: bookmark > filters (bookmark is BC's native navigation pattern)
+    let navigationParams = '';
+
+    if (bookmark) {
+      // Use bookmark-based navigation (BC native pattern)
+      navigationParams = `&bookmark=${encodeURIComponent(bookmark)}`;
+      logger.info(`Using bookmark navigation: ${bookmark}`);
+
+      if (filters && Object.keys(filters).length > 0) {
+        logger.warn('Both bookmark and filters provided - bookmark takes priority, ignoring filters');
+      }
+    } else if (filters && Object.keys(filters).length > 0) {
+      // Fallback to filter-based navigation (only works on List pages)
+      // BC URL filter format uses individual field=value parameters, not a "filter" parameter
       const filterParts = Object.entries(filters).map(([field, value]) => {
         // BC URL format: field=value (URL encoded)
         return `${encodeURIComponent(field)}=${encodeURIComponent(String(value))}`;
       });
-      filterParams = '&' + filterParts.join('&');
-      logger.info(`Applying filters: ${filterParams}`);
+      navigationParams = '&' + filterParts.join('&') + '&bookmark=';
+      logger.info(`Using filter navigation: ${JSON.stringify(filters)}`);
+    } else {
+      // No navigation parameters - open page at default position
+      navigationParams = '&bookmark=';
     }
 
-    const queryString = `tenant=${encodeURIComponent(tenant)}&company=${encodeURIComponent(company)}&page=${String(pageId)}&runinframe=1&dc=${String(dc)}&startTraceId=${startTraceId}${filterParams}&bookmark=`;
+    const queryString = `tenant=${encodeURIComponent(tenant)}&company=${encodeURIComponent(company)}&page=${String(pageId)}&runinframe=1&dc=${String(dc)}&startTraceId=${startTraceId}${navigationParams}`;
 
     logger.info(`OpenForm query string: ${queryString}`);
 
@@ -501,6 +530,10 @@ export class GetPageMetadataTool extends BaseMCPTool {
       // Non-fatal: continue even if cache save fails
       logger.warn(`Failed to persist pageContext: ${error}`);
     }
+
+    // NOTE: Filter-based navigation for Card/Document pages is now handled by
+    // navigateToRecordViaList helper (see early delegation logic above).
+    // List pages use read_page_data with setCurrent for navigation.
 
     // Format output for Claude
     const output: GetPageMetadataOutput = {
