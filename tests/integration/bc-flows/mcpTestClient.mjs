@@ -24,6 +24,7 @@ export class MCPTestClient {
     this.requestId = 0;
     this.pendingRequests = new Map();
     this.initialized = false;
+    this.serverCrashed = false;
   }
 
   async start() {
@@ -46,8 +47,22 @@ export class MCPTestClient {
       console.error(colors.red + 'Server error:' + colors.reset, error);
     });
 
-    // Wait for server to connect to BC
-    await new Promise(resolve => setTimeout(resolve, 10000));
+    // Handle unexpected server exit - reject all pending requests
+    this.server.on('exit', (code, signal) => {
+      if (code !== 0 && code !== null) {
+        console.error(colors.red + `Server exited with code ${code}` + colors.reset);
+        this.serverCrashed = true;
+        // Reject all pending requests
+        for (const [id, resolve] of this.pendingRequests) {
+          resolve({ error: { code: -1, message: `Server crashed (exit code ${code})` } });
+        }
+        this.pendingRequests.clear();
+      }
+    });
+
+    // Wait for server ready signal instead of fixed timeout
+    // Server outputs '__MCP_SERVER_READY__' when BC connection is established
+    await this.waitForReady(30000); // 30 second timeout (fallback)
 
     // Initialize MCP protocol
     const initResponse = await this.sendRequest('initialize', {
@@ -64,12 +79,42 @@ export class MCPTestClient {
     console.log(colors.green + '✓ MCP server connected and initialized' + colors.reset);
   }
 
+  /**
+   * Wait for server ready signal or timeout.
+   * @param {number} timeoutMs - Maximum time to wait
+   */
+  async waitForReady(timeoutMs = 30000) {
+    return new Promise((resolve, reject) => {
+      const checkLine = (line) => {
+        if (line === '__MCP_SERVER_READY__') {
+          clearTimeout(timeout);
+          this.rl.removeListener('line', checkLine);
+          resolve();
+        }
+      };
+
+      const timeout = setTimeout(() => {
+        this.rl.removeListener('line', checkLine);
+        reject(new Error('Server startup timeout - no ready signal received'));
+      }, timeoutMs);
+
+      // Listen for ready signal
+      this.rl.on('line', checkLine);
+    });
+  }
+
   async stop() {
     if (this.rl) {
       this.rl.close();
       this.rl = null;
     }
     if (this.server) {
+      // If server already crashed, just clean up
+      if (this.serverCrashed || this.server.exitCode !== null) {
+        this.server = null;
+        return;
+      }
+
       const pid = this.server.pid;
       // On Windows, kill the process tree using taskkill
       if (process.platform === 'win32' && pid) {
@@ -81,6 +126,18 @@ export class MCPTestClient {
       } else {
         this.server.kill();
       }
+
+      // Wait for server process to fully exit (short timeout)
+      await new Promise((resolve) => {
+        if (this.server && this.server.exitCode === null) {
+          this.server.on('exit', resolve);
+          // Short timeout - process should exit quickly after kill
+          setTimeout(resolve, 500);
+        } else {
+          resolve();
+        }
+      });
+
       this.server = null;
     }
   }
@@ -100,7 +157,12 @@ export class MCPTestClient {
     }
   }
 
-  async sendRequest(method, params = null, timeout = 30000) {
+  async sendRequest(method, params = null, timeout = 120000) {
+    // Fail fast if server has crashed
+    if (this.serverCrashed) {
+      return { error: { code: -1, message: 'Server has crashed - cannot send request' } };
+    }
+
     return new Promise((resolve) => {
       const id = ++this.requestId;
       const request = {
@@ -125,7 +187,7 @@ export class MCPTestClient {
   /**
    * Call an MCP tool and return parsed result.
    */
-  async callTool(name, args = {}, timeout = 45000) {
+  async callTool(name, args = {}, timeout = 120000) {
     const response = await this.sendRequest('tools/call', {
       name,
       arguments: args,
@@ -173,9 +235,30 @@ export class MCPTestClient {
 
   /**
    * Write page data.
+   *
+   * @param {string} pageContextId - Page context ID
+   * @param {object} params - Parameters object:
+   *   - For line operations: { subpage: 'SubpageName', lineBookmark?: '...', lineNo?: 1, fields: { ... } }
+   *   - For header fields with explicit wrapper: { fields: { 'Field Name': value, ... } }
+   *   - For header fields legacy: { 'Field Name': value, ... }
    */
-  async writePageData(pageContextId, fields) {
-    return this.callTool('write_page_data', { pageContextId, fields });
+  async writePageData(pageContextId, params) {
+    // Detect if params contains line operation parameters (subpage, lineBookmark, lineNo)
+    const hasLineParams = params.subpage !== undefined || params.lineBookmark !== undefined || params.lineNo !== undefined;
+
+    // Detect if params has explicit 'fields' key (and no line params)
+    const hasExplicitFields = !hasLineParams && params.fields !== undefined;
+
+    if (hasLineParams || hasExplicitFields) {
+      // Case 1: Line operation format: { subpage, fields, ... }
+      // Case 2: Explicit fields format: { fields: {...} }
+      // Pass through as-is
+      return this.callTool('write_page_data', { pageContextId, ...params });
+    } else {
+      // Case 3: Legacy header-only format: { 'Field Name': value, ... }
+      // Wrap in 'fields' parameter
+      return this.callTool('write_page_data', { pageContextId, fields: params });
+    }
   }
 
   /**
@@ -190,6 +273,13 @@ export class MCPTestClient {
    */
   async searchPages(query) {
     return this.callTool('search_pages', { query });
+  }
+
+  async handleDialog(pageContextId, params = {}) {
+    return this.callTool('handle_dialog', {
+      pageContextId,
+      ...params,
+    });
   }
 }
 

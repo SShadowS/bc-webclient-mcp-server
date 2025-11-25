@@ -103,6 +103,27 @@ export type HandlerEvent =
       dialogType: 'Confirm' | 'YesNo';
       message?: string;
       raw: BCHandler;
+    }
+  | {
+      kind: 'DialogToShow';
+      dialogId: string; // Form ID of the dialog
+      caption: string;
+      designName?: string;
+      isTaskDialog?: boolean;
+      isModal?: boolean;
+      originatingFormId?: string;
+      originatingControlPath?: string;
+      raw: BCHandler;
+    }
+  | {
+      kind: 'ColumnsDiscovered';
+      repeaters: Array<{
+        formId: string;
+        controlPath: string;
+        caption: string;
+        columns: any[]; // RepeaterColumnDescription[] but avoid circular import
+      }>;
+      raw: any;
     };
 
 // ============================================================================

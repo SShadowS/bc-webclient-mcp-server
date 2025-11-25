@@ -24,8 +24,11 @@ import { ConnectionManager } from '../connection/connection-manager.js';
 import { createToolLogger, logger as moduleLogger } from '../core/logger.js';
 import type { AuditLogger } from '../services/audit-logger.js';
 import { ControlParser } from '../parsers/control-parser.js';
-import type { LogicalForm, FieldMetadata } from '../types/bc-types.js';
+import type { LogicalForm, FieldMetadata, RepeaterMetadata, ColumnMetadata } from '../types/bc-types.js';
 import { PageContextCache } from '../services/page-context-cache.js';
+import type { PageState, RepeaterState } from '../state/page-state.js';
+import { PageStateManager } from '../state/page-state-manager.js';
+import { createWorkflowIntegration } from '../services/workflow-integration.js';
 
 /**
  * MCP Tool: write_page_data
@@ -45,6 +48,11 @@ export class WritePageDataTool extends BaseMCPTool {
     'fields: Provide as simple map {"FieldName": value} where keys are field names/captions (case-insensitive), ' +
     'OR as array [{name: "FieldName", value: value, controlPath?: "path"}] for precise targeting. ' +
     'Field references use field name or caption from get_page_metadata.fields. ' +
+    'SUBPAGE/LINE OPERATIONS (NEW): To write to document lines (Sales Orders, Purchase Orders, etc.), provide subpage parameter with line identifier. ' +
+    'subpage (optional): Subpage/repeater name (e.g., "SalesLines") for line item operations. ' +
+    'lineBookmark (optional): Bookmark of specific line to update (most reliable). ' +
+    'lineNo (optional): Line number to update (1-based, resolved to bookmark internally). ' +
+    'If neither lineBookmark nor lineNo provided, creates NEW line. Provide EITHER lineBookmark OR lineNo, not both. ' +
     'stopOnError (default true): stops processing remaining fields on first validation error. ' +
     'immediateValidation (default true): runs Business Central OnValidate triggers immediately and surfaces validation messages. ' +
     'Returns: {updatedFields: [], failedFields: [{field, error, validationMessage}], saved: false}. ' +
@@ -89,6 +97,24 @@ export class WritePageDataTool extends BaseMCPTool {
         type: 'boolean',
         description: 'Parse BC handlers for validation errors (default: true)',
         default: true,
+      },
+      subpage: {
+        type: 'string',
+        description: 'Optional: Subpage/repeater name for line item operations (e.g., "SalesLines")',
+      },
+      lineBookmark: {
+        type: 'string',
+        description: 'Optional: Bookmark of specific line to update (most reliable method)',
+      },
+      lineNo: {
+        type: 'number',
+        description: 'Optional: Line number to update (1-based, resolved to bookmark internally)',
+        minimum: 1,
+      },
+      workflowId: {
+        type: 'string',
+        description: 'Optional workflow ID to track this operation as part of a multi-step business process. ' +
+          'When provided, tracks unsaved field changes and records operation result.',
       },
     },
     required: ['pageContextId', 'fields'],
@@ -162,11 +188,41 @@ export class WritePageDataTool extends BaseMCPTool {
     const immediateValidationValue = (input as Record<string, unknown>).immediateValidation;
     const immediateValidation = typeof immediateValidationValue === 'boolean' ? immediateValidationValue : true;
 
+    // Extract and validate subpage/line parameters
+    const subpage = (input as Record<string, unknown>).subpage as string | undefined;
+    const lineBookmark = (input as Record<string, unknown>).lineBookmark as string | undefined;
+    const lineNo = (input as Record<string, unknown>).lineNo as number | undefined;
+
+    // Validate: Cannot provide both lineBookmark AND lineNo
+    if (lineBookmark && lineNo) {
+      return err(
+        new InputValidationError(
+          'Cannot provide both lineBookmark and lineNo - use one or the other',
+          'lineBookmark/lineNo',
+          ['Provide EITHER lineBookmark OR lineNo, not both']
+        )
+      ) as Result<never, BCError>;
+    }
+
+    // Validate: lineBookmark/lineNo require subpage parameter
+    if ((lineBookmark || lineNo) && !subpage) {
+      return err(
+        new InputValidationError(
+          'lineBookmark or lineNo requires subpage parameter to be specified',
+          'subpage',
+          ['Must provide subpage name when using lineBookmark or lineNo']
+        )
+      ) as Result<never, BCError>;
+    }
+
     return ok({
       pageContextId: pageContextIdResult.value,
       fields,
       stopOnError,
       immediateValidation,
+      subpage,
+      lineBookmark,
+      lineNo,
     });
   }
 
@@ -299,13 +355,25 @@ export class WritePageDataTool extends BaseMCPTool {
       return validatedInput as Result<never, BCError>;
     }
 
-    const { pageContextId, fields, stopOnError, immediateValidation } = validatedInput.value;
+    const validatedData = validatedInput.value as WritePageDataInput & {
+      subpage?: string;
+      lineBookmark?: string;
+      lineNo?: number;
+      workflowId?: string;
+    };
+    const { pageContextId, fields, stopOnError, immediateValidation, subpage, lineBookmark, lineNo, workflowId } = validatedData;
+
+    // Create workflow integration if workflowId provided
+    const workflow = createWorkflowIntegration(workflowId);
 
     const fieldNames = Object.keys(fields);
 
     logger.info(`Writing ${fieldNames.length} fields using pageContext: "${pageContextId}"`);
     logger.info(`Fields: ${fieldNames.join(', ')}`);
     logger.info(`Options: stopOnError=${stopOnError}, immediateValidation=${immediateValidation}`);
+    if (subpage) {
+      logger.info(`Line operation: subpage="${subpage}", lineBookmark="${lineBookmark || 'N/A'}", lineNo=${lineNo || 'N/A'}`);
+    }
 
     const manager = ConnectionManager.getInstance();
     let connection: IBCConnection;
@@ -402,24 +470,139 @@ export class WritePageDataTool extends BaseMCPTool {
     // OPTIMIZATION: Use cached LogicalForm for client-side field validation
     // This follows the caching pattern: extract metadata once in get_page_metadata, reuse here
     const pageContext = (connection as any).pageContexts?.get(pageContextId);
-    let fieldMap: Map<string, FieldMetadata> | null = null;
+    let fieldMap: Map<string, FieldMetadata | ColumnMetadata> | null = null;
+    let targetRowBookmark: string | undefined;  // Bookmark for existing row modification in subpages
 
-    if (pageContext?.logicalForm) {
+    if (pageContext?.logicalForm && !subpage) {
+      // Only validate header fields if NOT in line mode
       logger.info(`Using cached LogicalForm for client-side field validation`);
-      fieldMap = this.buildFieldMap(pageContext.logicalForm);
-      logger.info(`  Field map contains ${fieldMap.size} field entries`);
+      const headerFieldMap = this.buildFieldMap(pageContext.logicalForm);
+      fieldMap = headerFieldMap; // Store for later use in field-writing loop
+      logger.info(`  Field map contains ${headerFieldMap.size} field entries`);
 
       // Pre-validate all fields before making BC API calls
       for (const fieldName of fieldNames) {
-        const validationResult = this.validateFieldExists(fieldName, fieldMap);
+        const validationResult = this.validateFieldExists(fieldName, headerFieldMap);
         if (!isOk(validationResult)) {
           logger.info(`Pre-validation failed for field "${fieldName}": ${validationResult.error.message}`);
           return validationResult as Result<never, BCError>;
         }
         logger.info(`Pre-validated field "${fieldName}"`);
       }
-    } else {
+    } else if (!subpage) {
       logger.info(`No cached LogicalForm available, skipping client-side validation`);
+    }
+
+    // LINE/SUBPAGE OPERATION: Handle line operations if subpage is provided
+    if (subpage) {
+      logger.info(`Handling line operation for subpage "${subpage}"`);
+
+      // Find repeater by subpage name (uses PageState if available)
+      const repeaterResult = await this.findRepeaterBySubpage(pageContextId, pageContext, subpage);
+      if (!isOk(repeaterResult)) {
+        return repeaterResult as Result<never, BCError>;
+      }
+
+      const repeater = repeaterResult.value;
+      logger.info(`Found repeater: ${repeater.caption || repeater.name} at ${repeater.controlPath}`);
+
+      // If lineBookmark or lineNo provided, we're updating an existing line
+      if (lineBookmark || lineNo) {
+        // Determine which bookmark to use
+        targetRowBookmark = lineBookmark;
+
+        // If lineNo provided, resolve to bookmark from PageState cache
+        if (lineNo && !lineBookmark) {
+          const cache = PageContextCache.getInstance();
+          const pageState = await cache.getPageState(pageContextId);
+
+          if (!pageState) {
+            return err(
+              new InputValidationError(
+                `lineNo parameter requires cached page state - call read_page_data first`,
+                'lineNo',
+                [`Page state not found in cache for pageContextId: ${pageContextId}`]
+              )
+            );
+          }
+
+          // Find the repeater in PageState by matching name/caption
+          let repeaterState: import('../state/page-state.js').RepeaterState | undefined;
+          for (const [, rs] of pageState.repeaters) {
+            // Match by caption (user-facing name like "SalesLines") or name
+            if (
+              rs.caption?.toLowerCase().includes(subpage.toLowerCase()) ||
+              rs.name.toLowerCase().includes(subpage.toLowerCase())
+            ) {
+              repeaterState = rs;
+              break;
+            }
+          }
+
+          if (!repeaterState) {
+            return err(
+              new InputValidationError(
+                `Repeater "${subpage}" not found in cached page state`,
+                'subpage',
+                [`Available repeaters: ${Array.from(pageState.repeaters.keys()).join(', ')}`]
+              )
+            );
+          }
+
+          // Get bookmark from rowOrder array (1-indexed lineNo to 0-indexed array)
+          const rowIndex = lineNo - 1;
+          if (rowIndex < 0 || rowIndex >= repeaterState.rowOrder.length) {
+            return err(
+              new InputValidationError(
+                `lineNo ${lineNo} is out of range - only ${repeaterState.rowOrder.length} rows available`,
+                'lineNo',
+                [`Valid range: 1 to ${repeaterState.rowOrder.length}`]
+              )
+            );
+          }
+
+          targetRowBookmark = repeaterState.rowOrder[rowIndex];
+          logger.info(`Resolved lineNo ${lineNo} to bookmark: ${targetRowBookmark}`);
+        }
+
+        // PROTOCOL FIX: Instead of using SetCurrentRowAndRowsSelection, we pass the bookmark
+        // directly in SaveValue's 'key' parameter. This is more reliable and matches how
+        // BC web client handles cell edits in existing rows.
+        logger.info(`Updating existing line with bookmark: ${targetRowBookmark} (using SaveValue key)`);
+      } else {
+        // Neither lineBookmark nor lineNo provided - writing to draft row (new line creation)
+        logger.info(`Writing to draft row in subpage "${subpage}"`);
+
+        // CORRECT APPROACH from decompiled BC code analysis:
+        // BC uses DraftLinePattern/MultipleNewLinesPattern to PRE-CREATE draft rows during LoadForm.
+        // Document subforms (Sales Lines, Purchase Lines) have 15+ draft rows at the end.
+        //
+        // PROTOCOL SEQUENCE:
+        // 1. Draft rows already exist from LoadForm (in DataRefreshChange)
+        // 2. User clicks into draft row OR we find first available draft row
+        // 3. SaveValue populates fields (marks row as Dirty | Draft)
+        // 4. AutoInsertPattern automatically commits when user tabs to next field
+        //
+        // See decompiled:
+        // - Microsoft.Dynamics.Nav.Client.UI/Nav/Client/UIPatterns/DraftLinePattern.cs
+        // - Microsoft.Dynamics.Nav.Client.UI/Nav/Client/UIPatterns/MultipleNewLinesPattern.cs
+        // - Microsoft.Dynamics.Nav.Client.UI/Nav/Client/UIPatterns/AutoInsertPattern.cs
+        //
+        // SIMPLIFIED APPROACH:
+        // Since draft rows exist and BC's web client uses SetCurrentRow with Delta to navigate,
+        // we can simply send SaveValue directly to the repeater. BC will:
+        // - Position to the next available draft row automatically
+        // - Apply the values and mark row as dirty
+        // - AutoInsertPattern commits when we move on
+        //
+        // No explicit row selection needed for NEW lines - BC handles positioning.
+
+        logger.info(`Draft rows should exist from LoadForm - proceeding directly with field writes`);
+      }
+
+      // Build column field map from repeater metadata for field validation
+      fieldMap = this.buildColumnFieldMap(repeater);
+      logger.info(`Built column field map with ${fieldMap.size} columns`);
     }
 
     // Set each field value using SaveValue interaction
@@ -456,7 +639,8 @@ export class WritePageDataTool extends BaseMCPTool {
         fieldValue,
         pageContextId,
         controlPath,
-        immediateValidation
+        immediateValidation,
+        targetRowBookmark  // Pass bookmark for existing row modification
       );
 
       if (isOk(result)) {
@@ -486,6 +670,17 @@ export class WritePageDataTool extends BaseMCPTool {
     // Return result
     if (failedFields.length === 0) {
       // All fields updated successfully
+
+      // Track unsaved changes and record operation in workflow
+      if (workflow) {
+        workflow.trackUnsavedChanges(fields);
+        workflow.recordOperation(
+          'write_page_data',
+          { pageContextId, fields, subpage, lineBookmark, lineNo },
+          { success: true, data: { updatedFields, fieldCount: updatedFields.length } }
+        );
+      }
+
       return ok({
         success: true,
         pageContextId,
@@ -495,6 +690,33 @@ export class WritePageDataTool extends BaseMCPTool {
       });
     } else if (updatedFields.length > 0) {
       // Partial success
+
+      // Track partial unsaved changes and record operation with errors in workflow
+      if (workflow) {
+        // Track only the fields that succeeded
+        const successfulFieldsObj: Record<string, unknown> = {};
+        for (const fieldName of updatedFields) {
+          successfulFieldsObj[fieldName] = (fields as any)[fieldName];
+        }
+        workflow.trackUnsavedChanges(successfulFieldsObj);
+
+        // Record operation with partial success
+        workflow.recordOperation(
+          'write_page_data',
+          { pageContextId, fields, subpage, lineBookmark, lineNo },
+          {
+            success: false,
+            error: `Partially updated ${updatedFields.length} field(s). Failed: ${failedFields.map(f => f.field).join(', ')}`,
+            data: { updatedFields, failedFields }
+          }
+        );
+
+        // Record failed fields as errors
+        for (const failed of failedFields) {
+          workflow.recordError(`Field "${failed.field}": ${failed.error}${failed.validationMessage ? ` - ${failed.validationMessage}` : ''}`);
+        }
+      }
+
       return ok({
         success: false,
         pageContextId,
@@ -505,6 +727,22 @@ export class WritePageDataTool extends BaseMCPTool {
       });
     } else {
       // Complete failure
+
+      // Record operation failure and errors in workflow
+      if (workflow) {
+        const errorMsg = `Failed to update any fields. Errors: ${failedFields.map(f => `${f.field}: ${f.error}`).join('; ')}`;
+        workflow.recordOperation(
+          'write_page_data',
+          { pageContextId, fields, subpage, lineBookmark, lineNo },
+          { success: false, error: errorMsg, data: { failedFields } }
+        );
+
+        // Record each field failure as an error
+        for (const failed of failedFields) {
+          workflow.recordError(`Field "${failed.field}": ${failed.error}${failed.validationMessage ? ` - ${failed.validationMessage}` : ''}`);
+        }
+      }
+
       return err(
         new ProtocolError(
           `Failed to update any fields. Errors: ${failedFields.map(f => `${f.field}: ${f.error}`).join('; ')}`,
@@ -512,6 +750,255 @@ export class WritePageDataTool extends BaseMCPTool {
         )
       );
     }
+  }
+
+  /**
+   * Finds a repeater (subpage) by name using PageState (preferred) or LogicalForm (fallback).
+   * Searches by both caption and design name (case-insensitive).
+   *
+   * Phase 1: Uses PageState if available, falls back to LogicalForm
+   * Phase 2: PageState will be required
+   */
+  private async findRepeaterBySubpage(
+    pageContextId: string,
+    pageContext: any,
+    subpageName: string
+  ): Promise<Result<RepeaterMetadata, BCError>> {
+    const logger = moduleLogger.child({ method: 'findRepeaterBySubpage' });
+
+    // Try PageState first (Phase 1: Dual-state approach)
+    try {
+      const cache = PageContextCache.getInstance();
+      const pageState = await cache.getPageState(pageContextId);
+
+      if (pageState) {
+        logger.info(`Using PageState for repeater lookup`);
+
+        // Search repeaters Map by name (case-insensitive)
+        const searchKey = subpageName.toLowerCase().trim();
+        let foundRepeater: RepeaterState | undefined;
+
+        for (const [_key, repeater] of pageState.repeaters.entries()) {
+          if (
+            repeater.caption?.toLowerCase().trim() === searchKey ||
+            repeater.name?.toLowerCase().trim() === searchKey
+          ) {
+            foundRepeater = repeater;
+            break;
+          }
+        }
+
+        if (foundRepeater) {
+          // Convert PageState RepeaterState to RepeaterMetadata for compatibility
+          const repeaterMeta: RepeaterMetadata = {
+            name: foundRepeater.name,
+            caption: foundRepeater.caption,
+            controlPath: foundRepeater.controlPath,
+            formId: foundRepeater.formId,
+            columns: Array.from(foundRepeater.columns.values()).map(col => ({
+              caption: col.caption,
+              designName: col.designName,
+              controlPath: col.controlPath,
+              index: col.index,
+              controlId: col.controlId,
+              visible: col.visible,
+              editable: col.editable,
+              columnBinderPath: col.columnBinderPath,
+            })),
+          };
+
+          logger.info(`Found repeater "${repeaterMeta.caption || repeaterMeta.name}" via PageState`);
+          logger.info(`  - controlPath: ${repeaterMeta.controlPath}`);
+          logger.info(`  - formId: ${repeaterMeta.formId || 'undefined'}`);
+          logger.info(`  - columns.length: ${repeaterMeta.columns.length}`);
+          logger.info(`  - totalRowCount: ${foundRepeater.totalRowCount || 'undefined'}`);
+          logger.info(`  - loaded rows: ${foundRepeater.rows.size}`);
+          logger.info(`  - pendingOperations: ${foundRepeater.pendingOperations}`);
+          logger.info(`  - isDirty: ${foundRepeater.isDirty}`);
+
+          return ok(repeaterMeta);
+        }
+
+        // Not found in PageState - fall through to LogicalForm
+        logger.info(`Repeater "${subpageName}" not found in PageState, trying LogicalForm fallback`);
+      } else {
+        logger.info(`No PageState available, using LogicalForm for repeater lookup`);
+      }
+    } catch (error) {
+      logger.warn(`PageState lookup failed: ${error}, falling back to LogicalForm`);
+    }
+
+    // Fallback: Use LogicalForm (original implementation)
+    const logicalForm = pageContext?.logicalForm;
+    if (!logicalForm) {
+      return err(
+        new ProtocolError(
+          `No cached LogicalForm or PageState available for repeater lookup`,
+          { subpageName }
+        )
+      );
+    }
+
+    // Extract repeaters from logicalForm using ControlParser
+    const parser = new ControlParser();
+    const controls = parser.walkControls(logicalForm);
+    const repeaters = parser.extractRepeaters(controls);
+
+    // Search by name (case-insensitive)
+    const searchKey = subpageName.toLowerCase().trim();
+    const found = repeaters.find(r =>
+      r.caption?.toLowerCase().trim() === searchKey ||
+      r.name?.toLowerCase().trim() === searchKey
+    );
+
+    if (!found) {
+      const availableNames = repeaters
+        .map(r => r.caption || r.name)
+        .filter(Boolean)
+        .join(', ');
+      return err(
+        new InputValidationError(
+          `Subpage "${subpageName}" not found on page`,
+          'subpage',
+          [
+            `The subpage/repeater "${subpageName}" does not exist on this page.`,
+            `Available subpages: ${availableNames || 'none'}`,
+          ]
+        )
+      );
+    }
+
+    // DIAGNOSTIC: Log found repeater metadata
+    logger.info(`Found repeater "${found.caption || found.name}" via LogicalForm`);
+    logger.info(`  - controlPath: ${found.controlPath}`);
+    logger.info(`  - formId: ${found.formId || 'undefined'}`);
+    logger.info(`  - columns.length: ${found.columns.length}`);
+    if (found.columns.length > 0) {
+      logger.info(`  - First 3 columns: ${found.columns.slice(0, 3).map(c => c.caption || c.designName).join(', ')}`);
+    } else {
+      logger.warn(`  WARNING: Repeater has ZERO columns! This will cause "Cannot find controlPath" error.`);
+    }
+
+    return ok(found);
+  }
+
+  /**
+   * Builds a field map from repeater column metadata.
+   * Maps column captions and design names to column metadata.
+   */
+  private buildColumnFieldMap(repeater: RepeaterMetadata): Map<string, ColumnMetadata> {
+    const logger = moduleLogger.child({ method: 'buildColumnFieldMap' });
+    const map = new Map<string, ColumnMetadata>();
+
+    // DIAGNOSTIC: Log what we're building from
+    logger.info(`Building field map from ${repeater.columns.length} columns`);
+    if (repeater.columns.length === 0) {
+      logger.warn(`  ⚠️ PROBLEM: No columns to build map from!`);
+      return map;
+    }
+
+    for (const column of repeater.columns) {
+      // Add by caption
+      if (column.caption) {
+        const key = column.caption.toLowerCase().trim();
+        map.set(key, column);
+      }
+
+      // Add by design name
+      if (column.designName) {
+        const key = column.designName.toLowerCase().trim();
+        map.set(key, column);
+      }
+    }
+
+    logger.info(`  Built map with ${map.size} field name mappings`);
+    if (map.size > 0) {
+      const sampleKeys = Array.from(map.keys()).slice(0, 5);
+      logger.info(`  Sample keys: ${sampleKeys.join(', ')}`);
+    }
+
+    return map;
+  }
+
+  /**
+   * Selects a line in a repeater using SetCurrentRowAndRowsSelection.
+   * This sets server-side focus to the target row before field updates.
+   */
+  private async selectLine(
+    connection: IBCConnection,
+    formId: string,
+    repeaterPath: string,
+    bookmark: string
+  ): Promise<Result<void, BCError>> {
+    const logger = createToolLogger('write_page_data', formId);
+
+    logger.info(`Selecting line with bookmark "${bookmark}" in repeater ${repeaterPath}`);
+
+    try {
+      await connection.invoke({
+        interactionName: 'SetCurrentRowAndRowsSelection',
+        namedParameters: {
+          key: bookmark,
+          selectAll: false,
+          rowsToSelect: [bookmark],
+          unselectAll: true,
+          rowsToUnselect: [],
+        },
+        controlPath: repeaterPath,
+        formId,
+        callbackId: '',  // Empty callback for synchronous operations
+      });
+
+      logger.info(`Successfully selected line`);
+      return ok(undefined);
+    } catch (error) {
+      logger.error(`Failed to select line: ${error}`);
+      return err(
+        new ProtocolError(
+          `Failed to select line in subpage: ${error}`,
+          { repeaterPath, bookmark, error }
+        )
+      );
+    }
+  }
+
+  /**
+   * Extracts bookmark from DataRefreshChange event (for new line creation).
+   * BC sends this async event when a new line is inserted with the new bookmark.
+   */
+  private extractBookmarkFromDataRefresh(handlers: readonly any[]): string | undefined {
+    const logger = createToolLogger('write_page_data', 'bookmark-extraction');
+
+    // Look for LogicalClientChangeHandler with DataRefreshChange
+    for (const handler of handlers) {
+      if (handler.handlerType === 'DN.LogicalClientChangeHandler') {
+        const changes = handler.parameters?.[1];
+        if (Array.isArray(changes)) {
+          for (const change of changes) {
+            if (change.t === 'DataRefreshChange') {
+              // Look for DataRowInserted with bookmark
+              const rowChanges = change.RowChanges || [];
+              for (const rowChange of rowChanges) {
+                if (rowChange.t === 'DataRowInserted') {
+                  const insertedData = rowChange.DataRowInserted;
+                  if (Array.isArray(insertedData) && insertedData.length >= 2) {
+                    const rowData = insertedData[1];
+                    const bookmark = rowData?.bookmark;
+                    if (bookmark) {
+                      logger.info(`Extracted bookmark from new line: ${bookmark}`);
+                      return bookmark;
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    logger.warn(`No bookmark found in DataRefreshChange handlers`);
+    return undefined;
   }
 
   /**
@@ -528,7 +1015,8 @@ export class WritePageDataTool extends BaseMCPTool {
     value: unknown,
     pageContextId: string,
     controlPath?: string,
-    immediateValidation: boolean = true
+    immediateValidation: boolean = true,
+    rowBookmark?: string  // Bookmark for existing row modification (null for header/new rows)
   ): Promise<Result<void, BCError>> {
     // Handle null values (clear field)
     let actualValue: string | number | boolean;
@@ -552,7 +1040,7 @@ export class WritePageDataTool extends BaseMCPTool {
       interactionName: 'SaveValue',
       skipExtendingSessionLifetime: false,
       namedParameters: JSON.stringify({
-        key: null,
+        key: rowBookmark || null,  // Use bookmark for existing row, null for header/new rows
         newValue: actualValue,
         alwaysCommitChange: true,
         notifyBusy: 1,
@@ -595,6 +1083,8 @@ export class WritePageDataTool extends BaseMCPTool {
 
     if (!result.ok) {
       abortController.abort(); // Cancel async wait on error
+      // Suppress the AbortedError from the promise since we're returning early
+      asyncHandlerPromise.catch(() => {});
       return err(
         new ProtocolError(
           `Failed to set field "${fieldName}": ${result.error.message}`,
@@ -639,15 +1129,23 @@ export class WritePageDataTool extends BaseMCPTool {
     }
 
     // Wait for async PropertyChanges handlers (will be aborted if already found in sync)
+    // Use Promise.race with setTimeout as a defensive fallback in case AbortSignal.timeout fails
+    const FALLBACK_TIMEOUT_MS = 2000; // Slightly longer than the 1000ms primary timeout
     let asyncHandlers: any[] = [];
     try {
-      asyncHandlers = await asyncHandlerPromise;
+      const fallbackTimeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Fallback timeout')), FALLBACK_TIMEOUT_MS);
+      });
+
+      asyncHandlers = await Promise.race([asyncHandlerPromise, fallbackTimeoutPromise]);
       moduleLogger.info(`[PropertyChanges] Received ${asyncHandlers.length} async handlers after SaveValue`);
     } catch (error: any) {
       // AbortError means we found PropertyChanges in sync response - this is good!
-      // Timeout means no async handlers - this is also OK for some fields
+      // Timeout (either AbortSignal or fallback) means no async handlers - this is also OK for some fields
       if (error?.name === 'AbortError') {
         moduleLogger.info(`[PropertyChanges] Async wait aborted (PropertyChanges already in sync response)`);
+      } else if (error?.message === 'Fallback timeout') {
+        moduleLogger.info(`[PropertyChanges] Fallback timeout - no async handlers received`);
       } else {
         moduleLogger.info(`[PropertyChanges] No async handlers received (timeout) - this is OK for some fields`);
       }

@@ -24,50 +24,7 @@
  * -32046: Read-only/Action disabled
  */
 
-import {
-  BCError,
-  // Validation
-  InputValidationError,
-  ValidationError,
-  SchemaValidationError,
-  ConfigValidationError,
-  // MCP Protocol
-  MCPError,
-  MCPToolNotFoundError,
-  MCPResourceNotFoundError,
-  MCPInvalidArgumentsError,
-  // Auth
-  AuthenticationError,
-  PermissionDeniedError,
-  // Connection
-  ConnectionError,
-  WebSocketConnectionError,
-  SessionExpiredError,
-  NetworkError,
-  TimeoutError,
-  // Protocol
-  ProtocolError,
-  JsonRpcError,
-  DecompressionError,
-  InvalidResponseError,
-  // Parse
-  ParseError,
-  HandlerParseError,
-  ControlParseError,
-  LogicalFormParseError,
-  // Business Logic
-  BusinessLogicError,
-  PageNotFoundError,
-  ActionNotFoundError,
-  FieldNotFoundError,
-  RecordNotFoundError,
-  ActionDisabledError,
-  FieldReadOnlyError,
-  // Internal
-  InternalError,
-  NotImplementedError,
-  UnreachableError,
-} from './errors.js';
+import { BCError } from './errors.js';
 
 /**
  * MCP Error structure for JSON-RPC 2.0 responses
@@ -128,113 +85,96 @@ export function toMCPError(error: unknown): MCPErrorResponse {
   };
 }
 
+/** JSON-RPC 2.0 Error Codes */
+const JSON_RPC_CODES = {
+  PARSE_ERROR: -32700,
+  INVALID_REQUEST: -32600,
+  METHOD_NOT_FOUND: -32601,
+  INVALID_PARAMS: -32602,
+  INTERNAL_ERROR: -32603,
+  // Custom MCP codes
+  TIMEOUT: -32000,
+  AUTHENTICATION: -32001,
+  PERMISSION_DENIED: -32002,
+  NETWORK: -32003,
+  BUSINESS_LOGIC: -32040,
+  VALIDATION: -32041,
+  PROTOCOL: -32042,
+  CONNECTION: -32043,
+  NOT_FOUND: -32044,
+  READ_ONLY: -32046,
+} as const;
+
 /**
- * Maps BCError subclass to JSON-RPC error code.
+ * Error name to JSON-RPC code mapping.
+ * Uses error.name for O(1) lookup instead of instanceof chains.
+ */
+const ERROR_CODE_MAP: Record<string, number> = {
+  // Input Validation → Invalid params
+  InputValidationError: JSON_RPC_CODES.INVALID_PARAMS,
+  MCPInvalidArgumentsError: JSON_RPC_CODES.INVALID_PARAMS,
+
+  // Method/Tool Not Found
+  MCPToolNotFoundError: JSON_RPC_CODES.METHOD_NOT_FOUND,
+  NotImplementedError: JSON_RPC_CODES.METHOD_NOT_FOUND,
+
+  // Authentication
+  AuthenticationError: JSON_RPC_CODES.AUTHENTICATION,
+  SessionExpiredError: JSON_RPC_CODES.AUTHENTICATION,
+
+  // Authorization/Permission
+  PermissionDeniedError: JSON_RPC_CODES.PERMISSION_DENIED,
+
+  // Network
+  NetworkError: JSON_RPC_CODES.NETWORK,
+
+  // Timeout
+  TimeoutError: JSON_RPC_CODES.TIMEOUT,
+
+  // Connection
+  ConnectionError: JSON_RPC_CODES.CONNECTION,
+  WebSocketConnectionError: JSON_RPC_CODES.CONNECTION,
+
+  // Protocol
+  ProtocolError: JSON_RPC_CODES.PROTOCOL,
+  JsonRpcError: JSON_RPC_CODES.PROTOCOL,
+  DecompressionError: JSON_RPC_CODES.PROTOCOL,
+  InvalidResponseError: JSON_RPC_CODES.PROTOCOL,
+
+  // Parse errors
+  ParseError: JSON_RPC_CODES.PARSE_ERROR,
+  HandlerParseError: JSON_RPC_CODES.PARSE_ERROR,
+  ControlParseError: JSON_RPC_CODES.PARSE_ERROR,
+  LogicalFormParseError: JSON_RPC_CODES.PARSE_ERROR,
+
+  // Not Found
+  PageNotFoundError: JSON_RPC_CODES.NOT_FOUND,
+  ActionNotFoundError: JSON_RPC_CODES.NOT_FOUND,
+  FieldNotFoundError: JSON_RPC_CODES.NOT_FOUND,
+  RecordNotFoundError: JSON_RPC_CODES.NOT_FOUND,
+  MCPResourceNotFoundError: JSON_RPC_CODES.NOT_FOUND,
+
+  // Read-only/Disabled
+  ActionDisabledError: JSON_RPC_CODES.READ_ONLY,
+  FieldReadOnlyError: JSON_RPC_CODES.READ_ONLY,
+
+  // Business Logic
+  BusinessLogicError: JSON_RPC_CODES.BUSINESS_LOGIC,
+
+  // Validation (non-input)
+  ValidationError: JSON_RPC_CODES.VALIDATION,
+  SchemaValidationError: JSON_RPC_CODES.VALIDATION,
+  ConfigValidationError: JSON_RPC_CODES.VALIDATION,
+
+  // Internal errors
+  MCPError: JSON_RPC_CODES.INTERNAL_ERROR,
+  InternalError: JSON_RPC_CODES.INTERNAL_ERROR,
+  UnreachableError: JSON_RPC_CODES.INTERNAL_ERROR,
+};
+
+/**
+ * Maps BCError subclass to JSON-RPC error code using O(1) lookup.
  */
 function getErrorCode(error: BCError): number {
-  // Input Validation → -32602 (Invalid params)
-  if (error instanceof InputValidationError || error instanceof MCPInvalidArgumentsError) {
-    return -32602;
-  }
-
-  // Method/Tool Not Found → -32601
-  if (error instanceof MCPToolNotFoundError) {
-    return -32601;
-  }
-
-  // Authentication → -32001 (custom)
-  if (error instanceof AuthenticationError || error instanceof SessionExpiredError) {
-    return -32001;
-  }
-
-  // Authorization/Permission → -32002 (custom)
-  if (error instanceof PermissionDeniedError) {
-    return -32002;
-  }
-
-  // Network errors → -32003 (custom)
-  if (error instanceof NetworkError) {
-    return -32003;
-  }
-
-  // Timeout → -32000 (custom)
-  if (error instanceof TimeoutError) {
-    return -32000;
-  }
-
-  // Connection errors → -32043 (custom)
-  if (
-    error instanceof ConnectionError ||
-    error instanceof WebSocketConnectionError
-  ) {
-    return -32043;
-  }
-
-  // Protocol errors → -32042 (custom)
-  if (
-    error instanceof ProtocolError ||
-    error instanceof JsonRpcError ||
-    error instanceof DecompressionError ||
-    error instanceof InvalidResponseError
-  ) {
-    return -32042;
-  }
-
-  // Parse errors → -32700 (Parse error)
-  if (
-    error instanceof ParseError ||
-    error instanceof HandlerParseError ||
-    error instanceof ControlParseError ||
-    error instanceof LogicalFormParseError
-  ) {
-    return -32700;
-  }
-
-  // Not Found → -32044 (custom)
-  if (
-    error instanceof PageNotFoundError ||
-    error instanceof ActionNotFoundError ||
-    error instanceof FieldNotFoundError ||
-    error instanceof RecordNotFoundError ||
-    error instanceof MCPResourceNotFoundError
-  ) {
-    return -32044;
-  }
-
-  // Read-only/Disabled → -32046 (custom)
-  if (error instanceof ActionDisabledError || error instanceof FieldReadOnlyError) {
-    return -32046;
-  }
-
-  // Business Logic → -32040 (custom)
-  if (error instanceof BusinessLogicError) {
-    return -32040;
-  }
-
-  // Validation (non-input) → -32041 (custom)
-  if (
-    error instanceof ValidationError ||
-    error instanceof SchemaValidationError ||
-    error instanceof ConfigValidationError
-  ) {
-    return -32041;
-  }
-
-  // Not Implemented → -32601 (Method not found - feature doesn't exist yet)
-  if (error instanceof NotImplementedError) {
-    return -32601;
-  }
-
-  // MCP errors → -32603 (Internal error)
-  if (error instanceof MCPError) {
-    return -32603;
-  }
-
-  // Internal/Unreachable → -32603 (Internal error)
-  if (error instanceof InternalError || error instanceof UnreachableError) {
-    return -32603;
-  }
-
-  // Default: Internal error
-  return -32603;
+  return ERROR_CODE_MAP[error.name] ?? JSON_RPC_CODES.INTERNAL_ERROR;
 }

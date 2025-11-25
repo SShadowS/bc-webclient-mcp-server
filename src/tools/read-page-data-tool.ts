@@ -20,6 +20,9 @@ import { ConnectionManager } from '../connection/connection-manager.js';
 import { createToolLogger } from '../core/logger.js';
 import { PageContextCache } from '../services/page-context-cache.js';
 import { FilterMetadataService } from '../services/filter-metadata-service.js';
+import { ColumnEnrichmentService } from '../services/column-enrichment-service.js';
+import { defaultTimeouts } from '../core/timeouts.js';
+import { createWorkflowIntegration } from '../services/workflow-integration.js';
 
 /**
  * MCP Tool: read_page_data
@@ -66,6 +69,10 @@ export class ReadPageDataTool extends BaseMCPTool {
       offset: {
         type: 'number',
         description: 'Number of records to skip (for pagination)',
+      },
+      workflowId: {
+        type: 'string',
+        description: 'Optional workflow ID to track this operation. Records data reads for workflow audit trail.',
       },
     },
     required: ['pageContextId'],
@@ -309,7 +316,7 @@ export class ReadPageDataTool extends BaseMCPTool {
         logger.info(`[applyFilters] DataRefreshChange check: matched=${matched}, handlers=${handlers.length}`);
         return { matched, data: matched ? handlers : undefined };
       },
-      { timeoutMs: 10000 } // 10 second timeout
+      { timeoutMs: defaultTimeouts.readOpTimeoutMs }
     );
 
     // Find FilterLogicalControl for Path A (QuickFilter)
@@ -420,6 +427,20 @@ export class ReadPageDataTool extends BaseMCPTool {
               bcFilterValue = `${value[0]}..${value[1]}`;
             } else {
               logger.warn(`    Invalid 'between' value for "${columnName}": expected [min, max]`);
+              continue;
+            }
+            break;
+          case '..':
+          case 'range':
+            // Range filter: accepts "min..max" string or [min, max] array
+            if (typeof value === 'string' && value.includes('..')) {
+              // Value is already in BC range format like "101002..101005"
+              bcFilterValue = value;
+            } else if (Array.isArray(value) && value.length === 2) {
+              // Value is [min, max] array
+              bcFilterValue = `${value[0]}..${value[1]}`;
+            } else {
+              logger.warn(`    Invalid range value for "${columnName}": expected "min..max" string or [min, max] array`);
               continue;
             }
             break;
@@ -696,8 +717,11 @@ export class ReadPageDataTool extends BaseMCPTool {
    */
   protected async executeInternal(input: unknown): Promise<Result<ReadPageDataOutput, BCError>> {
     // Input is already validated by BaseMCPTool with Zod
-    const { pageContextId, filters, setCurrent, limit, offset } = input as ReadPageDataInput;
+    const { pageContextId, filters, setCurrent, limit, offset, workflowId } = input as ReadPageDataInput & { workflowId?: string };
     const logger = createToolLogger('read_page_data', pageContextId);
+
+    // Create workflow integration if workflowId provided
+    const workflow = createWorkflowIntegration(workflowId);
 
     logger.info(`Reading data using pageContext: "${pageContextId}"`);
 
@@ -817,6 +841,17 @@ export class ReadPageDataTool extends BaseMCPTool {
       if (isOk(loadFormResult)) {
         logger.info(`LoadForm returned ${loadFormResult.value.length} handlers`);
         handlers = loadFormResult.value;
+
+        // Enrich page context with any column metadata from LoadForm response
+        const enrichmentService = ColumnEnrichmentService.getInstance();
+        const enrichment = await enrichmentService.enrichFromResponse(
+          pageContextId,
+          { handlers: loadFormResult.value }
+        );
+        if (enrichment.enriched) {
+          logger.info(`Discovered columns for ${enrichment.repeaterCount} repeater(s)`);
+        }
+
         // Update cached handlers and clear refresh flag
         if (pageContext) {
           pageContext.handlers = handlers as any;
@@ -962,6 +997,7 @@ export class ReadPageDataTool extends BaseMCPTool {
     // Compute repeater path if filters or setCurrent are requested (for list pages)
     const hasFilters = filters && Object.keys(filters).length > 0;
     let repeaterPath: string | null = null;
+    let filtersWereApplied = false; // Track if we received filtered data from applyFilters
 
     if (isListPage && (hasFilters || setCurrent)) {
       // Find repeater control path from LogicalForm (with Phase 2 cache optimization)
@@ -999,6 +1035,7 @@ export class ReadPageDataTool extends BaseMCPTool {
             // applyFilters() already waited for DataRefreshChange with filtered data
             logger.info(`Using filtered handlers from applyFilters (${filterResult.value.filteredHandlers.length} handlers)`);
             handlers = filterResult.value.filteredHandlers;
+            filtersWereApplied = true; // Mark that we got filtered data
             // Update cached handlers
             if (pageContext) {
               pageContext.handlers = handlers as any;
@@ -1070,6 +1107,15 @@ export class ReadPageDataTool extends BaseMCPTool {
           logger.info(`Set current record to bookmark: ${setCurrentResult.value.bookmark}`);
         }
 
+        // Record operation in workflow (if participating)
+        if (workflow) {
+          workflow.recordOperation(
+            'read_page_data',
+            { pageContextId, filters, setCurrent, limit, offset },
+            { success: true, data: { pageId: String(pageId), recordCount: flatRecords.length, totalCount } }
+          );
+        }
+
         return ok({
           pageId: String(pageId),
           pageContextId,
@@ -1082,7 +1128,8 @@ export class ReadPageDataTool extends BaseMCPTool {
 
       // If no data, wait for async data (either DelayedControls or empty sync result)
       // BC list pages often send data asynchronously even without DelayedControls flag
-      if (hasDelayedControls || (isOk(syncExtractionResult) && syncExtractionResult.value.totalCount === 0)) {
+      // CRITICAL: Skip async wait if we just applied filters - filtered data is already final
+      if (!filtersWereApplied && (hasDelayedControls || (isOk(syncExtractionResult) && syncExtractionResult.value.totalCount === 0))) {
         if (hasDelayedControls) {
           logger.info(`DelayedControls detected, waiting for async data...`);
         } else {
@@ -1117,7 +1164,7 @@ export class ReadPageDataTool extends BaseMCPTool {
           // BC list pages automatically send data via async Message handlers after opening
           // We don't need to trigger RefreshForm - just wait for the data to arrive
           logger.info(`Waiting for BC to send list data asynchronously...`);
-          const asyncHandlers = await connection.waitForHandlers(hasListData, { timeoutMs: 10000 });
+          const asyncHandlers = await connection.waitForHandlers(hasListData, { timeoutMs: defaultTimeouts.readOpTimeoutMs });
           logger.info(`Received async data with ${asyncHandlers.length} handlers`);
 
           // Extract from async handlers (with LogicalForm for field filtering)
@@ -1188,6 +1235,16 @@ export class ReadPageDataTool extends BaseMCPTool {
 
       // No data available (or async wait failed)
       logger.info(`No records found for list page`);
+
+      // Record operation in workflow (if participating)
+      if (workflow) {
+        workflow.recordOperation(
+          'read_page_data',
+          { pageContextId, filters, setCurrent, limit, offset },
+          { success: true, data: { pageId: String(pageId), recordCount: 0, totalCount: 0 } }
+        );
+      }
+
       return ok({
         pageId: String(pageId),
         pageContextId,
@@ -1231,6 +1288,15 @@ export class ReadPageDataTool extends BaseMCPTool {
         }
         return { bookmark: r.bookmark, ...flatFields };
       });
+
+      // Record operation in workflow (if participating)
+      if (workflow) {
+        workflow.recordOperation(
+          'read_page_data',
+          { pageContextId, filters, setCurrent, limit, offset },
+          { success: true, data: { pageId: String(pageId), recordCount: flatRecords.length, totalCount } }
+        );
+      }
 
       return ok({
         pageId: String(pageId),

@@ -478,6 +478,57 @@ export class FormStateService {
     }
   }
 
+  /** Try to resolve by SourceExpr (e.g., [Customer.Email]) */
+  private tryResolveBySourceExpr(state: FormState, userKey: string): FieldResolveResult | null {
+    const srcExprCheck = isSourceExprKey(userKey);
+    if (!srcExprCheck.isSourceExpr || !srcExprCheck.expr) return null;
+
+    const path = state.fieldIndex.bySourceExpr.get(normalizeKey(srcExprCheck.expr));
+    if (!path) return null;
+    const node = state.pathIndex.get(path);
+    return node ? { controlPath: path, node, ambiguous: false } : null;
+  }
+
+  /** Try to resolve by scoped caption (e.g., "General > Name") */
+  private tryResolveByScopedCaption(state: FormState, parts: string[]): FieldResolveResult | null {
+    const scopedKey = normalizeKey(parts.join('>'));
+    const path = state.fieldIndex.byCaptionScoped.get(scopedKey);
+    if (!path) return null;
+    const node = state.pathIndex.get(path);
+    return node ? { controlPath: path, node, ambiguous: false } : null;
+  }
+
+  /** Try to resolve by unscoped caption with duplicate handling */
+  private tryResolveByCaption(state: FormState, normKey: string, opts: Required<FieldResolveOptions>): FieldResolveResult | null {
+    const duplicatePaths = state.fieldIndex.duplicates.get(normKey);
+
+    // Handle duplicates with disambiguation
+    if (duplicatePaths && duplicatePaths.length > 1) {
+      const candidates = duplicatePaths
+        .map(p => state.pathIndex.get(p))
+        .filter((n): n is ControlNode => n !== undefined);
+
+      const filtered = this.filterCandidates(candidates, opts);
+      if (filtered.length > 0) {
+        return { controlPath: filtered[0].path, node: filtered[0], ambiguous: true, candidates };
+      }
+    }
+
+    // Single match or no duplicates
+    const path = state.fieldIndex.byCaption.get(normKey);
+    if (!path) return null;
+    const node = state.pathIndex.get(path);
+    return node ? { controlPath: path, node, ambiguous: false } : null;
+  }
+
+  /** Try to resolve by control name */
+  private tryResolveByName(state: FormState, normKey: string): FieldResolveResult | null {
+    const path = state.fieldIndex.byName.get(normKey);
+    if (!path) return null;
+    const node = state.pathIndex.get(path);
+    return node ? { controlPath: path, node, ambiguous: false } : null;
+  }
+
   /**
    * Resolve field name/caption to control path
    *
@@ -489,9 +540,7 @@ export class FormStateService {
    */
   resolveField(formId: string, userKey: string, options?: FieldResolveOptions): FieldResolveResult | null {
     const state = this.formStates.get(formId);
-    if (!state || !state.ready) {
-      return null;
-    }
+    if (!state || !state.ready) return null;
 
     const opts: Required<FieldResolveOptions> = {
       preferEditable: true,
@@ -500,89 +549,26 @@ export class FormStateService {
       ...options
     };
 
-    // Check for [SourceExpr] override
-    const srcExprCheck = isSourceExprKey(userKey);
-    if (srcExprCheck.isSourceExpr && srcExprCheck.expr) {
-      const path = state.fieldIndex.bySourceExpr.get(normalizeKey(srcExprCheck.expr));
-      if (path) {
-        const node = state.pathIndex.get(path);
-        if (node) {
-          return { controlPath: path, node, ambiguous: false };
-        }
-      }
-      return null;
-    }
+    // 1. Try SourceExpr override
+    const sourceExprResult = this.tryResolveBySourceExpr(state, userKey);
+    if (sourceExprResult) return sourceExprResult;
+    if (isSourceExprKey(userKey).isSourceExpr) return null; // SourceExpr format but not found
 
-    // Parse scoped key
+    // 2. Parse and try scoped caption
     const { scoped, parts } = parseScopedKey(userKey);
-
-    // Try scoped caption if applicable
     if (scoped) {
-      const scopedKey = normalizeKey(parts.join('>'));
-      const path = state.fieldIndex.byCaptionScoped.get(scopedKey);
-      if (path) {
-        const node = state.pathIndex.get(path);
-        if (node) {
-          return { controlPath: path, node, ambiguous: false };
-        }
-      }
-      if (opts.requireScoped) {
-        return null;  // User required scoped, don't fall back
-      }
+      const scopedResult = this.tryResolveByScopedCaption(state, parts);
+      if (scopedResult) return scopedResult;
+      if (opts.requireScoped) return null; // User required scoped, don't fall back
     }
 
-    // Try unscoped caption
-    const normKey = normalizeKey(parts[parts.length - 1]);  // Last part
-    let path = state.fieldIndex.byCaption.get(normKey);
+    // 3. Try unscoped caption (with duplicate handling)
+    const normKey = normalizeKey(parts[parts.length - 1]);
+    const captionResult = this.tryResolveByCaption(state, normKey, opts);
+    if (captionResult) return captionResult;
 
-    // Check for duplicates
-    const duplicatePaths = state.fieldIndex.duplicates.get(normKey);
-    if (duplicatePaths && duplicatePaths.length > 1) {
-      // Disambiguate
-      const candidates = duplicatePaths
-        .map(p => state.pathIndex.get(p))
-        .filter((n): n is ControlNode => n !== undefined);
-
-      const filtered = this.filterCandidates(candidates, opts);
-
-      if (filtered.length === 1) {
-        const node = filtered[0];
-        // TODO: Re-enable for debugging when not using stdio transport
-        // console.warn(
-        //   `[FormStateService] Ambiguous field "${userKey}" resolved to ${node.path} ` +
-        //   `(${candidates.length} candidates: ${duplicatePaths.join(', ')})`
-        // );
-        return { controlPath: node.path, node, ambiguous: true, candidates };
-      } else if (filtered.length > 1) {
-        // Still ambiguous after filtering - pick first
-        const node = filtered[0];
-        // TODO: Re-enable for debugging when not using stdio transport
-        // console.warn(
-        //   `[FormStateService] Multiple matches for "${userKey}" after filtering. ` +
-        //   `Using ${node.path}. Candidates: ${filtered.map(c => c.path).join(', ')}`
-        // );
-        return { controlPath: node.path, node, ambiguous: true, candidates };
-      }
-    }
-
-    // Single match or no duplicates
-    if (path) {
-      const node = state.pathIndex.get(path);
-      if (node) {
-        return { controlPath: path, node, ambiguous: false };
-      }
-    }
-
-    // Fallback: try by Name
-    path = state.fieldIndex.byName.get(normKey);
-    if (path) {
-      const node = state.pathIndex.get(path);
-      if (node) {
-        return { controlPath: path, node, ambiguous: false };
-      }
-    }
-
-    return null;
+    // 4. Fallback to control name
+    return this.tryResolveByName(state, normKey);
   }
 
   /**

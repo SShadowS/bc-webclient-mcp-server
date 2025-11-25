@@ -70,6 +70,150 @@ export class BCWebSocketManager implements IBCWebSocketManager {
   ) {}
 
   /**
+   * Build WebSocket URL with query parameters.
+   */
+  private buildWebSocketUrl(): string {
+    const fullBaseUrl = this.config.baseUrl.replace(/\/+$/, '');
+    const baseUrl = fullBaseUrl.replace(/^https?:\/\//, '');
+    const scheme = fullBaseUrl.startsWith('https://') ? 'wss' : 'ws';
+
+    const queryParams = new URLSearchParams();
+    queryParams.set('ackseqnb', '-1');
+    const csrfToken = this.authService.getCsrfToken();
+    if (csrfToken) {
+      queryParams.set('csrftoken', csrfToken);
+    }
+
+    return `${scheme}://${baseUrl}/csh?${queryParams.toString()}`;
+  }
+
+  /**
+   * Handle JSON-RPC response with explicit ID match.
+   */
+  private handleJsonRpcResponse(response: any): void {
+    const pending = this.pendingRequests.get(response.id);
+    if (!pending) {
+      logger.warn(`Received JSON-RPC response with ID ${response.id} but no pending request found`);
+      return;
+    }
+
+    // BC protocol: Some RPCs have meaningful payload in async Message events.
+    // Only resolve here if result contains compressed data.
+    if (response.result && (response.result.compressedResult || response.result.compressedData)) {
+      this.pendingRequests.delete(response.id);
+      pending.resolve(response.result);
+    } else if (response.compressedResult || response.compressedData) {
+      // Compressed data at root level (e.g., OpenSession)
+      this.pendingRequests.delete(response.id);
+      pending.resolve(response);
+    } else if (response.error) {
+      this.pendingRequests.delete(response.id);
+      pending.reject(new Error(`RPC Error: ${response.error.message}`));
+    } else {
+      // JSON-RPC ack without compressed data - wait for async Message
+      logger.info(`JSON-RPC response ${response.id} has no compressed data, waiting for async Message`);
+    }
+  }
+
+  /**
+   * Handle async Message events (BC's primary response format).
+   */
+  private handleAsyncMessage(response: any): void {
+    logger.info(`Received async Message event`);
+
+    const hasCompressedData = response.params?.[0]?.compressedResult || response.params?.[0]?.compressedData;
+    if (!hasCompressedData) {
+      logger.info(`  Message has no compressed data, ignoring`);
+      return;
+    }
+
+    logger.info(`  Message has compressed data, resolving first pending request`);
+
+    if (this.pendingRequests.size > 0) {
+      const [[requestId, pending]] = this.pendingRequests.entries();
+      this.pendingRequests.delete(requestId);
+      logger.info(`  Resolved pending request ${requestId}, remaining: ${this.pendingRequests.size}`);
+      pending.resolve(response.params[0]);
+    } else {
+      // No pending RPC request - forward async data to protocol adapter
+      logger.info(`  No pending RPC request - forwarding async Message to protocol adapter`);
+      this.rawMessageHandlers.forEach((handler) => {
+        try {
+          handler(response);
+        } catch (error) {
+          logger.error({ error }, 'Error in raw message handler');
+        }
+      });
+    }
+  }
+
+  /**
+   * Handle incoming WebSocket message.
+   */
+  private handleWebSocketMessage(data: WebSocket.Data): void {
+    try {
+      const message = data.toString();
+      logger.info(`<- Received: ${message.substring(0, 200)}...`);
+
+      const response = JSON.parse(message) as any;
+
+      debugWebSocket('WebSocket message received', {
+        messageType: response.method || 'response',
+        id: response.id,
+        method: response.method,
+        hasResult: !!response.result,
+        hasError: !!response.error,
+        hasHandlers: !!response.result?.handlers,
+        handlerCount: response.result?.handlers?.length,
+        fullMessage: config.debug.logFullWsMessages ? response : undefined,
+      }, undefined, Buffer.byteLength(message));
+
+      // Emit to raw message handlers (for protocol adapter)
+      this.rawMessageHandlers.forEach((handler) => {
+        try {
+          handler(response);
+        } catch (error) {
+          logger.error({ error }, 'Raw message handler error');
+        }
+      });
+
+      // Route to appropriate handler
+      if (response.jsonrpc && response.id) {
+        this.handleJsonRpcResponse(response);
+      } else if (response.method === 'Message') {
+        this.handleAsyncMessage(response);
+      } else {
+        logger.info(`Unhandled message type: ${response.method || 'no method'}`);
+      }
+    } catch (error) {
+      logger.error({ error }, 'Error parsing message');
+    }
+  }
+
+  /**
+   * Handle WebSocket close event.
+   */
+  private handleWebSocketClose(code: number, reason: Buffer): void {
+    const reasonStr = reason ? reason.toString() : 'no reason';
+    logger.info(`WebSocket closed: ${code} ${reasonStr}`);
+    this.connected = false;
+
+    // Reject all pending requests
+    this.pendingRequests.forEach((pending) => {
+      pending.reject(new Error('WebSocket closed'));
+    });
+    this.pendingRequests.clear();
+  }
+
+  /**
+   * Set up persistent message and close handlers on WebSocket.
+   */
+  private setupPersistentHandlers(ws: WebSocket): void {
+    ws.on('message', (data: WebSocket.Data) => this.handleWebSocketMessage(data));
+    ws.on('close', (code: number, reason: Buffer) => this.handleWebSocketClose(code, reason));
+  }
+
+  /**
    * Connect to WebSocket with session cookies.
    *
    * Establishes WebSocket connection using authenticated session cookies.
@@ -87,43 +231,23 @@ export class BCWebSocketManager implements IBCWebSocketManager {
       throw new AuthenticationError('Must call authenticateWeb() first');
     }
 
-    const fullBaseUrl = this.config.baseUrl.replace(/\/+$/, '');
-    const baseUrl = fullBaseUrl.replace(/^https?:\/\//, '');
-
-    // Use wss:// for HTTPS, ws:// for HTTP
-    const scheme = fullBaseUrl.startsWith('https://') ? 'wss' : 'ws';
-
-    // Build WebSocket URL with query parameters
-    const queryParams = new URLSearchParams();
-    queryParams.set('ackseqnb', '-1');
-    const csrfToken = this.authService.getCsrfToken();
-    if (csrfToken) {
-      queryParams.set('csrftoken', csrfToken);
-    }
-
-    const wsUrl = `${scheme}://${baseUrl}/csh?${queryParams.toString()}`;
-
+    const wsUrl = this.buildWebSocketUrl();
     logger.info(`Connecting to WebSocket: ${wsUrl.substring(0, 100)}...`);
 
-    // Compose timeout with optional parent signal
     const timeoutMs = options?.timeoutMs ?? this.timeouts.connectTimeoutMs;
     const signal = composeWithTimeout(options?.signal, timeoutMs);
-
-    // Create WebSocket with cookies in headers
     const cookieString = this.authService.getSessionCookies().join('; ');
 
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(wsUrl, {
         headers: {
           Cookie: cookieString,
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         },
       });
 
       let settled = false;
 
-      // Helper to ensure single resolution
       const settle = (fn: () => void): boolean => {
         if (settled) return true;
         settled = true;
@@ -131,16 +255,16 @@ export class BCWebSocketManager implements IBCWebSocketManager {
         return false;
       };
 
-      // Event handlers
+      const cleanup = () => {
+        signal.removeEventListener('abort', onAbort);
+        ws.removeListener('open', onOpen);
+        ws.removeListener('error', onError);
+      };
+
       const onOpen = () => {
-        if (
-          settle(() => {
-            this.connected = true;
-            this.ws = ws;
-          })
-        )
-          return;
+        if (settle(() => { this.connected = true; this.ws = ws; })) return;
         cleanup();
+        this.setupPersistentHandlers(ws);
         logger.info('Raw WebSocket connection established');
         resolve();
       };
@@ -154,161 +278,24 @@ export class BCWebSocketManager implements IBCWebSocketManager {
 
       const onAbort = () => {
         if (settle(() => (this.connected = false))) return;
-        // Close before cleanup to keep error listener active during teardown
         ws.close();
         cleanup();
 
-        // Distinguish timeout from external cancellation
         if (isTimeoutAbortReason(signal.reason)) {
-          reject(
-            new TimeoutError(
-              `WebSocket connection timeout after ${timeoutMs}ms`,
-              { timeoutMs }
-            )
-          );
+          reject(new TimeoutError(`WebSocket connection timeout after ${timeoutMs}ms`, { timeoutMs }));
         } else {
-          reject(
-            new AbortedError('WebSocket connection cancelled', {
-              reason: signal.reason,
-            })
-          );
+          reject(new AbortedError('WebSocket connection cancelled', { reason: signal.reason }));
         }
       };
 
-      // Cleanup function to remove all listeners
-      const cleanup = () => {
-        signal.removeEventListener('abort', onAbort);
-        ws.removeListener('open', onOpen);
-        ws.removeListener('error', onError);
-      };
-
-      // Handle already-aborted signal before registering listeners
       if (signal.aborted) {
         onAbort();
         return;
       }
 
-      // Register event listeners
       signal.addEventListener('abort', onAbort, { once: true });
       ws.once('open', onOpen);
       ws.once('error', onError);
-
-      // Set up message handler (persists after connection)
-      ws.on('message', (data: WebSocket.Data) => {
-        try {
-          const message = data.toString();
-          logger.info(`<- Received: ${message.substring(0, 200)}...`);
-
-          const response = JSON.parse(message) as any;
-
-          // 🐛 Debug: Log incoming WebSocket messages
-          debugWebSocket('WebSocket message received', {
-            messageType: response.method || 'response',
-            id: response.id,
-            method: response.method,
-            hasResult: !!response.result,
-            hasError: !!response.error,
-            hasHandlers: !!response.result?.handlers,
-            handlerCount: response.result?.handlers?.length,
-            fullMessage: config.debug.logFullWsMessages ? response : undefined,
-          }, undefined, Buffer.byteLength(message));
-
-          // Emit to raw message handlers (for protocol adapter)
-          // Protocol adapter will handle BC-specific parsing
-          this.rawMessageHandlers.forEach((handler) => {
-            try {
-              handler(response);
-            } catch (error) {
-              logger.error({ error }, 'Raw message handler error');
-            }
-          });
-
-          // Handle responses in two ways:
-          // 1) Standard JSON-RPC responses (explicit ID match)
-          if (response.jsonrpc && response.id) {
-            const pending = this.pendingRequests.get(response.id);
-            if (pending) {
-              // BC protocol: Some RPCs (like OpenSession) have meaningful payload
-              // in async Message events, NOT in the JSON-RPC result.
-              // Only resolve here if result contains compressed data.
-              // Otherwise, leave pending for async Message resolution.
-              if (
-                response.result &&
-                (response.result.compressedResult || response.result.compressedData)
-              ) {
-                // Result has compressed data in result field - resolve immediately
-                this.pendingRequests.delete(response.id);
-                pending.resolve(response.result);
-              } else if (response.compressedResult || response.compressedData) {
-                // Compressed data at root level (e.g., OpenSession) - resolve immediately
-                this.pendingRequests.delete(response.id);
-                pending.resolve(response);
-              } else if (response.error) {
-                // Errors should always be resolved immediately
-                this.pendingRequests.delete(response.id);
-                pending.reject(
-                  new Error(`RPC Error: ${response.error.message}`)
-                );
-              } else {
-                // JSON-RPC ack without compressed data
-                logger.info(`JSON-RPC response with ID ${response.id} has no compressed data, result: ${JSON.stringify(response.result).substring(0, 100)}`);
-                logger.info(`  Leaving pending request unresolved, waiting for async Message event`);
-                logger.info(`  Pending requests count: ${this.pendingRequests.size}`);
-              }
-            } else {
-              logger.warn(`Received JSON-RPC response with ID ${response.id} but no pending request found`);
-            }
-          }
-          // 2) Async Message events with compressed data (BC's primary response format)
-          // These don't have request IDs, so we resolve the first pending request
-          else if (response.method === 'Message') {
-            logger.info(`Received async Message event`);
-            if (response.params?.[0]?.compressedResult || response.params?.[0]?.compressedData) {
-              logger.info(`  Message has compressed data, resolving first pending request`);
-              // For async Message events, resolve the first (oldest) pending request
-              // This matches the original code's behavior
-              if (this.pendingRequests.size > 0) {
-                const [[requestId, pending]] = this.pendingRequests.entries();
-                this.pendingRequests.delete(requestId);
-                logger.info(`  Resolved pending request ${requestId}, remaining: ${this.pendingRequests.size}`);
-                // Return the raw result (caller handles decompression)
-                pending.resolve(response.params[0]);
-              } else {
-                // CRITICAL FIX: No pending RPC request, but we have async data (e.g., filtered list data)
-                // Forward to protocol adapter via rawMessageHandlers so it can emit handler events
-                logger.info(`  No pending RPC request - forwarding async Message to protocol adapter`);
-                this.rawMessageHandlers.forEach((handler) => {
-                  try {
-                    handler(response);
-                  } catch (error) {
-                    logger.error({ error }, 'Error in raw message handler');
-                  }
-                });
-              }
-            } else {
-              logger.info(`  Message has no compressed data, ignoring (params: ${JSON.stringify(response.params).substring(0, 100)})`);
-            }
-          } else {
-            // Log any other message types we're not handling
-            logger.info(`Unhandled message type: ${response.method || 'no method'}, jsonrpc: ${response.jsonrpc || 'no jsonrpc'}`);
-          }
-        } catch (error) {
-          logger.error({ error }, 'Error parsing message');
-        }
-      });
-
-      // Set up close handler (persists after connection)
-      ws.on('close', (code, reason) => {
-        const reasonStr = reason ? reason.toString() : 'no reason';
-        logger.info(`WebSocket closed: ${code} ${reasonStr}`);
-        this.connected = false;
-
-        // Reject all pending requests
-        this.pendingRequests.forEach((pending) => {
-          pending.reject(new Error('WebSocket closed'));
-        });
-        this.pendingRequests.clear();
-      });
     });
   }
 

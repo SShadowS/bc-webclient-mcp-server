@@ -118,104 +118,113 @@ export class HandlerParser implements IHandlerParser {
     handlers: readonly Handler[],
     formId?: string
   ): Result<LogicalForm, LogicalFormParseError> {
-    // Find FormToShow handlers
-    const formToShowHandlers = handlers.filter(
+    // Step 1: Find FormToShow handlers
+    const formToShowHandlers = this.findFormToShowHandlers(handlers);
+
+    // Step 2: If no FormToShow, check for dialog error
+    if (formToShowHandlers.length === 0) {
+      return this.handleNoFormToShow(handlers);
+    }
+
+    // Step 3: Select the appropriate handler
+    const formToShowHandler = this.selectFormHandler(formToShowHandlers, formId);
+
+    // Step 4: Extract and validate LogicalForm
+    return this.extractAndValidateLogicalForm(formToShowHandler, handlers);
+  }
+
+  /** Find all FormToShow handlers */
+  private findFormToShowHandlers(handlers: readonly Handler[]): LogicalClientEventRaisingHandler[] {
+    return handlers.filter(
       (h): h is LogicalClientEventRaisingHandler =>
         h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
         h.parameters?.[0] === 'FormToShow'
     );
+  }
 
-    if (formToShowHandlers.length === 0) {
-      // Check if there's a DialogToShow event instead (indicates page requires setup/configuration)
-      const dialogHandler = handlers.find(
-        (h): h is LogicalClientEventRaisingHandler =>
-          h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-          h.parameters?.[0] === 'DialogToShow'
-      );
+  /** Handle case when no FormToShow found - check for dialog error */
+  private handleNoFormToShow(handlers: readonly Handler[]): Result<LogicalForm, LogicalFormParseError> {
+    const dialogHandler = handlers.find(
+      (h): h is LogicalClientEventRaisingHandler =>
+        h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+        h.parameters?.[0] === 'DialogToShow'
+    );
 
-      if (dialogHandler) {
-        const dialogData = dialogHandler.parameters?.[1];
-        const message = dialogData?.Message || dialogData?.message || 'Unknown dialog';
-        const caption = dialogData?.Caption || dialogData?.caption || 'Dialog';
-
-        return err(
-          new LogicalFormParseError(
-            `Page cannot be opened: ${caption} - ${message}`,
-            {
-              handlerCount: handlers.length,
-              handlerTypes: handlers.map(h => h.handlerType),
-              dialogCaption: caption,
-              dialogMessage: message,
-            }
-          )
-        );
-      }
+    if (dialogHandler) {
+      const dialogData = dialogHandler.parameters?.[1];
+      const message = dialogData?.Message || dialogData?.message || 'Unknown dialog';
+      const caption = dialogData?.Caption || dialogData?.caption || 'Dialog';
 
       return err(
-        new LogicalFormParseError('No FormToShow event found in handlers', {
+        new LogicalFormParseError(`Page cannot be opened: ${caption} - ${message}`, {
           handlerCount: handlers.length,
           handlerTypes: handlers.map(h => h.handlerType),
+          dialogCaption: caption,
+          dialogMessage: message,
         })
       );
     }
 
-    // If formId provided, filter by ServerId
-    let formToShowHandler: LogicalClientEventRaisingHandler | undefined;
+    return err(
+      new LogicalFormParseError('No FormToShow event found in handlers', {
+        handlerCount: handlers.length,
+        handlerTypes: handlers.map(h => h.handlerType),
+      })
+    );
+  }
 
+  /** Select the appropriate FormToShow handler based on formId */
+  private selectFormHandler(
+    formToShowHandlers: LogicalClientEventRaisingHandler[],
+    formId?: string
+  ): LogicalClientEventRaisingHandler {
     logger.debug({ count: formToShowHandlers.length }, '[HandlerParser] Found FormToShow handlers');
+
+    if (!formId) {
+      logger.debug('[HandlerParser] No formId provided, using first handler');
+      return formToShowHandlers[0];
+    }
+
     logger.debug({ formId }, '[HandlerParser] FormId for filtering');
 
-    if (formId) {
-      // Log all available ServerIds
-      formToShowHandlers.forEach((h, idx) => {
-        const logicalForm = h.parameters?.[1] as LogicalForm | undefined;
-        logger.debug(`[HandlerParser]   Handler ${idx}: ServerId="${logicalForm?.ServerId}", Caption="${logicalForm?.Caption}"`);
-      });
+    // Log all available ServerIds for debugging
+    formToShowHandlers.forEach((h, idx) => {
+      const logicalForm = h.parameters?.[1] as LogicalForm | undefined;
+      logger.debug(`[HandlerParser]   Handler ${idx}: ServerId="${logicalForm?.ServerId}", Caption="${logicalForm?.Caption}"`);
+    });
 
-      formToShowHandler = formToShowHandlers.find(h => {
-        const logicalForm = h.parameters?.[1] as LogicalForm | undefined;
-        const matches = logicalForm?.ServerId === formId;
-        logger.debug(`[HandlerParser]   Checking ServerId="${logicalForm?.ServerId}" === formId="${formId}": ${matches}`);
-        return matches;
-      });
+    // Find matching handler
+    const matchedHandler = formToShowHandlers.find(h => {
+      const logicalForm = h.parameters?.[1] as LogicalForm | undefined;
+      return logicalForm?.ServerId === formId;
+    });
 
-      if (!formToShowHandler) {
-        logger.debug('[HandlerParser] No match found, falling back to first handler');
-        // Fallback to first handler if no match found
-        // (This handles edge cases where formId doesn't match ServerId format)
-        formToShowHandler = formToShowHandlers[0];
-      } else {
-        const selectedForm = formToShowHandler.parameters?.[1] as LogicalForm | undefined;
-        logger.debug(`[HandlerParser] Matched handler: ServerId="${selectedForm?.ServerId}", Caption="${selectedForm?.Caption}"`);
-      }
-    } else {
-      logger.debug('[HandlerParser] No formId provided, using first handler (old behavior)');
-      // No formId provided, use first handler (old behavior)
-      formToShowHandler = formToShowHandlers[0];
+    if (matchedHandler) {
+      const selectedForm = matchedHandler.parameters?.[1] as LogicalForm | undefined;
+      logger.debug(`[HandlerParser] Matched handler: ServerId="${selectedForm?.ServerId}", Caption="${selectedForm?.Caption}"`);
+      return matchedHandler;
     }
 
-    if (!formToShowHandler) {
-      return err(
-        new LogicalFormParseError('No FormToShow event found in handlers', {
-          handlerCount: handlers.length,
-          handlerTypes: handlers.map(h => h.handlerType),
-        })
-      );
-    }
+    logger.debug('[HandlerParser] No match found, falling back to first handler');
+    return formToShowHandlers[0];
+  }
 
-    // Extract LogicalForm from parameters[1]
-    const logicalForm = formToShowHandler.parameters?.[1] as LogicalForm | undefined;
+  /** Extract and validate LogicalForm from handler */
+  private extractAndValidateLogicalForm(
+    handler: LogicalClientEventRaisingHandler,
+    handlers: readonly Handler[]
+  ): Result<LogicalForm, LogicalFormParseError> {
+    const logicalForm = handler.parameters?.[1] as LogicalForm | undefined;
 
     if (!logicalForm) {
       return err(
         new LogicalFormParseError('FormToShow event missing LogicalForm in parameters[1]', {
-          handler: formToShowHandler,
-          parametersLength: formToShowHandler.parameters?.length ?? 0,
+          handler,
+          parametersLength: handler.parameters?.length ?? 0,
         })
       );
     }
 
-    // Validate LogicalForm structure
     if (!this.isValidLogicalForm(logicalForm)) {
       return err(
         new LogicalFormParseError('Invalid LogicalForm structure', {
@@ -223,6 +232,63 @@ export class HandlerParser implements IHandlerParser {
         })
       );
     }
+
+    return ok(logicalForm);
+  }
+
+  /**
+   * Extracts LogicalForm from DialogToShow event in handlers.
+   * Dialogs use the same LogicalForm structure as regular forms.
+   *
+   * @param handlers - Array of handlers to search
+   * @returns Result containing LogicalForm or error
+   */
+  public extractDialogForm(
+    handlers: readonly Handler[]
+  ): Result<LogicalForm, LogicalFormParseError> {
+    // Find DialogToShow handler
+    const dialogHandler = handlers.find(
+      (h): h is LogicalClientEventRaisingHandler =>
+        h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+        h.parameters?.[0] === 'DialogToShow'
+    );
+
+    if (!dialogHandler) {
+      return err(
+        new LogicalFormParseError('No DialogToShow event found in handlers', {
+          handlerCount: handlers.length,
+          handlerTypes: handlers.map(h => h.handlerType),
+        })
+      );
+    }
+
+    // Extract LogicalForm from parameters[1]
+    const logicalForm = dialogHandler.parameters?.[1] as LogicalForm | undefined;
+
+    if (!logicalForm) {
+      return err(
+        new LogicalFormParseError('DialogToShow event missing LogicalForm in parameters[1]', {
+          handler: dialogHandler,
+          parametersLength: dialogHandler.parameters?.length ?? 0,
+        })
+      );
+    }
+
+    // Validate LogicalForm structure
+    if (!this.isValidLogicalForm(logicalForm)) {
+      return err(
+        new LogicalFormParseError('Invalid LogicalForm structure for dialog', {
+          missingFields: this.getMissingLogicalFormFields(logicalForm),
+        })
+      );
+    }
+
+    logger.debug({
+      dialogId: logicalForm.ServerId,
+      caption: logicalForm.Caption,
+      isTaskDialog: (logicalForm as any).IsTaskDialog,
+      isModal: (logicalForm as any).IsModal,
+    }, '[HandlerParser] Extracted dialog form');
 
     return ok(logicalForm);
   }

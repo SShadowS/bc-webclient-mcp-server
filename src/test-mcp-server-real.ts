@@ -17,12 +17,15 @@ import {
   ReadPageDataTool,
   WritePageDataTool,
   ExecuteActionTool,
-  // Consolidated from 9 tools to 5 core tools (44% context reduction)
+  HandleDialogTool,
+  StartWorkflowTool,
+  GetWorkflowStateTool,
+  EndWorkflowTool,
+  // Consolidated from 9 tools to 6 core tools
   // FilterListTool removed - merged into read_page_data.filters
   // FindRecordTool removed - thin wrapper, users compose directly
   // CreateRecordTool, UpdateRecordTool - moved to optional (not in default registry)
   // UpdateFieldTool removed - merged into write_page_data
-  // HandleDialogTool removed - was stub implementation
 } from './tools/index.js';
 // Use BCPageConnection for connection-per-page architecture (fixes BC caching issue)
 import { BCPageConnection } from './connection/bc-page-connection.js';
@@ -122,7 +125,7 @@ async function main() {
   // Create audit logger for tracking consent-required tool executions
   const auditLogger = new AuditLogger(logger, 10000); // Keep last 10k events
 
-  // Register 5 Core MCP Tools (MCP best practice: 4-6 tools for context efficiency)
+  // Register 6 Core MCP Tools (MCP best practice: 4-6 tools for context efficiency)
   //
   // Consolidated from 9 tools to reduce context pollution and improve composability.
   // See Refactor1.md for analysis and rationale.
@@ -135,6 +138,12 @@ async function main() {
   // Write/mutation tools (with audit logger for consent tracking)
   server.registerTool(new WritePageDataTool(connection, bcConfig, auditLogger));
   server.registerTool(new ExecuteActionTool(connection, bcConfig, auditLogger));
+  server.registerTool(new HandleDialogTool(connection, bcConfig, auditLogger));
+
+  // Workflow state management tools (no BC connection needed - work with WorkflowStateManager singleton)
+  server.registerTool(new StartWorkflowTool());
+  server.registerTool(new GetWorkflowStateTool());
+  server.registerTool(new EndWorkflowTool());
 
   // Removed from default registry:
   // - FilterListTool: Functionality available via read_page_data.filters parameter
@@ -181,6 +190,10 @@ async function main() {
   }
 
   logger.info('BC MCP Server ready');
+
+  // Output ready signal to stdout for test client detection
+  // This allows tests to start immediately instead of waiting a fixed timeout
+  console.log('__MCP_SERVER_READY__');
 
   // Handle graceful shutdown
   process.on('SIGINT', async () => {

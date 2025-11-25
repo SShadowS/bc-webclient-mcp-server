@@ -49,6 +49,34 @@ const SystemAction = {
 } as const;
 
 /**
+ * Options for sendInvokeAction
+ */
+interface InvokeActionOptions {
+  connection: IBCConnection;
+  action: string;
+  systemAction: number;
+  actionControlPath: string;
+  formId: string;
+  sourcePageId: string;
+  bookmark: string;
+  sessionId: string;
+  logger: ReturnType<typeof createToolLogger>;
+}
+
+/** Parsed page context info */
+interface ParsedPageContext {
+  actualSessionId: string;
+  sourcePageId: string;
+}
+
+/** Validated session info */
+interface ValidatedSession {
+  connection: IBCConnection;
+  pageContext: any;
+  formId: string;
+}
+
+/**
  * MCP Tool for selecting a row and drilling down to detail page.
  * Implements the SetCurrentRowAndRowsSelection + InvokeAction protocol.
  */
@@ -113,15 +141,94 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
   protected async executeInternal(
     input: unknown
   ): Promise<Result<SelectAndDrillDownOutput, BCError>> {
-    // Input is already validated by BaseMCPTool with Zod
     const { pageContextId, bookmark, action } = input as SelectAndDrillDownInput;
     const logger = createToolLogger('select_and_drill_down', pageContextId);
+    logger.info(`Selecting row with bookmark "${bookmark}" and drilling down with action "${action}"`);
 
-    logger.info(
-      `Selecting row with bookmark "${bookmark}" and drilling down with action "${action}"`
+    // Step 1: Parse and validate pageContextId
+    const parseResult = this.parsePageContextId(pageContextId, bookmark);
+    if (!isOk(parseResult)) return parseResult;
+    const { actualSessionId, sourcePageId } = parseResult.value;
+
+    // Step 2: Validate session and get connection
+    const sessionResult = this.validateSession(actualSessionId, pageContextId, bookmark);
+    if (!isOk(sessionResult)) return sessionResult;
+    const { connection, pageContext, formId } = sessionResult.value;
+    logger.info(`Reusing session: ${actualSessionId}, formId: ${formId}`);
+
+    // Step 3: Find repeater control path
+    const repeaterPath = this.findRepeaterControlPath(pageContext.logicalForm);
+    if (!repeaterPath) {
+      return err(new ProtocolError(
+        `No repeater control found in page. This tool requires a List page with a data grid.`,
+        { pageContextId, pageId: sourcePageId }
+      ));
+    }
+    logger.info(`Found repeater control at: ${repeaterPath}`);
+
+    // Step 4: Set up listeners BEFORE interactions (avoid race conditions)
+    const navigationPromise = connection.waitForHandlers(
+      this.createFormToShowPredicate(logger),
+      { timeoutMs: 10000 }
+    );
+    const asyncDataPromise = connection.waitForHandlers(
+      this.createRecordDataPredicate(logger),
+      { timeoutMs: 5000 }
     );
 
-    // Parse pageContextId (format: sessionId:page:pageId:timestamp)
+    // Step 5: Select the row
+    const selectionResult = await this.sendRowSelection(
+      connection, formId, bookmark, repeaterPath, sourcePageId, actualSessionId, logger
+    );
+    if (!isOk(selectionResult)) return selectionResult;
+
+    // Step 6: Find and invoke the action
+    const actionResult = this.findActionControlPath(pageContext, action, sourcePageId, pageContextId, logger);
+    if (!isOk(actionResult)) return actionResult;
+    const { controlPath: actionControlPath, systemAction, caption } = actionResult.value;
+    logger.info(`Selected action: "${caption}", controlPath: ${actionControlPath}`);
+
+    const invokeResult = await this.sendInvokeAction({
+      connection, action, systemAction, actionControlPath, formId, sourcePageId, bookmark, sessionId: actualSessionId, logger
+    });
+    if (!isOk(invokeResult)) return invokeResult;
+
+    // Step 7: Wait for navigation
+    const navResult = await this.waitForNavigation(navigationPromise, action, sourcePageId, bookmark, logger);
+    if (!isOk(navResult)) return navResult;
+
+    // Step 8: Load child forms and collect async data
+    const { allHandlers, shellFormId } = await this.loadChildFormsAndData(
+      connection, navResult.value, asyncDataPromise, logger
+    );
+
+    // Step 9: Create target page context
+    const contextResult = await this.createTargetPageContext(
+      connection, actualSessionId, allHandlers, shellFormId, logger
+    );
+    if (!isOk(contextResult)) return contextResult;
+    const { targetPageContextId, targetPageId, targetCaption } = contextResult.value;
+
+    logger.info(`Navigated to target page: ${targetPageId} (${targetCaption})`);
+
+    return ok({
+      success: true,
+      sourcePageContextId: pageContextId,
+      targetPageContextId,
+      sourcePageId,
+      targetPageId,
+      bookmark,
+      action,
+      message: `Successfully selected row and drilled down from ${sourcePageId} to ${targetPageId} using ${action}`,
+    });
+  }
+
+  // ============================================================================
+  // Helper Methods - Extracted from executeInternal for reduced complexity
+  // ============================================================================
+
+  /** Parse pageContextId and extract session/page info */
+  private parsePageContextId(pageContextId: string, bookmark: string): Result<ParsedPageContext, BCError> {
     const contextParts = pageContextId.split(':');
     if (contextParts.length < 3) {
       return err(
@@ -131,14 +238,22 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
         })
       );
     }
+    return ok({
+      actualSessionId: contextParts[0],
+      sourcePageId: contextParts[2],
+    });
+  }
 
+  /** Validate session exists and get connection + pageContext */
+  private validateSession(
+    actualSessionId: string,
+    pageContextId: string,
+    bookmark: string
+  ): Result<ValidatedSession, BCError> {
     const manager = ConnectionManager.getInstance();
-    const actualSessionId = contextParts[0];
-    const sourcePageId = contextParts[2];
+    const connection = manager.getSession(actualSessionId);
 
-    // Get connection from session
-    const existing = manager.getSession(actualSessionId);
-    if (!existing) {
+    if (!connection) {
       return err(
         new ProtocolError(
           `Session ${actualSessionId} from pageContext not found. Page may have been closed. Call get_page_metadata again.`,
@@ -147,10 +262,6 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       );
     }
 
-    const connection = existing;
-    logger.info(`Reusing session from pageContext: ${actualSessionId}`);
-
-    // Get pageContext to access formId and logicalForm
     const pageContext = (connection as any).pageContexts?.get(pageContextId);
     if (!pageContext) {
       return err(
@@ -161,7 +272,6 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       );
     }
 
-    // Use formId from pageContext
     const formIds = pageContext.formIds || [];
     if (formIds.length === 0) {
       return err(
@@ -172,27 +282,16 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       );
     }
 
-    const formId = formIds[0]; // Use first formId (main form)
-    logger.info(`Using formId from pageContext: ${formId}`);
+    return ok({
+      connection,
+      pageContext,
+      formId: formIds[0],
+    });
+  }
 
-    // Find repeater control path from cached logicalForm
-    const repeaterPath = this.findRepeaterControlPath(pageContext.logicalForm);
-    if (!repeaterPath) {
-      return err(
-        new ProtocolError(
-          `No repeater control found in page. This tool requires a List page with a data grid.`,
-          { pageContextId, pageId: sourcePageId }
-        )
-      );
-    }
-
-    logger.info(`Found repeater control at: ${repeaterPath}`);
-
-    // Step 1: Set up listeners BEFORE interactions to avoid race conditions
-    // BC sends FormToShow via LogicalClientEventRaisingHandler with parameters[0] === 'FormToShow'
-    const hasFormToShow = (
-      handlers: Handler[]
-    ): { matched: boolean; data?: Handler[] } => {
+  /** Create predicate for FormToShow events */
+  private createFormToShowPredicate(logger: ReturnType<typeof createToolLogger>) {
+    return (handlers: Handler[]): { matched: boolean; data?: Handler[] } => {
       const matchingHandlers = handlers.filter(
         (h) =>
           h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
@@ -201,35 +300,26 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       );
 
       if (matchingHandlers.length > 0) {
-        logger.info(
-          `Detected FormToShow event, ${matchingHandlers.length} handler(s)`
-        );
+        logger.info(`Detected FormToShow event, ${matchingHandlers.length} handler(s)`);
         return { matched: true, data: handlers };
       }
-
       return { matched: false };
     };
+  }
 
-    // Predicate for async record data (DataRefresh, Initialize, or DataRowUpdated)
-    // matches the protocol pattern where data arrives in separate async messages
-    const hasRecordData = (handlers: Handler[]): { matched: boolean; data?: Handler[] } => {
+  /** Create predicate for record data events */
+  private createRecordDataPredicate(logger: ReturnType<typeof createToolLogger>) {
+    return (handlers: Handler[]): { matched: boolean; data?: Handler[] } => {
       const matched = handlers.some((h: any) => {
         if (h.handlerType === 'DN.LogicalClientChangeHandler' && Array.isArray(h.parameters?.[1])) {
           return h.parameters[1].some((change: any) => {
-            // 1. Standard List/Document data (DataRefresh/Initialize)
             if (change.t === 'DataRefreshChange' || change.t === 'InitializeChange') {
-              // Accept if it has RowChanges or is a Card page update
               return true;
             }
-
-            // 2. DataRowUpdated (for drill-down to LIST controls within Card pages)
             if (change.t === 'DataRowUpdated') {
               logger.info('Detected DataRowUpdated event (List control data)');
               return true;
             }
-
-            // 3. PropertyChanges (Critical for Card page field data)
-            // Card pages send field values via PropertyChanges with StringValue/ObjectValue
             if (change.t === 'PropertyChanges' && change.Changes) {
               const hasFieldValue = change.Changes.StringValue !== undefined ||
                                   change.Changes.ObjectValue !== undefined ||
@@ -239,7 +329,6 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
                 return true;
               }
             }
-
             return false;
           });
         }
@@ -252,20 +341,18 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       }
       return { matched: false };
     };
+  }
 
-    // Start listening for navigation (FormToShow)
-    const navigationPromise = connection.waitForHandlers(hasFormToShow, {
-      timeoutMs: 10000,
-    });
-
-    // Start listening for async data immediately (concurrently)
-    // We start this BEFORE sending InvokeAction to ensure we don't miss early-arriving messages
-    // due to the race condition between FormToShow processing and listener setup.
-    const asyncDataPromise = connection.waitForHandlers(hasRecordData, {
-      timeoutMs: 5000, // Wait up to 5s for data, but don't block forever if none exists
-    });
-
-    // Step 2: Send SetCurrentRowAndRowsSelection to select the row
+  /** Send SetCurrentRowAndRowsSelection interaction */
+  private async sendRowSelection(
+    connection: IBCConnection,
+    formId: string,
+    bookmark: string,
+    repeaterPath: string,
+    sourcePageId: string,
+    actualSessionId: string,
+    logger: ReturnType<typeof createToolLogger>
+  ): Promise<Result<void, BCError>> {
     const selectionInteraction = {
       interactionName: 'SetCurrentRowAndRowsSelection',
       skipExtendingSessionLifetime: false,
@@ -276,7 +363,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
         unselectAll: true,
         rowsToUnselect: [],
       }),
-      callbackId: '', // Will be set by connection
+      callbackId: '',
       controlPath: repeaterPath,
       formId,
     };
@@ -300,47 +387,45 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
     }
 
     logger.info(`Row selected successfully`);
+    return ok(undefined);
+  }
 
-    // Step 3: Find the action control path from cached metadata
+  /** Find the action control path from metadata */
+  private findActionControlPath(
+    pageContext: any,
+    action: string,
+    sourcePageId: string,
+    pageContextId: string,
+    logger: ReturnType<typeof createToolLogger>
+  ): Result<{ controlPath: string; systemAction: number; caption: string }, BCError> {
     const systemAction = action === 'View' ? SystemAction.View : SystemAction.Edit;
 
-    // Parse cached metadata to find the action
     const actionMetadataResult = this.metadataParser.parse(pageContext.handlers);
     if (!isOk(actionMetadataResult)) {
       return err(
         new ProtocolError(
           `Failed to parse page metadata to find action: ${actionMetadataResult.error.message}`,
-          {
-            pageId: sourcePageId,
-            action,
-            pageContextId,
-            originalError: actionMetadataResult.error,
-          }
+          { pageId: sourcePageId, action, pageContextId, originalError: actionMetadataResult.error }
         )
       );
     }
 
     const metadata = actionMetadataResult.value;
-
-    // LOG all actions with systemAction 40 (Edit) to debug
     const editActions = metadata.actions.filter(a => a.systemAction === systemAction);
     logger.info(`Found ${editActions.length} actions with systemAction ${systemAction}:`);
     editActions.forEach((a, i) => {
       logger.info(`  [${i}] Caption: "${a.caption}", controlPath: ${a.controlPath || 'MISSING'}`);
     });
 
-    // Find the Edit or View action from metadata
-    // CRITICAL: Prefer canonical action paths (/ha[N] or /a[N]) over Children paths (:c[N])
-    // BC puts actions in both HomeActions/Actions arrays AND Children for UI layout,
-    // but only the /ha[ or /a[ paths trigger navigation correctly.
+    // Prefer canonical action paths (/ha[N] or /a[N]) over Children paths (:c[N])
     const targetAction = metadata.actions
       .filter(a => a.systemAction === systemAction)
       .sort((a, b) => {
         const aIsCanonical = a.controlPath?.includes('/ha[') || a.controlPath?.includes('/a[');
         const bIsCanonical = b.controlPath?.includes('/ha[') || b.controlPath?.includes('/a[');
-        if (aIsCanonical && !bIsCanonical) return -1; // Prefer a
-        if (!aIsCanonical && bIsCanonical) return 1;  // Prefer b
-        return 0; // Equal priority
+        if (aIsCanonical && !bIsCanonical) return -1;
+        if (!aIsCanonical && bIsCanonical) return 1;
+        return 0;
       })[0];
 
     if (!targetAction || !targetAction.controlPath) {
@@ -361,8 +446,16 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       );
     }
 
-    const actionControlPath = targetAction.controlPath;
-    logger.info(`Selected action: "${targetAction.caption}", controlPath: ${actionControlPath}`);
+    return ok({
+      controlPath: targetAction.controlPath,
+      systemAction,
+      caption: targetAction.caption || action,
+    });
+  }
+
+  /** Send InvokeAction interaction */
+  private async sendInvokeAction(opts: InvokeActionOptions): Promise<Result<void, BCError>> {
+    const { connection, action, systemAction, actionControlPath, formId, sourcePageId, bookmark, sessionId, logger } = opts;
 
     const actionInteraction = {
       interactionName: 'InvokeAction',
@@ -372,7 +465,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
         key: null,
         repeaterControlTarget: null,
       }),
-      callbackId: '', // Will be set by connection
+      callbackId: '',
       controlPath: actionControlPath,
       formId,
     };
@@ -389,7 +482,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
             action,
             bookmark,
             formId,
-            sessionId: actualSessionId,
+            sessionId,
             originalError: actionResult.error,
           }
         )
@@ -397,9 +490,17 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
     }
 
     logger.info(`Action invoked successfully`);
+    return ok(undefined);
+  }
 
-    // Step 4: Wait for navigation (FormToShow handler)
-    let navigationHandlers: Handler[];
+  /** Wait for navigation FormToShow event */
+  private async waitForNavigation(
+    navigationPromise: Promise<Handler[] | null>,
+    action: string,
+    sourcePageId: string,
+    bookmark: string,
+    logger: ReturnType<typeof createToolLogger>
+  ): Promise<Result<Handler[], BCError>> {
     try {
       const result = await navigationPromise;
       if (!result || !Array.isArray(result)) {
@@ -410,8 +511,8 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
           )
         );
       }
-      navigationHandlers = result;
-      logger.info(`Navigation detected, received ${navigationHandlers.length} handlers`);
+      logger.info(`Navigation detected, received ${result.length} handlers`);
+      return ok(result);
     } catch (error) {
       return err(
         new ProtocolError(
@@ -420,102 +521,89 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
         )
       );
     }
+  }
 
-    // Step 5: Decompress response if needed
+  /** Load child forms and collect async data */
+  private async loadChildFormsAndData(
+    connection: IBCConnection,
+    navigationHandlers: Handler[],
+    asyncDataPromise: Promise<Handler[] | null>,
+    logger: ReturnType<typeof createToolLogger>
+  ): Promise<{ allHandlers: Handler[]; shellFormId: string | null }> {
     const decompressed = decompressResponse(navigationHandlers);
     let allNavigationHandlers = decompressed || navigationHandlers;
-
-    // Step 5.5: Load child forms to get record data (same pattern as get_page_metadata)
-    // BC sends FormToShow for navigation, but the actual record data comes in LoadForm responses
-    // Also extract shellFormId for use in targetPageContext.formIds
     let targetShellFormId: string | null = null;
+
     try {
       const { shellFormId, childFormIds } = extractServerIds(allNavigationHandlers);
-      targetShellFormId = shellFormId; // Save for pageContext formIds
+      targetShellFormId = shellFormId;
       logger.info(`Extracted shellFormId for target page: ${shellFormId}`);
       const formsToLoad = filterFormsToLoad(childFormIds);
 
       if (formsToLoad.length > 0) {
         logger.info(`Found ${formsToLoad.length} child form(s) requiring LoadForm after navigation`);
-
-        // Call LoadForm for each child form (web client pattern)
         for (let i = 0; i < formsToLoad.length; i++) {
           const child = formsToLoad[i];
           const interaction = createLoadFormInteraction(child.serverId, String(i));
-
           logger.info(`Calling LoadForm for child form: ${child.serverId}`);
           const loadResult = await connection.invoke(interaction);
-
           if (!isOk(loadResult)) {
             logger.info(`LoadForm failed for ${child.serverId}: ${loadResult.error.message}`);
-            continue;
+          } else {
+            logger.info(`LoadForm sent for: ${child.serverId}`);
           }
-
-          logger.info(`LoadForm sent for: ${child.serverId}`);
         }
       } else {
-        logger.info(`No child forms requiring LoadForm (simple Card page or all forms already loaded)`);
+        logger.info(`No child forms requiring LoadForm`);
       }
 
       // Wait for async record data
-      // This is now unconditional - we always check if data arrived, regardless of formsToLoad
       logger.info(`Checking for async record data (timeout 5s)...`);
       try {
         const asyncHandlers = await asyncDataPromise;
         if (asyncHandlers && Array.isArray(asyncHandlers)) {
           logger.info(`Received ${asyncHandlers.length} async handlers with record data`);
-
-          // Merge async handlers into the main collection
           allNavigationHandlers.push(...asyncHandlers);
         } else {
           logger.info(`No async record data received (predicate returned no data)`);
         }
       } catch (err) {
-        // It is normal for this to timeout if the page is static or data was already embedded
         logger.info(`No async record data received (timeout): ${String(err)}`);
       }
-
     } catch (err) {
       logger.info(`LoadForm/AsyncData extraction failed: ${String(err)} - continuing with FormToShow data only`);
     }
 
-    const dataToProcess = allNavigationHandlers;
+    return { allHandlers: allNavigationHandlers, shellFormId: targetShellFormId };
+  }
 
-    // Step 6: Parse metadata from navigation handlers to get target page info
+  /** Create and store target page context */
+  private async createTargetPageContext(
+    connection: IBCConnection,
+    actualSessionId: string,
+    dataToProcess: Handler[],
+    targetShellFormId: string | null,
+    logger: ReturnType<typeof createToolLogger>
+  ): Promise<Result<{ targetPageContextId: string; targetPageId: string; targetCaption: string }, BCError>> {
     const metadataResult = this.metadataParser.parse(dataToProcess);
     if (!isOk(metadataResult)) {
       return err(
         new ProtocolError(
           `Failed to parse metadata from opened page: ${metadataResult.error.message}`,
-          {
-            sourcePageId,
-            action,
-            bookmark,
-            originalError: metadataResult.error,
-          }
+          { originalError: metadataResult.error }
         )
       );
     }
 
     const targetMetadata: PageMetadata = metadataResult.value;
     const targetPageId = targetMetadata.pageId;
-
-    logger.info(`Navigated to target page: ${targetPageId} (${targetMetadata.caption})`);
-
-    // Step 7: Create new pageContext for the opened page
     const targetPageContextId = `${actualSessionId}:page:${targetPageId}:${Date.now()}`;
-
-    // Determine page type (should be Card or Document for drill-down)
     const targetPageType = this.inferPageType(dataToProcess, targetMetadata.caption);
-
-    // Extract LogicalForm from handlers for caching
     const targetLogicalForm = this.extractLogicalFormFromHandlers(dataToProcess);
-
-    // Prepare target page context data
-    // CRITICAL: Use only the target page's formId, not all open forms!
-    // Using getAllOpenFormIds() was causing execute_action to use wrong formId
     const targetFormIds = targetShellFormId ? [targetShellFormId] : connection.getAllOpenFormIds();
+
     logger.info(`Creating pageContext with formIds: ${JSON.stringify(targetFormIds)} (shellFormId=${targetShellFormId})`);
+
     const targetPageContextData = {
       sessionId: actualSessionId,
       pageId: targetPageId,
@@ -526,7 +614,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       handlers: dataToProcess,
     };
 
-    // Store target page context in memory
+    // Store in memory
     if ((connection as any).pageContexts) {
       (connection as any).pageContexts.set(targetPageContextId, targetPageContextData);
     } else {
@@ -534,25 +622,19 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       (connection as any).pageContexts.set(targetPageContextId, targetPageContextData);
     }
 
-    // Persist to disk (survives MCP server restarts)
+    // Persist to disk
     try {
       const cache = PageContextCache.getInstance();
       await cache.save(targetPageContextId, targetPageContextData);
       logger.debug(`Persisted target pageContext to cache: ${targetPageContextId}`);
     } catch (error) {
-      // Non-fatal: continue even if cache save fails
       logger.warn(`Failed to persist target pageContext: ${error}`);
     }
 
     return ok({
-      success: true,
-      sourcePageContextId: pageContextId,
       targetPageContextId,
-      sourcePageId,
       targetPageId,
-      bookmark,
-      action,
-      message: `Successfully selected row and drilled down from ${sourcePageId} to ${targetPageId} using ${action}`,
+      targetCaption: targetMetadata.caption,
     });
   }
 

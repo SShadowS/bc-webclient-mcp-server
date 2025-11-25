@@ -19,6 +19,7 @@ import type {
   PageMetadata,
   FieldMetadata,
   ActionMetadata,
+  RepeaterMetadata,
 } from '../types/bc-types.js';
 
 // ============================================================================
@@ -184,6 +185,13 @@ export interface IControlParser {
    * @returns Action metadata
    */
   extractActions(controls: readonly Control[]): readonly ActionMetadata[];
+
+  /**
+   * Extracts repeater (subpage) metadata from controls.
+   * @param controls - Array of controls with controlPath
+   * @returns Repeater metadata with column information
+   */
+  extractRepeaters(controls: readonly (Control & { controlPath?: string })[]): readonly RepeaterMetadata[];
 }
 
 /**

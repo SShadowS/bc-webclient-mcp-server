@@ -1,6 +1,6 @@
 {
   "name": "bc-webclient-mcp",
-  "version": "2.4.0",
+  "version": "2.5.0",
   "description": "Model Context Protocol (MCP) server for Microsoft Dynamics 365 Business Central via WebUI protocol. Enables AI assistants to interact with BC through the web client protocol, supporting Card, List, and Document pages with full line item support and server-side filtering.",
   "main": "dist/index.js",
   "type": "module",
@@ -37,6 +37,12 @@
     "test:bc-flows:2": "node tests/integration/bc-flows/phase2-filter-navigation.mjs",
     "test:bc-flows:3": "node tests/integration/bc-flows/phase3-write-update.mjs",
     "test:bc-flows:4": "node tests/integration/bc-flows/phase4-action-refetch.mjs",
+    "test:bc-flows:5": "node tests/integration/bc-flows/phase5-documents.mjs",
+    "test:bc-flows:6": "node tests/integration/bc-flows/phase6-create-delete.mjs",
+    "test:bc-flows:7": "node tests/integration/bc-flows/phase7-advanced-actions.mjs",
+    "test:bc-flows:8": "node tests/integration/bc-flows/phase8-advanced-filtering.mjs",
+    "test:bc-flows:9": "node tests/integration/bc-flows/phase9-field-validation.mjs",
+    "test:bc-flows:10": "node tests/integration/bc-flows/phase10-edge-cases.mjs",
     "typecheck": "tsc --noEmit",
     "find:endpoint": "node find-endpoint.js"
   },

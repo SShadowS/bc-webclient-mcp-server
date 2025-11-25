@@ -91,6 +91,65 @@ export function extractCompressedData(message: any): string | null {
   return null;
 }
 
+/** Session info result type */
+interface SessionInfo {
+  serverSessionId?: string;
+  sessionKey?: string;
+  companyName?: string;
+  roleCenterFormId?: string;
+}
+
+/** Session field names to extract from BC parameters */
+const SESSION_FIELD_MAP = {
+  ServerSessionId: 'serverSessionId',
+  SessionKey: 'sessionKey',
+  CompanyName: 'companyName',
+} as const;
+
+/**
+ * Recursively search parameter tree for session fields.
+ *
+ * BC parameter structures can be deeply nested arrays and objects.
+ * Session fields may be scattered across different nested structures.
+ * This function collects ALL occurrences and merges them.
+ */
+function searchParamsForSessionFields(params: unknown, result: SessionInfo): void {
+  if (Array.isArray(params)) {
+    for (const item of params) {
+      searchParamsForSessionFields(item, result);
+    }
+    return;
+  }
+
+  if (params && typeof params === 'object') {
+    const obj = params as Record<string, unknown>;
+
+    // Check for each session field
+    for (const [bcField, resultField] of Object.entries(SESSION_FIELD_MAP)) {
+      if (obj[bcField] && !result[resultField as keyof SessionInfo]) {
+        (result as any)[resultField] = obj[bcField];
+      }
+    }
+
+    // Recurse into object values
+    for (const value of Object.values(obj)) {
+      searchParamsForSessionFields(value, result);
+    }
+  }
+}
+
+/**
+ * Find role center form ID from FormToShow handler.
+ */
+function findRoleCenterFormId(handlers: BCHandler[]): string | undefined {
+  const formToShowHandler = handlers.find(
+    h => h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+         h.parameters?.[0] === 'FormToShow' &&
+         h.parameters?.[1]?.ServerId
+  );
+  return formToShowHandler?.parameters?.[1]?.ServerId;
+}
+
 /**
  * Extract session information from handler array.
  *
@@ -119,75 +178,24 @@ export function extractCompressedData(message: any): string | null {
  * // { serverSessionId: 'abc123', sessionKey: 'key456', companyName: 'CRONUS' }
  * ```
  */
-export function extractSessionInfo(handlers: BCHandler[]): {
-  serverSessionId?: string;
-  sessionKey?: string;
-  companyName?: string;
-  roleCenterFormId?: string;
-} | null {
-  /**
-   * Recursively search parameter tree for session fields.
-   *
-   * BC parameter structures can be deeply nested arrays and objects.
-   * Session fields may be scattered across different nested structures.
-   * This function collects ALL occurrences and merges them.
-   */
-  const searchParams = (params: any, result: any): void => {
-    // Handle arrays: recursively search each element
-    if (Array.isArray(params)) {
-      for (const item of params) {
-        searchParams(item, result);
-      }
-    }
-    // Handle objects: check for session fields, then recurse into values
-    else if (params && typeof params === 'object') {
-      // Collect any session fields from this object
-      if (params.ServerSessionId && !result.serverSessionId) {
-        result.serverSessionId = params.ServerSessionId;
-      }
-      if (params.SessionKey && !result.sessionKey) {
-        result.sessionKey = params.SessionKey;
-      }
-      if (params.CompanyName && !result.companyName) {
-        result.companyName = params.CompanyName;
-      }
+export function extractSessionInfo(handlers: BCHandler[]): SessionInfo | null {
+  const sessionInfo: SessionInfo = {};
 
-      // Recurse into object values
-      for (const value of Object.values(params)) {
-        searchParams(value, result);
-      }
-    }
-  };
-
-  // Collect session info from all handlers
-  const sessionInfo: any = {
-    serverSessionId: undefined,
-    sessionKey: undefined,
-    companyName: undefined,
-  };
-
+  // Collect session fields from all handler parameters
   for (const handler of handlers) {
     if (handler.parameters) {
-      searchParams(handler.parameters, sessionInfo);
+      searchParamsForSessionFields(handler.parameters, sessionInfo);
     }
   }
 
   // Check if we found any session fields
-  if (!sessionInfo.serverSessionId && !sessionInfo.sessionKey && !sessionInfo.companyName) {
+  const hasSessionInfo = sessionInfo.serverSessionId || sessionInfo.sessionKey || sessionInfo.companyName;
+  if (!hasSessionInfo) {
     return null;
   }
 
-  // Also look for FormToShow handler to extract role center form ID
-  for (const handler of handlers) {
-    if (
-      handler.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-      handler.parameters?.[0] === 'FormToShow' &&
-      handler.parameters?.[1]?.ServerId
-    ) {
-      sessionInfo.roleCenterFormId = handler.parameters[1].ServerId;
-      break;
-    }
-  }
+  // Add role center form ID if present
+  sessionInfo.roleCenterFormId = findRoleCenterFormId(handlers);
 
   return sessionInfo;
 }

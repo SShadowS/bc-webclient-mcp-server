@@ -28,8 +28,13 @@ const PHASES = [
   { num: 1, name: 'Core Read Operations', file: 'phase1-read-core.mjs' },
   { num: 2, name: 'Filter & Navigation', file: 'phase2-filter-navigation.mjs' },
   { num: 3, name: 'Write Operations', file: 'phase3-write-update.mjs' },
-  // { num: 4, name: 'Create/Delete', file: 'phase4-create-delete.mjs' },
-  // { num: 5, name: 'Documents', file: 'phase5-documents.mjs' },
+  { num: 4, name: 'Action & Refetch', file: 'phase4-action-refetch.mjs' },
+  { num: 5, name: 'Document Operations', file: 'phase5-documents.mjs' },
+  { num: 6, name: 'Create/Delete Operations', file: 'phase6-create-delete.mjs' },
+  { num: 7, name: 'Advanced Actions', file: 'phase7-advanced-actions.mjs' },
+  { num: 8, name: 'Advanced Filtering', file: 'phase8-advanced-filtering.mjs' },
+  { num: 9, name: 'Field Validation', file: 'phase9-field-validation.mjs' },
+  { num: 10, name: 'Edge Cases & Errors', file: 'phase10-edge-cases.mjs' },
 ];
 
 async function runPhase(phase) {
@@ -100,10 +105,14 @@ async function main() {
   console.log('');
   if (allPassed) {
     console.log(colors.green + '  All phases passed!' + colors.reset);
+    process.exit(0);
   } else {
     console.log(colors.red + '  Some phases failed.' + colors.reset);
-    process.exitCode = 1;
+    process.exit(1);
   }
 }
 
-main();
+main().catch((error) => {
+  console.error(colors.red + 'Fatal error:' + colors.reset, error);
+  process.exit(1);
+});

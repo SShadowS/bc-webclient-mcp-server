@@ -555,7 +555,7 @@ export class MCPServer implements IMCPServer {
   /**
    * Handles resources/read request.
    */
-  public async handleResourceRead(params: { uri: string }): Promise<Result<{ contents: string }, BCError>> {
+  public async handleResourceRead(params: { uri: string }): Promise<Result<{ contents: Array<{ uri: string; mimeType: string; text: string }> }, BCError>> {
     try {
       this.logger?.info('Handling resources/read request', {
         uri: params.uri,
@@ -588,7 +588,16 @@ export class MCPServer implements IMCPServer {
         contentLength: contentResult.value.length,
       });
 
-      return ok({ contents: contentResult.value });
+      // Return MCP-compliant resource content structure
+      return ok({
+        contents: [
+          {
+            uri: params.uri,
+            mimeType: resource.mimeType,
+            text: contentResult.value,
+          },
+        ],
+      });
     } catch (error) {
       return err(
         new InternalError(

@@ -12,7 +12,10 @@ import type {
   FieldMetadata,
   ActionMetadata,
   ControlType,
+  RepeaterMetadata,
+  ColumnMetadata,
 } from '../types/bc-types.js';
+import { logger } from '../core/logger.js';
 
 /**
  * Field control types (editable data fields).
@@ -93,9 +96,114 @@ export class ControlParser implements IControlParser {
       .filter((action): action is ActionMetadata => action !== null);
   }
 
+  /**
+   * Extracts repeater (subpage) metadata from controls.
+   * Repeaters contain line items (e.g., Sales Lines on Sales Order).
+   *
+   * Handles two patterns:
+   * 1. fhc-wrapped subpages (Document lines): fhc (Part name) → lf (Subform) → rc/lrc (Grid)
+   * 2. Standalone rc/lrc repeaters (List pages)
+   *
+   * @param controls - Array of controls to parse
+   * @returns Array of repeater metadata with column information
+   */
+  public extractRepeaters(controls: readonly (Control & { controlPath?: string })[]): readonly RepeaterMetadata[] {
+    const repeaters: RepeaterMetadata[] = [];
+    const processedGridPaths = new Set<string>();
+
+    // First, extract fhc-wrapped subpages (e.g., "SalesLines" on Sales Order)
+    for (const control of controls) {
+      if (control.t === 'fhc' && control.DesignName) {
+        // Find the nested rc/lrc within this fhc's walked children
+        // Look for the first rc/lrc that's a child of a child of this fhc
+        // Pattern: fhc (control.controlPath) → lf → rc
+        const fhcPath = control.controlPath || '';
+        const nestedGrid = controls.find(c =>
+          (c.t === 'rc' || c.t === 'lrc') &&
+          c.controlPath &&
+          c.controlPath.startsWith(fhcPath + '/') &&
+          c.controlPath.split('/').length === fhcPath.split('/').length + 2
+        );
+
+        if (nestedGrid) {
+          logger.info(`[extractRepeaters] Found fhc-wrapped grid: fhc.DesignName=${control.DesignName}, grid.controlPath=${nestedGrid.controlPath}`);
+          // Use fhc's DesignName (e.g., "SalesLines") but grid's controlPath for routing
+          const metadata = this.controlToRepeaterMetadata(nestedGrid);
+          repeaters.push({
+            ...metadata,
+            name: String(control.DesignName), // Override with fhc name
+            caption: control.Caption ? String(control.Caption) : metadata.caption,
+          });
+          // Mark this grid as processed so we don't duplicate it
+          if (nestedGrid.controlPath) {
+            processedGridPaths.add(nestedGrid.controlPath);
+          }
+        }
+      }
+    }
+
+    // Second, extract standalone rc/lrc repeaters not under fhc (e.g., list pages)
+    for (const control of controls) {
+      if ((control.t === 'rc' || control.t === 'lrc') && !processedGridPaths.has(control.controlPath || '')) {
+        repeaters.push(this.controlToRepeaterMetadata(control));
+      }
+    }
+
+    return repeaters;
+  }
+
   // ============================================================================
   // Private Helper Methods
   // ============================================================================
+
+  /**
+   * Finds the nested grid (rc/lrc) control within an fhc control.
+   * BC structure: fhc → lf (with IsPart/IsSubForm) → rc/lrc
+   *
+   * @param fhcControl - The Form Heading Control (Part wrapper)
+   * @returns The nested rc/lrc grid control with controlPath, or undefined
+   */
+  private findNestedGrid(fhcControl: Control & { controlPath?: string }): (Control & { controlPath?: string }) | undefined {
+    if (!fhcControl.Children || !Array.isArray(fhcControl.Children)) {
+      return undefined;
+    }
+
+    // Look for lf (Logical Form) child with IsPart and IsSubForm
+    for (const child of fhcControl.Children) {
+      const childAny = child as any;
+      if (child.t === 'lf' && childAny.IsPart === true && childAny.IsSubForm === true) {
+        // Now search for rc/lrc within this subform
+        return this.findGridInSubtree(child);
+      }
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Recursively searches for rc/lrc control in a subtree.
+   *
+   * @param control - Control to search within
+   * @returns First rc/lrc control found with controlPath, or undefined
+   */
+  private findGridInSubtree(control: Control & { controlPath?: string }): (Control & { controlPath?: string }) | undefined {
+    // Check if this control is a grid
+    if (control.t === 'rc' || control.t === 'lrc') {
+      return control;
+    }
+
+    // Recursively search children
+    if (control.Children && Array.isArray(control.Children)) {
+      for (const child of control.Children) {
+        const found = this.findGridInSubtree(child as Control & { controlPath?: string });
+        if (found) {
+          return found;
+        }
+      }
+    }
+
+    return undefined;
+  }
 
   /**
    * Checks if control type is a field control.
@@ -163,6 +271,56 @@ export class ControlParser implements IControlParser {
       controlPath: control.controlPath, // Capture the BC control path
     };
   }
+
+  /**
+   * Converts a repeater control to repeater metadata with column information.
+   * Passive consumer: reads enriched Columns array if present (from cache),
+   * otherwise extracts columns from the Children array of the repeater control.
+   */
+  private controlToRepeaterMetadata(control: Control & { controlPath?: string }): RepeaterMetadata {
+    const controlAny = control as any;
+    const columns: ColumnMetadata[] = [];
+
+    // First, check if control has already-enriched Columns array (from cache)
+    // This is the "passive consumer" pattern from GPT-5.1
+    if (controlAny.Columns && Array.isArray(controlAny.Columns)) {
+      logger.debug(`[ControlParser] Extracting from Columns array (${controlAny.Columns.length} columns)`);
+
+      for (let i = 0; i < controlAny.Columns.length; i++) {
+        const col = controlAny.Columns[i];
+        // CRITICAL: Only use TemplateControlPath when provided by BC.
+        // DO NOT generate synthetic paths - they will be invalid and cause ArgumentOutOfRangeException.
+        // When TemplateControlPath is missing, leave controlPath as undefined so BC can resolve it.
+        const columnPath = col.TemplateControlPath ? String(col.TemplateControlPath) : undefined;
+
+        columns.push({
+          caption: col.Caption ? String(col.Caption) : undefined,
+          designName: col.DesignName ? String(col.DesignName) : undefined,
+          controlPath: columnPath,
+          columnBinderPath: col.ColumnBinder?.Name ? String(col.ColumnBinder.Name) : undefined,
+        });
+      }
+    }
+    // NO FALLBACK: BC protocol ALWAYS provides Columns array for rc/lrc controls.
+    // Children array contains UI rendering controls, not column metadata.
+    // If Columns is missing, the repeater has no column metadata yet (not realized).
+
+    const result = {
+      controlPath: control.controlPath || '', // Required field
+      caption: control.Caption ? String(control.Caption) : undefined,
+      name: control.DesignName ? String(control.DesignName) : (control.Name ? String(control.Name) : undefined),
+      formId: (control as any).FormId ? String((control as any).FormId) : undefined,  // Extract FormId for RCC linking
+      columns,
+    };
+
+    // DIAGNOSTIC
+    logger.info(`[controlToRepeaterMetadata] Created repeater metadata: controlPath="${result.controlPath}", name="${result.name}", columns=${result.columns.length}`);
+    if (result.columns.length > 0) {
+      logger.info(`[controlToRepeaterMetadata] First column: caption="${result.columns[0].caption}", controlPath="${result.columns[0].controlPath}"`);
+    }
+
+    return result;
+  }
 }
 
 /**
@@ -195,6 +353,11 @@ export class ControlWalker implements IControlWalker {
     depth: number,
     currentPath: string
   ): void {
+    // DIAGNOSTIC: Log rc controls with their paths
+    if (control.t === 'rc' || control.t === 'lrc') {
+      logger.info(`[ControlWalker] Walking ${control.t}: DesignName="${(control as any).DesignName || 'none'}", Caption="${control.Caption || 'none'}", path="${currentPath}"`);
+    }
+
     // Visit current control with path
     const continueWalking = visitor.visit(control, depth, currentPath);
 

@@ -32,6 +32,20 @@ import {
 import { bcConfig } from '../core/config.js';
 import type { BCConnectionPool } from '../services/connection-pool.js';
 import type { CacheManager } from '../services/cache-manager.js';
+import { createWorkflowIntegration } from '../services/workflow-integration.js';
+
+/** Connection state for search operation */
+interface ConnectionState {
+  client: BCRawWebSocketClient;
+  pooledConnection: any;
+  shouldDisconnect: boolean;
+}
+
+/** Predicate result type */
+interface PredicateResult<T> {
+  matched: boolean;
+  data?: T;
+}
 
 /**
  * MCP Tool: search_pages
@@ -90,6 +104,10 @@ export class SearchPagesTool extends BaseMCPTool {
         description: 'Filter by page type',
         enum: ['Card', 'List', 'Document', 'Worksheet', 'Report'],
       },
+      workflowId: {
+        type: 'string',
+        description: 'Optional workflow ID to track this operation. Records page searches for workflow audit trail.',
+      },
     },
     required: ['query'],
   };
@@ -107,7 +125,10 @@ export class SearchPagesTool extends BaseMCPTool {
    */
   protected async executeInternal(input: unknown): Promise<Result<SearchPagesOutput, BCError>> {
     // Input is already validated by BaseMCPTool with Zod
-    const { query, limit = 10, type } = input as SearchPagesInput;
+    const { query, limit = 10, type, workflowId } = input as SearchPagesInput & { workflowId?: string };
+
+    // Create workflow integration if workflowId provided
+    const workflow = createWorkflowIntegration(workflowId);
 
     // Build cache key
     const cacheKey = `search:${query}:${type || 'all'}:${limit}`;
@@ -118,18 +139,18 @@ export class SearchPagesTool extends BaseMCPTool {
         return await this.cache.getOrCompute(
           cacheKey,
           async () => {
-            return await this.performSearch(query, limit, type);
+            return await this.performSearch(query, limit, type, workflow);
           },
           300000 // 5 minute TTL for search results
         );
       } catch (error) {
         // If cache operation fails, fall back to direct execution
-        return await this.performSearch(query, limit, type);
+        return await this.performSearch(query, limit, type, workflow);
       }
     }
 
     // No cache - execute directly
-    return await this.performSearch(query, limit, type);
+    return await this.performSearch(query, limit, type, workflow);
   }
 
   /**
@@ -139,271 +160,276 @@ export class SearchPagesTool extends BaseMCPTool {
   private async performSearch(
     query: string,
     limit: number,
-    type?: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report'
+    type?: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report',
+    workflow?: ReturnType<typeof createWorkflowIntegration>
   ): Promise<Result<SearchPagesOutput, BCError>> {
-
-    // Get BC credentials from passed config or fall back to centralized config
-    const baseUrl = this.config?.baseUrl || bcConfig.baseUrl;
-    const username = this.config?.username || bcConfig.username;
-    const password = this.config?.password || bcConfig.password;
-    const tenantId = this.config?.tenantId || bcConfig.tenantId;
-
-    // Connection tracking (declared outside try block for error cleanup)
-    let client: BCRawWebSocketClient | null = null;
-    let pooledConnection: any = null;
-    let shouldDisconnect = true;
+    let connState: ConnectionState | null = null;
 
     try {
-      // Use connection pool if available, otherwise create new connection
-      if (this.connectionPool) {
-        // Acquire connection from pool
-        pooledConnection = await this.connectionPool.acquire();
-        client = pooledConnection.client;
-        shouldDisconnect = false; // Pool manages disconnection
-      } else {
-        // Legacy path: Create new client
-        client = new BCRawWebSocketClient(
-          { baseUrl } as any,
-          username,
-          password,
-          tenantId
-        );
+      // Step 1: Initialize connection
+      connState = await this.initializeConnection();
 
-        // Authenticate
-        await client.authenticateWeb();
-
-        // Connect WebSocket
-        await client.connect();
-
-        // Open session
-        await client.openSession({
-          clientType: 'WebClient',
-          clientVersion: '27.0.0.0',
-          clientCulture: 'en-US',
-          clientTimeZone: 'UTC',
-        });
-      }
-
-      // Client should always be set at this point
-      if (!client) {
-        throw new ConnectionError('Failed to initialize BC client');
-      }
-
-      // Get role center form ID from the connection (not from file - avoids race condition with pool)
-      const ownerFormId = client.getRoleCenterFormId();
-
+      // Step 2: Validate and get role center form ID
+      const ownerFormId = connState.client.getRoleCenterFormId();
       if (!ownerFormId) {
-        await client.disconnect();
-        return err(
-          new ProtocolError('No role center form found in session', {})
-        );
+        await this.cleanupConnection(connState);
+        return err(new ProtocolError('No role center form found in session', {}));
       }
 
-      // Define predicate to detect Tell Me dialog (handles both BC27+ and legacy formats)
-      const isTellMeDialogOpen = (handlers: any[]) => {
-        // Log all handlers for debugging
-        // TODO: Re-enable for debugging when not using stdio transport
-        // console.error(`[Tell Me Debug] Received ${handlers.length} handlers:`);
-        // handlers.forEach((h, i) => {
-        //   console.error(`  [${i}] ${h.handlerType}`, h.parameters?.[0] || '');
-        // });
+      // Step 3: Open Tell Me dialog
+      const dialogResult = await this.openTellMeDialog(connState.client, ownerFormId);
+      if (!isOk(dialogResult)) {
+        await this.cleanupConnection(connState);
+        return dialogResult;
+      }
+      const formId = dialogResult.value;
 
-        // Try legacy FormToShow format first
-        // TODO: Find language-independent way to identify Tell Me dialog
-        const legacy = handlers.find((h: any) =>
-          h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-          h.parameters?.[0] === 'FormToShow' &&
-          h.parameters?.[1]?.ServerId
-        );
-        if (legacy) {
-          // TODO: Re-enable for debugging when not using stdio transport
-          // console.error(`[Tell Me Debug] Found FormToShow dialog: ServerId=${legacy.parameters[1].ServerId}, Caption="${legacy.parameters[1].Caption}"`);
-          return { matched: true, data: legacy.parameters[1].ServerId };
-        }
+      // Step 4: Initialize search with empty value
+      await this.initializeSearchField(connState.client, formId, ownerFormId);
 
-        // Try BC27+ ChangeHandler format (DataRefreshChange or InitializeChange)
-        const change = handlers.find((h: any) =>
-          h.handlerType === 'DN.LogicalClientChangeHandler' &&
-          (h.parameters?.[0]?.Type === 'DataRefreshChange' || h.parameters?.[0]?.Type === 'InitializeChange')
-        );
-        if (change) {
-          // Try to extract form ID from change handler
-          const updates = change.parameters?.[0]?.Updates;
-          if (Array.isArray(updates)) {
-            for (const update of updates) {
-              if (update.NewValue?.ServerId) {
-                return { matched: true, data: update.NewValue.ServerId };
-              }
+      // Step 5: Submit search query and get results
+      const searchResult = await this.submitSearchQuery(connState.client, query, formId, ownerFormId);
+      if (!isOk(searchResult)) {
+        await this.cleanupConnection(connState);
+        return searchResult;
+      }
+
+      // Step 6: Filter and limit results
+      const pages = this.filterAndLimitResults(searchResult.value, type, limit);
+
+      // Step 7: Cleanup connection
+      await this.cleanupConnection(connState);
+
+      // Step 8: Record workflow operation
+      this.recordWorkflowOperation(workflow, query, limit, type, pages.length);
+
+      return ok({ pages, totalCount: pages.length });
+    } catch (error) {
+      if (connState) await this.cleanupConnection(connState);
+      return err(new ConnectionError(
+        `Tell Me search failed: ${error instanceof Error ? error.message : String(error)}`,
+        { query, error }
+      ));
+    }
+  }
+
+  // ============================================================================
+  // Helper Methods - Extracted from performSearch for reduced complexity
+  // ============================================================================
+
+  /** Get BC credentials from config or defaults */
+  private getCredentials(): { baseUrl: string; username: string; password: string; tenantId: string } {
+    return {
+      baseUrl: this.config?.baseUrl || bcConfig.baseUrl,
+      username: this.config?.username || bcConfig.username,
+      password: this.config?.password || bcConfig.password,
+      tenantId: this.config?.tenantId || bcConfig.tenantId,
+    };
+  }
+
+  /** Initialize connection from pool or create new */
+  private async initializeConnection(): Promise<ConnectionState> {
+    if (this.connectionPool) {
+      const pooledConnection = await this.connectionPool.acquire();
+      return {
+        client: pooledConnection.client,
+        pooledConnection,
+        shouldDisconnect: false,
+      };
+    }
+
+    const { baseUrl, username, password, tenantId } = this.getCredentials();
+    const client = new BCRawWebSocketClient({ baseUrl } as any, username, password, tenantId);
+
+    await client.authenticateWeb();
+    await client.connect();
+    await client.openSession({
+      clientType: 'WebClient',
+      clientVersion: '27.0.0.0',
+      clientCulture: 'en-US',
+      clientTimeZone: 'UTC',
+    });
+
+    return { client, pooledConnection: null, shouldDisconnect: true };
+  }
+
+  /** Create predicate for Tell Me dialog detection */
+  private createTellMeDialogPredicate(): (handlers: any[]) => PredicateResult<string> {
+    return (handlers: any[]) => {
+      // Try legacy FormToShow format first
+      const legacy = handlers.find((h: any) =>
+        h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+        h.parameters?.[0] === 'FormToShow' &&
+        h.parameters?.[1]?.ServerId
+      );
+      if (legacy) {
+        return { matched: true, data: legacy.parameters[1].ServerId };
+      }
+
+      // Try BC27+ ChangeHandler format
+      const change = handlers.find((h: any) =>
+        h.handlerType === 'DN.LogicalClientChangeHandler' &&
+        (h.parameters?.[0]?.Type === 'DataRefreshChange' || h.parameters?.[0]?.Type === 'InitializeChange')
+      );
+      if (change) {
+        const updates = change.parameters?.[0]?.Updates;
+        if (Array.isArray(updates)) {
+          for (const update of updates) {
+            if (update.NewValue?.ServerId) {
+              return { matched: true, data: update.NewValue.ServerId };
             }
           }
         }
-
-        return { matched: false };
-      };
-
-      // Trigger Tell Me dialog and wait for it to appear
-      // Use pre-subscribe pattern to avoid race condition
-      let formId: string;
-      try {
-        // Set up listener first
-        const waitDialogPromise = client.waitForHandlers(isTellMeDialogOpen, {
-          timeoutMs: Math.max(5000, bcConfig.searchTimingWindowMs),
-        });
-
-        // Fire invoke without awaiting
-        void client.invoke({
-          interactionName: 'InvokeSessionAction',
-          namedParameters: {
-            systemAction: 220,
-            ownerForm: ownerFormId,
-            data: { SearchValue: '' },
-          },
-          openFormIds: [ownerFormId],
-        }).catch(() => {
-          // Swallow invoke errors - waitDialogPromise will timeout if invoke fails
-        });
-
-        // Wait for dialog to appear
-        formId = await waitDialogPromise;
-      } catch (error) {
-        await client.disconnect();
-        return err(
-          new ProtocolError(
-            `Tell Me dialog did not open: ${error instanceof Error ? error.message : String(error)}`,
-            { error }
-          )
-        );
       }
 
-      // Initialize search with empty value (required!)
-      await client.invoke({
+      return { matched: false };
+    };
+  }
+
+  /** Open Tell Me dialog and return form ID */
+  private async openTellMeDialog(client: BCRawWebSocketClient, ownerFormId: string): Promise<Result<string, BCError>> {
+    try {
+      const waitDialogPromise = client.waitForHandlers(this.createTellMeDialogPredicate(), {
+        timeoutMs: Math.max(5000, bcConfig.searchTimingWindowMs),
+      });
+
+      void client.invoke({
+        interactionName: 'InvokeSessionAction',
+        namedParameters: { systemAction: 220, ownerForm: ownerFormId, data: { SearchValue: '' } },
+        openFormIds: [ownerFormId],
+      }).catch(() => { /* Swallow - waitDialogPromise will timeout if invoke fails */ });
+
+      const formId = await waitDialogPromise;
+      return ok(formId);
+    } catch (error) {
+      return err(new ProtocolError(
+        `Tell Me dialog did not open: ${error instanceof Error ? error.message : String(error)}`,
+        { error }
+      ));
+    }
+  }
+
+  /** Initialize search field with empty value */
+  private async initializeSearchField(client: BCRawWebSocketClient, formId: string, ownerFormId: string): Promise<void> {
+    await client.invoke({
+      interactionName: 'SaveValue',
+      namedParameters: {
+        newValue: '',
+        isFilterAsYouType: true,
+        alwaysCommitChange: true,
+        isFilterOptimized: false,
+        isSemanticSearch: false,
+      },
+      controlPath: 'server:c[0]/c[0]',
+      formId,
+      openFormIds: [ownerFormId, formId],
+    });
+  }
+
+  /** Create predicate for search results detection */
+  private createSearchResultsPredicate(): (handlers: any[]) => PredicateResult<any[]> {
+    return (handlers: any[]) => {
+      // Try BC27+ format first
+      const bc27Results = extractTellMeResultsFromChangeHandler(handlers);
+      if (isOk(bc27Results) && bc27Results.value.length > 0) {
+        return { matched: true, data: bc27Results.value };
+      }
+
+      // Try legacy format
+      const searchFormHandler = Array.isArray(handlers)
+        ? handlers.find((h: any) =>
+            h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+            h.parameters?.[0] === 'FormToShow'
+          )
+        : null;
+
+      const logicalForm = searchFormHandler?.parameters?.[1];
+      if (logicalForm) {
+        const legacyResults = extractTellMeResults({ LogicalForm: logicalForm });
+        if (isOk(legacyResults) && legacyResults.value.length > 0) {
+          return { matched: true, data: legacyResults.value };
+        }
+      }
+
+      return { matched: false };
+    };
+  }
+
+  /** Submit search query and wait for results */
+  private async submitSearchQuery(
+    client: BCRawWebSocketClient,
+    query: string,
+    formId: string,
+    ownerFormId: string
+  ): Promise<Result<any[], BCError>> {
+    try {
+      const waitPromise = client.waitForHandlers(this.createSearchResultsPredicate(), {
+        timeoutMs: Math.max(5000, bcConfig.searchTimingWindowMs),
+      });
+
+      void client.invoke({
         interactionName: 'SaveValue',
         namedParameters: {
-          newValue: '',
+          newValue: query,
           isFilterAsYouType: true,
           alwaysCommitChange: true,
           isFilterOptimized: false,
           isSemanticSearch: false,
         },
         controlPath: 'server:c[0]/c[0]',
-        formId: formId,
+        formId,
         openFormIds: [ownerFormId, formId],
-      });
+      }).catch(() => { /* Swallow - waitPromise will timeout if invoke fails */ });
 
-      // Define predicate to detect search results
-      const isSearchResults = (handlers: any[]) => {
-        // Try BC27+ format first
-        const bc27Results = extractTellMeResultsFromChangeHandler(handlers);
-        if (isOk(bc27Results) && bc27Results.value.length > 0) {
-          return { matched: true, data: bc27Results.value };
-        }
-
-        // Try legacy format
-        const searchFormHandler = Array.isArray(handlers)
-          ? handlers.find((h: any) =>
-              h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-              h.parameters?.[0] === 'FormToShow'
-            )
-          : null;
-
-        const logicalForm = searchFormHandler?.parameters?.[1];
-        if (logicalForm) {
-          const legacyResults = extractTellMeResults({ LogicalForm: logicalForm });
-          if (isOk(legacyResults) && legacyResults.value.length > 0) {
-            return { matched: true, data: legacyResults.value };
-          }
-        }
-
-        return { matched: false };
-      };
-
-      // Submit actual search query and wait for results
-      // CRITICAL: Pre-subscribe to handlers BEFORE invoking to avoid race condition
-      // BC emits handlers asynchronously - if we await invoke first, we might miss them
-      let searchResults: any[];
-      try {
-        // Set up listener first (pre-subscribe pattern)
-        const waitPromise = client.waitForHandlers(isSearchResults, {
-          timeoutMs: Math.max(5000, bcConfig.searchTimingWindowMs),
-        });
-
-        // Fire invoke without awaiting (fire-and-forget to avoid delaying listener setup)
-        void client.invoke({
-          interactionName: 'SaveValue',
-          namedParameters: {
-            newValue: query,
-            isFilterAsYouType: true,
-            alwaysCommitChange: true,
-            isFilterOptimized: false,
-            isSemanticSearch: false,
-          },
-          controlPath: 'server:c[0]/c[0]',
-          formId: formId,
-          openFormIds: [ownerFormId, formId],
-        }).catch(() => {
-          // Swallow invoke errors - waitPromise will timeout if invoke fails
-        });
-
-        // Wait for results to arrive via event listener
-        searchResults = await waitPromise;
-      } catch (error) {
-        await client.disconnect();
-        return err(
-          new ProtocolError(
-            `Tell Me search results did not arrive: ${error instanceof Error ? error.message : String(error)}`,
-            { query, error }
-          )
-        );
-      }
-
-      // Convert to page results
-      let pages = convertToPageSearchResults(searchResults);
-
-      // Apply type filter if specified
-      if (type) {
-        pages = pages.filter(p => p.type === type);
-      }
-
-      // Apply limit
-      pages = pages.slice(0, limit);
-
-      // Clean up connection
-      if (pooledConnection) {
-        // Release back to pool
-        await this.connectionPool!.release(pooledConnection);
-      } else if (shouldDisconnect) {
-        // Close new connection
-        await client.disconnect();
-      }
-
-      return ok({
-        pages,
-        totalCount: pages.length,
-      });
+      const searchResults = await waitPromise;
+      return ok(searchResults);
     } catch (error) {
-      // Ensure connection cleanup on error
-      if (pooledConnection && this.connectionPool) {
-        try {
-          await this.connectionPool.release(pooledConnection);
-        } catch (releaseError) {
-          // Log but don't throw - original error is more important
-        }
-      } else if (client && shouldDisconnect) {
-        // Clean up non-pooled connection
-        try {
-          await client.disconnect();
-        } catch (disconnectError) {
-          // Log but don't throw - original error is more important
-        }
-      }
-
-      return err(
-        new ConnectionError(
-          `Tell Me search failed: ${error instanceof Error ? error.message : String(error)}`,
-          { query, error }
-        )
-      );
+      return err(new ProtocolError(
+        `Tell Me search results did not arrive: ${error instanceof Error ? error.message : String(error)}`,
+        { query, error }
+      ));
     }
   }
 
+  /** Filter by type and apply limit */
+  private filterAndLimitResults(
+    rawResults: any[],
+    type: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report' | undefined,
+    limit: number
+  ): PageSearchResult[] {
+    let pages = convertToPageSearchResults(rawResults);
+    if (type) {
+      pages = pages.filter(p => p.type === type);
+    }
+    return pages.slice(0, limit);
+  }
+
+  /** Cleanup connection (release to pool or disconnect) */
+  private async cleanupConnection(connState: ConnectionState): Promise<void> {
+    try {
+      if (connState.pooledConnection && this.connectionPool) {
+        await this.connectionPool.release(connState.pooledConnection);
+      } else if (connState.shouldDisconnect) {
+        await connState.client.disconnect();
+      }
+    } catch {
+      // Swallow cleanup errors - they're not critical
+    }
+  }
+
+  /** Record operation in workflow */
+  private recordWorkflowOperation(
+    workflow: ReturnType<typeof createWorkflowIntegration> | undefined,
+    query: string,
+    limit: number,
+    type: string | undefined,
+    resultCount: number
+  ): void {
+    if (!workflow) return;
+    workflow.recordOperation(
+      'search_pages',
+      { query, limit, type },
+      { success: true, data: { resultCount } }
+    );
+  }
 }

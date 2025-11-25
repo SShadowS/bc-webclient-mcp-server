@@ -9,6 +9,7 @@ import type { IMCPResource, ILogger } from '../core/interfaces.js';
 import { WorkflowPatternsDocResource } from './docs-workflow-patterns-resource.js';
 import { BCSchemaPagesResource } from './schema-pages-resource.js';
 import { BCSessionStateResource } from './session-current-resource.js';
+import { BCWorkflowAllResource } from './workflow-all-resource.js';
 
 /**
  * Context for resource factory.
@@ -38,6 +39,9 @@ export function buildResources(ctx: ResourceFactoryContext = {}): IMCPResource[]
   // Session introspection resources
   resources.push(new BCSessionStateResource(ctx.logger));
 
+  // Workflow introspection resources
+  resources.push(new BCWorkflowAllResource(ctx.logger));
+
   return resources;
 }
 
@@ -45,3 +49,4 @@ export function buildResources(ctx: ResourceFactoryContext = {}): IMCPResource[]
 export { WorkflowPatternsDocResource } from './docs-workflow-patterns-resource.js';
 export { BCSchemaPagesResource } from './schema-pages-resource.js';
 export { BCSessionStateResource } from './session-current-resource.js';
+export { BCWorkflowAllResource } from './workflow-all-resource.js';

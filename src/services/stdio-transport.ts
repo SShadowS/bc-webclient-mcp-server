@@ -310,6 +310,26 @@ export class StdioTransport {
     }
   }
 
+  /** Known notification methods that don't require a response */
+  private static readonly NOTIFICATION_METHODS = new Set([
+    'initialized',
+    'notifications/initialized',
+    'notifications/cancelled',
+    '$/cancelRequest',
+  ]);
+
+  /** Method to handler lookup table */
+  private readonly methodHandlers: Record<string, (request: JSONRPCRequest) => Promise<void>> = {
+    'initialize': (req) => this.handleInitialize(req),
+    'tools/list': (req) => this.handleToolsList(req),
+    'tools/call': (req) => this.handleToolCall(req),
+    'resources/list': (req) => this.handleResourcesList(req),
+    'resources/read': (req) => this.handleResourceRead(req),
+    'prompts/list': (req) => this.handlePromptsList(req),
+    'prompts/get': (req) => this.handlePromptGet(req),
+    'ping': (req) => this.handlePing(req),
+  };
+
   /**
    * Routes a request to the appropriate handler.
    */
@@ -320,67 +340,21 @@ export class StdioTransport {
         id: request.id,
       });
 
-      // Route by method
-      switch (request.method) {
-        case 'initialize':
-          await this.handleInitialize(request);
-          break;
-
-        case 'initialized':
-        case 'notifications/initialized':
-          // Notification, no response needed
-          this.options.logger?.debug('Received initialized notification');
-          break;
-
-        case 'notifications/cancelled':
-        case '$/cancelRequest':
-          // Notification, no response needed
-          this.options.logger?.debug('Received cancellation notification');
-          break;
-
-        case 'tools/list':
-          await this.handleToolsList(request);
-          break;
-
-        case 'tools/call':
-          await this.handleToolCall(request);
-          break;
-
-        case 'resources/list':
-          await this.handleResourcesList(request);
-          break;
-
-        case 'resources/read':
-          await this.handleResourceRead(request);
-          break;
-
-        case 'prompts/list':
-          await this.handlePromptsList(request);
-          break;
-
-        case 'prompts/get':
-          await this.handlePromptGet(request);
-          break;
-
-        case 'ping':
-          await this.handlePing(request);
-          break;
-
-        default:
-          // Check if this is a notification (no id) or a request (has id)
-          if (request.id === undefined) {
-            // Notification - do not respond (JSON-RPC 2.0 spec)
-            this.options.logger?.debug('Unknown notification', { method: request.method });
-          } else {
-            // Request - send error response
-            this.options.logger?.warn('Unknown method', { method: request.method });
-            await this.sendError(
-              request.id,
-              JSON_RPC_ERROR_CODES.METHOD_NOT_FOUND,
-              `Method not found: ${request.method}`
-            );
-          }
+      // Check for known notification methods
+      if (StdioTransport.NOTIFICATION_METHODS.has(request.method)) {
+        this.options.logger?.debug('Received notification', { method: request.method });
+        return;
       }
+
+      // Look up handler in dispatch table
+      const handler = this.methodHandlers[request.method];
+      if (handler) {
+        await handler(request);
+        return;
+      }
+
+      // Unknown method
+      await this.handleUnknownMethod(request);
     } catch (error) {
       this.options.logger?.error('Request routing failed', error, {
         method: request.method,
@@ -394,6 +368,22 @@ export class StdioTransport {
           { error: String(error) }
         );
       }
+    }
+  }
+
+  /** Handle unknown method - notification vs request */
+  private async handleUnknownMethod(request: JSONRPCRequest): Promise<void> {
+    if (request.id === undefined) {
+      // Notification - do not respond (JSON-RPC 2.0 spec)
+      this.options.logger?.debug('Unknown notification', { method: request.method });
+    } else {
+      // Request - send error response
+      this.options.logger?.warn('Unknown method', { method: request.method });
+      await this.sendError(
+        request.id,
+        JSON_RPC_ERROR_CODES.METHOD_NOT_FOUND,
+        `Method not found: ${request.method}`
+      );
     }
   }
 

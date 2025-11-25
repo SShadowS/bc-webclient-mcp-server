@@ -171,6 +171,81 @@ export class BCProtocolAdapter implements IBCProtocolAdapter {
     }
   }
 
+  /** Emit FormToShow event from LogicalClientEventRaisingHandler. */
+  private emitFormToShow(handler: BCHandler): void {
+    if (handler.parameters?.[0] !== 'FormToShow' || !handler.parameters?.[1]?.ServerId) return;
+    const formData = handler.parameters[1];
+    this.eventEmitter.emit({
+      kind: 'FormToShow',
+      formId: formData.ServerId,
+      caption: formData.Caption,
+      raw: handler,
+    });
+    logger.info(`[BCProtocolAdapter] Emitted FormToShow: ${formData.ServerId}`);
+  }
+
+  /** Emit DialogToShow event from LogicalClientEventRaisingHandler. */
+  private emitDialogToShow(handler: BCHandler): void {
+    if (handler.parameters?.[0] !== 'DialogToShow' || !handler.parameters?.[1]?.ServerId) return;
+    const dialogData = handler.parameters[1];
+    const originatingControl = dialogData.OriginatingControl;
+    this.eventEmitter.emit({
+      kind: 'DialogToShow',
+      dialogId: dialogData.ServerId,
+      caption: dialogData.Caption,
+      designName: dialogData.DesignName,
+      isTaskDialog: dialogData.IsTaskDialog,
+      isModal: dialogData.IsModal,
+      originatingFormId: originatingControl?.formId,
+      originatingControlPath: originatingControl?.controlPath,
+      raw: handler,
+    });
+    logger.info(`[BCProtocolAdapter] Emitted DialogToShow: ${dialogData.ServerId}`);
+  }
+
+  /** Emit DataRefreshChange event from LogicalClientChangeHandler. */
+  private emitDataRefreshChange(handler: BCHandler): void {
+    const changes = handler.parameters?.[1];
+    if (!Array.isArray(changes)) return;
+    const dataRefreshChanges = changes.filter((c: any) => c.t === 'DataRefreshChange');
+    if (dataRefreshChanges.length === 0) return;
+    this.eventEmitter.emit({
+      kind: 'DataRefreshChange',
+      updates: dataRefreshChanges,
+      raw: handler,
+    });
+    logger.info(`[BCProtocolAdapter] Emitted DataRefreshChange: ${dataRefreshChanges.length} updates`);
+  }
+
+  /** Emit CallbackResponse event. */
+  private emitCallbackResponse(handler: BCHandler): void {
+    this.eventEmitter.emit({ kind: 'CallbackResponse', raw: handler });
+    logger.info('[BCProtocolAdapter] Emitted CallbackResponse');
+  }
+
+  /** Emit Error event (ErrorMessage or ErrorDialog). */
+  private emitError(handler: BCHandler): void {
+    const errorType = handler.handlerType === 'DN.ErrorMessageProperties' ? 'ErrorMessage' : 'ErrorDialog';
+    const message = handler.parameters?.[0]?.Message;
+    this.eventEmitter.emit({ kind: 'Error', errorType, message, raw: handler });
+    logger.info(`[BCProtocolAdapter] Emitted Error (${errorType}): ${message || 'no message'}`);
+  }
+
+  /** Emit ValidationMessage event. */
+  private emitValidationMessage(handler: BCHandler): void {
+    const message = handler.parameters?.[0]?.Message;
+    this.eventEmitter.emit({ kind: 'ValidationMessage', message, raw: handler });
+    logger.info(`[BCProtocolAdapter] Emitted ValidationMessage: ${message || 'no message'}`);
+  }
+
+  /** Emit Dialog event (Confirm or YesNo). */
+  private emitDialog(handler: BCHandler): void {
+    const dialogType = handler.handlerType === 'DN.ConfirmDialogProperties' ? 'Confirm' : 'YesNo';
+    const message = handler.parameters?.[0]?.Message;
+    this.eventEmitter.emit({ kind: 'Dialog', dialogType, message, raw: handler });
+    logger.info(`[BCProtocolAdapter] Emitted Dialog (${dialogType}): ${message || 'no message'}`);
+  }
+
   /**
    * Parse handlers and emit typed events.
    *
@@ -181,150 +256,44 @@ export class BCProtocolAdapter implements IBCProtocolAdapter {
    * @internal
    */
   private emitTypedEvents(handlers: BCHandler[]): void {
-    // Extract and emit SessionInfo event (uses utility from handlers.ts)
+    // SessionInfo is extracted from the full array (special case)
     const sessionInfo = extractSessionInfo(handlers);
-    if (sessionInfo && sessionInfo.serverSessionId && sessionInfo.sessionKey && sessionInfo.companyName) {
-      const event: HandlerEvent = {
+    if (sessionInfo?.serverSessionId && sessionInfo?.sessionKey && sessionInfo?.companyName) {
+      this.eventEmitter.emit({
         kind: 'SessionInfo',
         sessionId: sessionInfo.serverSessionId,
         sessionKey: sessionInfo.sessionKey,
         company: sessionInfo.companyName,
         roleCenterFormId: sessionInfo.roleCenterFormId,
-        raw: handlers[0], // Include first handler for context
-      };
-      this.eventEmitter.emit(event);
-      logger.info(
-        `[BCProtocolAdapter] Emitted SessionInfo: ${sessionInfo.companyName}`
-      );
+        raw: handlers[0],
+      });
+      logger.info(`[BCProtocolAdapter] Emitted SessionInfo: ${sessionInfo.companyName}`);
     }
 
-    // Extract and emit FormToShow events
+    // Process each handler once, dispatching to appropriate emitter
     for (const handler of handlers) {
-      if (
-        handler.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-        handler.parameters?.[0] === 'FormToShow' &&
-        handler.parameters?.[1]?.ServerId
-      ) {
-        const formData = handler.parameters[1];
-        const event: HandlerEvent = {
-          kind: 'FormToShow',
-          formId: formData.ServerId,
-          caption: formData.Caption,
-          raw: handler,
-        };
-        this.eventEmitter.emit(event);
-        logger.info(
-          `[BCProtocolAdapter] Emitted FormToShow: ${formData.ServerId}`
-        );
-      }
-    }
-
-    // Extract and emit DataRefreshChange events
-    for (const handler of handlers) {
-      if (
-        handler.handlerType === 'DN.LogicalClientChangeHandler' &&
-        handler.parameters?.[1]
-      ) {
-        const changes = handler.parameters[1];
-        if (Array.isArray(changes)) {
-          // Filter for data refresh changes
-          const dataRefreshChanges = changes.filter(
-            (change: any) => change.t === 'DataRefreshChange'
-          );
-
-          if (dataRefreshChanges.length > 0) {
-            const event: HandlerEvent = {
-              kind: 'DataRefreshChange',
-              updates: dataRefreshChanges,
-              raw: handler,
-            };
-            this.eventEmitter.emit(event);
-            logger.info(
-              `[BCProtocolAdapter] Emitted DataRefreshChange: ${dataRefreshChanges.length} updates`
-            );
-          }
-        }
-      }
-    }
-
-    // Extract and emit CallbackResponse events
-    for (const handler of handlers) {
-      if (handler.handlerType === 'DN.CallbackResponseProperties') {
-        const event: HandlerEvent = {
-          kind: 'CallbackResponse',
-          raw: handler,
-        };
-        this.eventEmitter.emit(event);
-        logger.info('[BCProtocolAdapter] Emitted CallbackResponse');
-      }
-    }
-
-    // Extract and emit Error events
-    for (const handler of handlers) {
-      if (handler.handlerType === 'DN.ErrorMessageProperties') {
-        const event: HandlerEvent = {
-          kind: 'Error',
-          errorType: 'ErrorMessage',
-          message: handler.parameters?.[0]?.Message,
-          raw: handler,
-        };
-        this.eventEmitter.emit(event);
-        logger.info(
-          `[BCProtocolAdapter] Emitted Error (ErrorMessage): ${event.message || 'no message'}`
-        );
-      } else if (handler.handlerType === 'DN.ErrorDialogProperties') {
-        const event: HandlerEvent = {
-          kind: 'Error',
-          errorType: 'ErrorDialog',
-          message: handler.parameters?.[0]?.Message,
-          raw: handler,
-        };
-        this.eventEmitter.emit(event);
-        logger.info(
-          `[BCProtocolAdapter] Emitted Error (ErrorDialog): ${event.message || 'no message'}`
-        );
-      }
-    }
-
-    // Extract and emit ValidationMessage events
-    for (const handler of handlers) {
-      if (handler.handlerType === 'DN.ValidationMessageProperties') {
-        const event: HandlerEvent = {
-          kind: 'ValidationMessage',
-          message: handler.parameters?.[0]?.Message,
-          raw: handler,
-        };
-        this.eventEmitter.emit(event);
-        logger.info(
-          `[BCProtocolAdapter] Emitted ValidationMessage: ${event.message || 'no message'}`
-        );
-      }
-    }
-
-    // Extract and emit Dialog events
-    for (const handler of handlers) {
-      if (handler.handlerType === 'DN.ConfirmDialogProperties') {
-        const event: HandlerEvent = {
-          kind: 'Dialog',
-          dialogType: 'Confirm',
-          message: handler.parameters?.[0]?.Message,
-          raw: handler,
-        };
-        this.eventEmitter.emit(event);
-        logger.info(
-          `[BCProtocolAdapter] Emitted Dialog (Confirm): ${event.message || 'no message'}`
-        );
-      } else if (handler.handlerType === 'DN.YesNoDialogProperties') {
-        const event: HandlerEvent = {
-          kind: 'Dialog',
-          dialogType: 'YesNo',
-          message: handler.parameters?.[0]?.Message,
-          raw: handler,
-        };
-        this.eventEmitter.emit(event);
-        logger.info(
-          `[BCProtocolAdapter] Emitted Dialog (YesNo): ${event.message || 'no message'}`
-        );
+      switch (handler.handlerType) {
+        case 'DN.LogicalClientEventRaisingHandler':
+          this.emitFormToShow(handler);
+          this.emitDialogToShow(handler);
+          break;
+        case 'DN.LogicalClientChangeHandler':
+          this.emitDataRefreshChange(handler);
+          break;
+        case 'DN.CallbackResponseProperties':
+          this.emitCallbackResponse(handler);
+          break;
+        case 'DN.ErrorMessageProperties':
+        case 'DN.ErrorDialogProperties':
+          this.emitError(handler);
+          break;
+        case 'DN.ValidationMessageProperties':
+          this.emitValidationMessage(handler);
+          break;
+        case 'DN.ConfirmDialogProperties':
+        case 'DN.YesNoDialogProperties':
+          this.emitDialog(handler);
+          break;
       }
     }
   }

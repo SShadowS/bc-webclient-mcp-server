@@ -38,13 +38,15 @@ Business Central's web client uses an undocumented WebSocket protocol for all UI
 
 ## ✨ Features
 
-### 🆕 **Version 2 Highlights**
+### **Version 2.5 Highlights**
 
-- **📄 Document Pages** - Full support for Sales Orders, Purchase Orders with header + line items
-- **📚 MCP Resources** - Access BC schema, workflows, and session state
-- **🎯 MCP Prompts** - Guided workflows for common operations
-- **✏️ User-Friendly Fields** - No more internal IDs - clean field names like "Type", "No.", "Description"
-- **🔄 Multi-Page Support** - Card, List, and Document pages all work reliably
+- **Workflow Tracking** - Track multi-step business processes with `start_workflow`, `get_workflow_state`, `end_workflow`
+- **Dialog Handling** - Full `handle_dialog` tool for template selection, confirmations, and prompts
+- **Document Line Items** - Write to subpages/repeaters with `subpage`, `lineBookmark`, `lineNo` parameters
+- **Document Pages** - Full support for Sales Orders, Purchase Orders with header + line items
+- **MCP Resources** - Access BC schema, workflows, and session state
+- **MCP Prompts** - Guided workflows for common operations
+- **Multi-Page Support** - Card, List, and Document pages all work reliably
 
 <table>
 <tr>
@@ -263,33 +265,51 @@ Then in Claude Desktop config, use the local path:
 
 ---
 
-## 🛠️ Available Tools
+## Available Tools
 
-The MCP server provides the following tools for AI interaction:
+The MCP server provides 10 tools for AI interaction:
 
-| Tool | Description | Level | Status |
-|------|-------------|-------|--------|
-| **`search_pages`** | Search for pages using Tell Me (Alt+Q) | Discovery | ✅ Complete |
-| **`get_page_metadata`** | Get page structure, fields, and actions | Discovery | ✅ Complete |
-| **`read_page_data`** | Read data from a page | Read | ✅ Complete |
-| **`filter_list`** | Filter list pages by column values | Read | ✅ Complete |
-| **`find_record`** | Find records by criteria | Read | ✅ Complete |
-| **`write_page_data`** | Write field values with validation (low-level) | Write | ✅ Complete |
-| **`create_record`** | Create new records | Write | ✅ Complete |
-| **`update_record`** | Update records with auto Edit/Save (high-level) | Write | ✅ Complete |
-| **`execute_action`** | Execute page actions (New, Edit, Post, etc.) | Action | ✅ Complete |
+### Core Tools (7)
+
+| Tool | Description | Level |
+|------|-------------|-------|
+| **`search_pages`** | Search for pages using Tell Me (Alt+Q) | Discovery |
+| **`get_page_metadata`** | Get page structure, fields, and actions | Discovery |
+| **`read_page_data`** | Read data from a page (with server-side filtering) | Read |
+| **`write_page_data`** | Write field values with validation, supports subpage/line operations | Write |
+| **`execute_action`** | Execute page actions (New, Edit, Post, etc.) | Action |
+| **`select_and_drill_down`** | Navigate between pages via drill-down | Navigation |
+| **`handle_dialog`** | Handle BC dialogs (template selection, confirmations) | Dialog |
+
+### Workflow Tools (3)
+
+| Tool | Description |
+|------|-------------|
+| **`start_workflow`** | Begin tracking a multi-step business process |
+| **`get_workflow_state`** | Query workflow state, history, and unsaved changes |
+| **`end_workflow`** | Complete workflow with final status |
+
+### Optional/Advanced Tools
+
+| Tool | Description |
+|------|-------------|
+| **`create_record_by_field_name`** | Create records using field names (convenience wrapper) |
 
 ### Tool Architecture
 
-The MCP server provides **two levels of tools** for maximum flexibility:
+The MCP server provides tools at multiple levels:
 
-**🔧 Low-Level Tools** - Precise control, explicit parameters:
-- `write_page_data` - Write fields with immediate validation, controlPath support, stopOnError options
+**Core Tools** - Essential primitives for BC interaction:
+- `write_page_data` - Write fields with immediate validation, subpage/line support
+- `execute_action` - Execute any page action with auto-resolved controlPath
+- `handle_dialog` - Handle dialogs with row selection and button clicks
 
-**🎯 High-Level Tools** - Convenience wrappers that orchestrate multiple operations:
-- `update_record` - Opens page → Executes Edit → Writes fields → Executes Save (all automatic)
+**Workflow Tools** - Track multi-step business processes:
+- `start_workflow` → perform operations with `workflowId` → `end_workflow`
+- Tracks unsaved changes, operation history, and errors
 
-This two-tier design gives LLMs both **precision** (low-level) and **convenience** (high-level) while keeping the API simple and predictable.
+**Convenience Tools** - Higher-level wrappers:
+- `create_record_by_field_name` - Simplified record creation using field names
 
 ### Example Usage
 
@@ -304,26 +324,26 @@ Found 21 customer pages:
 ...
 
 You: "Show me customers where balance is over 10000"
-Claude: [Uses filter_list + read_page_data tools]
+Claude: [Uses read_page_data with filters]
 Found 5 customers with balance > 10000:
 1. Contoso Ltd - Balance: 15,234.50
 2. Fabrikam Inc - Balance: 12,890.00
 ...
 
-You: "Update customer 'Contoso Ltd' to set credit limit to 50000"
-Claude: [Uses update_record tool - handles everything automatically]
+You: "Update customer 10000's credit limit to 50000"
+Claude: [Uses get_page_metadata, execute_action("Edit"), write_page_data, execute_action("Save")]
 Updated customer successfully:
-- Opened Customer Card
+- Opened Customer Card for customer 10000
 - Switched to Edit mode
 - Updated Credit Limit: 50,000.00
 - Saved changes
-✓ Record saved
 
-You: "Set just the phone number field on the current customer"
-Claude: [Uses write_page_data for precise control]
-Updated field successfully:
-- Phone No.: +45 12345678
-✓ Validation passed
+You: "Add a line to Sales Order 101001"
+Claude: [Uses write_page_data with subpage parameter]
+Added line to Sales Order:
+- Item No.: 1000
+- Quantity: 5
+- Line created successfully
 ```
 
 ---
@@ -363,16 +383,17 @@ This MCP server implements the **MCP 2025 user consent requirement** to ensure u
 
 | Tool | Requires Consent | Risk Level | Reason |
 |------|------------------|------------|--------|
-| search_pages | ❌ No | Low | Read-only discovery |
-| get_page_metadata | ❌ No | Low | Read metadata only |
-| read_page_data | ❌ No | Low | Read-only data access |
-| find_record | ❌ No | Low | Search/filter only |
-| filter_list | ❌ No | Low | Read-only filtering |
-| create_record | ✅ Yes | Medium | Creates new data |
-| update_record | ✅ Yes | Medium | Modifies existing data |
-| write_page_data | ✅ Yes | Medium | Direct field writes |
-| handle_dialog | ✅ Yes | Medium | Can bypass safety prompts |
-| execute_action | ✅ Yes | High | Can trigger Post/Delete |
+| search_pages | No | Low | Read-only discovery |
+| get_page_metadata | No | Low | Read metadata only |
+| read_page_data | No | Low | Read-only data access |
+| start_workflow | No | Low | Creates tracking state only |
+| get_workflow_state | No | Low | Read workflow state |
+| end_workflow | No | Low | Marks workflow complete |
+| write_page_data | Yes | Medium | Direct field writes |
+| select_and_drill_down | Yes | Medium | Navigation with selection |
+| handle_dialog | Yes | Medium | Can bypass safety prompts |
+| create_record_by_field_name | Yes | Medium | Creates new data |
+| execute_action | Yes | High | Can trigger Post/Delete |
 
 #### Audit Log Access
 

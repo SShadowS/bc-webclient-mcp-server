@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.0] - 2025-01-25
+
+### Added
+
+- **Workflow lifecycle tools**: New tools for tracking multi-step business processes
+  - `start_workflow` - Begin tracking a workflow with metadata
+  - `get_workflow_state` - Query workflow state, history, and unsaved changes
+  - `end_workflow` - Complete workflow with final status (completed/failed/cancelled)
+  - Workflow integration across tools via optional `workflowId` parameter
+
+- **Handle Dialog Tool**: Full implementation for BC dialog interactions
+  - Template selection dialogs with row filtering (`selection` parameter)
+  - Confirmation dialogs with OK/Cancel actions
+  - Wait modes: `appear` (wait for dialog) or `existing` (use open dialog)
+  - Row selection via bookmark, rowNumber, or rowFilter
+
+- **Subpage/Line operations in `write_page_data`**: Support for document line items
+  - `subpage` parameter for targeting repeaters (e.g., "SalesLines")
+  - `lineBookmark` for precise line targeting (most reliable)
+  - `lineNo` for 1-based line number access
+  - Creates new lines when neither lineBookmark nor lineNo provided
+
+- **MCP Resource**: `bc://workflow/all` for workflow introspection
+  - Lists all active and recent workflows with state
+
+- **Auto-resolve action controlPath**: `execute_action` auto-lookups controlPath from cached metadata when not provided
+
+### Changed
+
+- **Logging alignment**: Migrated remaining `console.error` in `BCHandlerEventEmitter.ts` to use structured `logger.error`
+  - All production code now uses the pino-based logger
+  - Ensures clean stdout for MCP JSON-RPC communication
+
+- **Tool count**: Core tools increased from 6 to 10 (7 core + 3 workflow)
+
 ## [2.4.0] - 2025-01-22
 
 ### Added

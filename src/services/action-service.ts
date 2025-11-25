@@ -40,6 +40,19 @@ export interface DialogAction {
   enabled: boolean;
 }
 
+/** Action name to BC interaction name mapping */
+const ACTION_MAP: Record<string, string> = {
+  new: 'New_Rec',
+  delete: 'DeleteRecord',
+  post: 'Post',
+  save: 'SaveRecord',
+  refresh: 'RefreshForm',
+  next: 'NextRecord',
+  previous: 'PreviousRecord',
+  first: 'FirstRecord',
+  last: 'LastRecord',
+};
+
 /**
  * Service for executing Business Central actions
  */
@@ -61,7 +74,33 @@ export class ActionService {
     const logger = createConnectionLogger('ActionService', 'executeAction');
     logger.info({ pageContextId, actionName, parameters }, 'Executing action');
 
-    // Extract sessionId from pageContextId
+    // Step 1: Validate context and get connection
+    const connectionResult = this.validateAndGetConnection(pageContextId);
+    if (!isOk(connectionResult)) return connectionResult;
+    const connection = connectionResult.value;
+
+    // Step 2: Map action and build parameters
+    const interactionName = this.mapActionToInteraction(actionName);
+    const namedParameters = this.buildNamedParameters(parameters);
+
+    // Step 3: Execute the action
+    const result = await connection.invoke({
+      interactionName,
+      namedParameters,
+      controlPath: 'server:c[0]',
+      callbackId: '0',
+    });
+
+    // Step 4: Handle result
+    if (!isOk(result)) {
+      return this.buildActionErrorResult(result.error, actionName, pageContextId, logger);
+    }
+
+    return this.buildActionSuccessResult(result.value, actionName, pageContextId, logger);
+  }
+
+  /** Validate pageContextId and get connection */
+  private validateAndGetConnection(pageContextId: string): Result<IBCConnection, BCError> {
     const contextParts = pageContextId.split(':');
     if (contextParts.length < 3) {
       return err(
@@ -69,7 +108,7 @@ export class ActionService {
       );
     }
 
-    const [sessionId, , pageId] = contextParts;
+    const [sessionId] = contextParts;
     const manager = ConnectionManager.getInstance();
     const connection = manager.getSession(sessionId);
 
@@ -82,7 +121,6 @@ export class ActionService {
       );
     }
 
-    // Check if page context is still valid
     const pageContext = (connection as any).pageContexts?.get(pageContextId);
     if (!pageContext) {
       return err(
@@ -93,54 +131,50 @@ export class ActionService {
       );
     }
 
-    // Map common action names to BC interaction names
-    const actionMap: Record<string, string> = {
-      new: 'New_Rec',
-      delete: 'DeleteRecord',
-      post: 'Post',
-      save: 'SaveRecord',
-      refresh: 'RefreshForm',
-      next: 'NextRecord',
-      previous: 'PreviousRecord',
-      first: 'FirstRecord',
-      last: 'LastRecord',
-    };
+    return ok(connection);
+  }
 
-    const interactionName = actionMap[actionName.toLowerCase()] || actionName;
+  /** Map action name to BC interaction name */
+  private mapActionToInteraction(actionName: string): string {
+    return ACTION_MAP[actionName.toLowerCase()] || actionName;
+  }
 
-    // Build named parameters
-    const namedParameters: Record<string, unknown> = {};
-    if (parameters) {
-      Object.entries(parameters).forEach(([key, value]) => {
-        namedParameters[key] = String(value);
-      });
+  /** Build named parameters from input */
+  private buildNamedParameters(parameters?: Record<string, unknown>): Record<string, unknown> {
+    if (!parameters) return {};
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(parameters)) {
+      result[key] = String(value);
     }
+    return result;
+  }
 
-    // Execute the action
-    const result = await connection.invoke({
-      interactionName,
-      namedParameters,
-      controlPath: 'server:c[0]',
-      callbackId: '0',
+  /** Build error result for failed action */
+  private buildActionErrorResult(
+    error: BCError,
+    actionName: string,
+    pageContextId: string,
+    logger: ReturnType<typeof createConnectionLogger>
+  ): Result<ActionResult, BCError> {
+    logger.warn({ error }, 'Action execution failed');
+    const validationErrors = this.extractValidationErrors(error);
+
+    return ok({
+      success: false,
+      actionName,
+      pageContextId,
+      message: error.message,
+      validationErrors,
     });
+  }
 
-    if (!isOk(result)) {
-      logger.warn({ error: result.error }, 'Action execution failed');
-
-      // Try to extract validation errors from the response
-      const validationErrors = this.extractValidationErrors(result.error);
-
-      return ok({
-        success: false,
-        actionName,
-        pageContextId,
-        message: result.error.message,
-        validationErrors,
-      });
-    }
-
-    // Check if action triggered a dialog or form
-    const handlers = result.value;
+  /** Build success result, checking for triggered dialogs */
+  private buildActionSuccessResult(
+    handlers: readonly unknown[],
+    actionName: string,
+    pageContextId: string,
+    logger: ReturnType<typeof createConnectionLogger>
+  ): Result<ActionResult, BCError> {
     const hasDialog = this.checkForDialog(handlers);
 
     if (hasDialog) {

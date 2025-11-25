@@ -216,20 +216,24 @@ export class BCRawWebSocketClient {
   async openSession(connectionRequest: ConnectionRequest): Promise<any> {
     logger.info('Opening BC session...');
 
-    // Build FULL OpenSession request matching browser format
-    // BC requires all these fields - a simplified request will not get a response!
-    const now = new Date();
-    const dstStart = new Date(now.getFullYear(), 2, 31); // Last Sunday of March
-    dstStart.setDate(dstStart.getDate() - dstStart.getDay());
-    const dstEnd = new Date(now.getFullYear(), 9, 31); // Last Sunday of October
-    dstEnd.setDate(dstEnd.getDate() - dstEnd.getDay());
-
     const sessionId = uuidv4();
-
-    // Set spaInstanceId for the session (used in sequenceNo and navigationContext)
     this.spaInstanceId = sessionId.substring(0, 8);
 
-    const fullRequest = {
+    const fullRequest = this.buildOpenSessionRequest(sessionId);
+    const result = await this.sendRpcRequest('OpenSession', [fullRequest]);
+    const sessionHandlers = this.decompressIfNeeded(result);
+
+    this.extractSessionInfo(sessionHandlers);
+    this.extractRoleCenterFormId(sessionHandlers);
+
+    logger.info('BC session opened\n');
+  }
+
+  /** Build the full OpenSession request matching browser format */
+  private buildOpenSessionRequest(sessionId: string): object {
+    const { dstStart, dstEnd } = this.calculateDstPeriod();
+
+    return {
       openFormIds: [],
       sessionId: '',
       sequenceNo: null,
@@ -284,13 +288,20 @@ export class BCRawWebSocketClient {
       },
       disableResponseSequencing: true
     };
+  }
 
-    const result = await this.sendRpcRequest('OpenSession', [fullRequest]);
+  /** Calculate DST period for timezone information */
+  private calculateDstPeriod(): { dstStart: Date; dstEnd: Date } {
+    const now = new Date();
+    const dstStart = new Date(now.getFullYear(), 2, 31); // Last Sunday of March
+    dstStart.setDate(dstStart.getDate() - dstStart.getDay());
+    const dstEnd = new Date(now.getFullYear(), 9, 31); // Last Sunday of October
+    dstEnd.setDate(dstEnd.getDate() - dstEnd.getDay());
+    return { dstStart, dstEnd };
+  }
 
-    // Extract session info from result
-    const sessionHandlers = this.decompressIfNeeded(result);
-
-    // Search for session information in handler parameters
+  /** Extract session info (ServerSessionId, SessionKey, CompanyName) from handlers */
+  private extractSessionInfo(sessionHandlers: any[]): void {
     const searchParams = (params: any): void => {
       if (Array.isArray(params)) {
         for (const item of params) {
@@ -319,8 +330,10 @@ export class BCRawWebSocketClient {
         searchParams(handler.parameters);
       }
     }
+  }
 
-    // Extract role center form ID from FormToShow
+  /** Extract role center form ID from FormToShow handler */
+  private extractRoleCenterFormId(sessionHandlers: any[]): void {
     const formHandler = sessionHandlers.find(
       (h: any) =>
         h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
@@ -333,10 +346,8 @@ export class BCRawWebSocketClient {
       logger.info(`  Role center form: ${this.roleCenterFormId}`);
 
       // Track role center as open form (BC requires this for subsequent Invoke calls)
-      this.openFormIds = [this.roleCenterFormId!]; // Non-null assertion safe here (checked in if condition)
+      this.openFormIds = [this.roleCenterFormId!];
     }
-
-    logger.info('BC session opened\n');
   }
 
   /**

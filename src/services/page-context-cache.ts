@@ -34,6 +34,9 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { createToolLogger } from '../core/logger.js';
+import type { RepeaterColumnDescription } from '../types/mcp-types.js';
+import { mergeColumns } from '../protocol/rcc-extractor.js';
+import type { PageState } from '../state/page-state.js';
 
 const logger = createToolLogger('PageContextCache');
 
@@ -45,6 +48,8 @@ export interface CachedPageContext {
   pageType: 'List' | 'Card' | 'Document' | 'Worksheet' | 'Report';
   logicalForm: any;
   handlers: any[];
+  // PageState (Phase 1: Dual-state approach)
+  pageState?: PageState;
   // Metadata
   expiresAt: number;
   savedAt: number;
@@ -143,7 +148,8 @@ export class PageContextCache {
     const filePath = this.getFilePath(pageContextId);
 
     try {
-      await fs.writeFile(filePath, JSON.stringify(cachedContext, null, 2), 'utf8');
+      const jsonStr = JSON.stringify(cachedContext, this.jsonReplacer, 2);
+      await fs.writeFile(filePath, jsonStr, 'utf8');
       logger.info(`Saved pageContext: ${pageContextId} (expires in ${this.ttlMs / 1000}s)`);
     } catch (error) {
       logger.error(`Failed to save pageContext ${pageContextId}: ${error}`);
@@ -165,7 +171,7 @@ export class PageContextCache {
 
     try {
       const content = await fs.readFile(filePath, 'utf8');
-      const context: CachedPageContext = JSON.parse(content);
+      const context: CachedPageContext = JSON.parse(content, this.jsonReviver);
 
       // Check if expired
       if (Date.now() > context.expiresAt) {
@@ -228,7 +234,7 @@ export class PageContextCache {
 
         try {
           const content = await fs.readFile(filePath, 'utf8');
-          const context: CachedPageContext = JSON.parse(content);
+          const context: CachedPageContext = JSON.parse(content, this.jsonReviver);
 
           if (now > context.expiresAt) {
             await fs.unlink(filePath);
@@ -278,7 +284,7 @@ export class PageContextCache {
 
         try {
           const content = await fs.readFile(filePath, 'utf8');
-          const context: CachedPageContext = JSON.parse(content);
+          const context: CachedPageContext = JSON.parse(content, this.jsonReviver);
 
           const pageContextId = file.replace('.json', '');
           const age = Math.round((now - context.savedAt) / 1000);
@@ -322,9 +328,179 @@ export class PageContextCache {
     }
   }
 
+  /**
+   * Enriches repeater columns in a cached page context.
+   *
+   * This method progressively enriches column metadata as BC sends 'rcc' messages
+   * during normal operations (read_page_data, execute_action, etc.).
+   *
+   * @param pageContextId - Unique identifier for the page context
+   * @param formId - FormId of the repeater to enrich
+   * @param columns - Column metadata discovered from 'rcc' messages
+   * @returns true if enrichment successful, false if context not found
+   */
+  public async enrichRepeaterColumns(
+    pageContextId: string,
+    formId: string,
+    columns: RepeaterColumnDescription[]
+  ): Promise<boolean> {
+    await this.ensureInitialized();
+
+    // Load existing context
+    const context = await this.load(pageContextId);
+    if (!context) {
+      logger.warn(`Cannot enrich: pageContext not found: ${pageContextId}`);
+      return false;
+    }
+
+    // Find repeater in LogicalForm by formId
+    const repeater = this.findRepeaterByFormId(context.logicalForm, formId);
+    if (!repeater) {
+      logger.warn(`Cannot enrich: repeater not found for formId ${formId} in ${pageContextId}`);
+      return false;
+    }
+
+    // Merge new columns with existing
+    const existingColumns = repeater.Columns || [];
+    const mergedColumns = mergeColumns(existingColumns, columns);
+
+    // Update repeater
+    repeater.Columns = mergedColumns;
+
+    // Save enriched context
+    await this.save(pageContextId, context);
+
+    logger.info(`Enriched repeater columns in ${pageContextId}: formId=${formId}, ${existingColumns.length} -> ${mergedColumns.length} columns`);
+
+    return true;
+  }
+
+  /**
+   * Find a repeater control by formId in LogicalForm tree
+   */
+  private findRepeaterByFormId(obj: any, targetFormId: string): any {
+    if (!obj || typeof obj !== 'object') {
+      return null;
+    }
+
+    // Check if this object is a repeater with matching FormId
+    if ((obj.t === 'rc' || obj.t === 'BindablePagePartControl') && obj.FormId === targetFormId) {
+      return obj;
+    }
+
+    // Recurse into arrays
+    if (Array.isArray(obj)) {
+      for (const item of obj) {
+        const found = this.findRepeaterByFormId(item, targetFormId);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    // Recurse into object properties
+    for (const key in obj) {
+      const found = this.findRepeaterByFormId(obj[key], targetFormId);
+      if (found) return found;
+    }
+
+    return null;
+  }
+
+  // ============================================================================
+  // PageState Methods (Phase 1: Dual-State Approach)
+  // ============================================================================
+
+  /**
+   * Get PageState for a cached page context
+   *
+   * Phase 1: Returns undefined if not yet initialized
+   * Tools should check if PageState exists before using it
+   *
+   * @param pageContextId - Page context identifier
+   * @returns PageState or undefined
+   */
+  public async getPageState(pageContextId: string): Promise<PageState | undefined> {
+    await this.ensureInitialized();
+
+    const context = await this.load(pageContextId);
+    if (!context) {
+      logger.debug(`getPageState: Context not found for "${pageContextId}"`);
+      return undefined;
+    }
+
+    return context.pageState;
+  }
+
+  /**
+   * Set PageState for a cached page context
+   *
+   * Phase 1: Updates existing context with PageState
+   * Context must already exist (created by save())
+   *
+   * @param pageContextId - Page context identifier
+   * @param pageState - PageState to save
+   */
+  public async setPageState(pageContextId: string, pageState: PageState): Promise<void> {
+    await this.ensureInitialized();
+
+    const context = await this.load(pageContextId);
+    if (!context) {
+      logger.warn(`setPageState: Context not found for "${pageContextId}", cannot set PageState`);
+      return;
+    }
+
+    // Update context with PageState
+    context.pageState = pageState;
+    context.savedAt = Date.now();
+
+    // CRITICAL FIX: Save with jsonReplacer to preserve PageState Maps
+    // The jsonReplacer only affects Maps (PageState), not LogicalForm or handlers
+    const filePath = this.getFilePath(pageContextId);
+    const jsonStr = JSON.stringify(context, this.jsonReplacer, 2);
+    await fs.writeFile(filePath, jsonStr, 'utf8');
+
+    logger.debug(`PageState saved for "${pageContextId}"`);
+  }
+
+  /**
+   * Check if PageState exists for a page context
+   *
+   * @param pageContextId - Page context identifier
+   * @returns true if PageState exists
+   */
+  public async hasPageState(pageContextId: string): Promise<boolean> {
+    const pageState = await this.getPageState(pageContextId);
+    return pageState !== undefined;
+  }
+
   // ============================================================================
   // Private Helpers
   // ============================================================================
+
+  /**
+   * JSON replacer for serializing PageState Maps
+   * Converts Maps to objects for JSON storage
+   */
+  private jsonReplacer = (key: string, value: any): any => {
+    if (value instanceof Map) {
+      return {
+        _type: 'Map',
+        _entries: Array.from(value.entries()),
+      };
+    }
+    return value;
+  };
+
+  /**
+   * JSON reviver for deserializing PageState Maps
+   * Converts stored objects back to Maps
+   */
+  private jsonReviver = (key: string, value: any): any => {
+    if (value && value._type === 'Map') {
+      return new Map(value._entries);
+    }
+    return value;
+  };
 
   private getFilePath(pageContextId: string): string {
     // Sanitize pageContextId to prevent directory traversal and invalid filename characters

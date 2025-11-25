@@ -14,6 +14,7 @@ import { defaultTimeouts } from '../../core/timeouts.js';
 import type { IBCHandlerEventEmitter, HandlerEvent } from '../interfaces.js';
 import { debugHandlers } from '../../services/debug-logger.js';
 import { config } from '../../core/config.js';
+import { logger } from '../../core/logger.js';
 
 /**
  * Event emitter for BC handler arrays.
@@ -252,7 +253,7 @@ export class BCHandlerEventEmitter implements IBCHandlerEventEmitter {
         listener(event);
       } catch (error) {
         // Log but don't throw - one listener error shouldn't break others
-        console.error('[BCHandlerEventEmitter] Listener error:', error);
+        logger.error({ err: error }, '[BCHandlerEventEmitter] Listener error');
       }
     });
   }

@@ -158,106 +158,112 @@ export class BCCrudService {
     return this.withSingleFlight(async () => {
       logger.info(`[BCCrudService] Loading form metadata for ${formId}...`);
 
-      // Collect async handlers in this array
-      const asyncHandlers: any[] = [];
+      // Step 1: Invoke LoadForm and collect handlers
+      const { immediateHandlers, asyncHandlers } = await this.invokeLoadFormWithListener(formId, opts.timeoutMs);
 
-      // Register listener BEFORE sending LoadForm to catch async handlers
-      const unsubscribe = this.client.onHandlers((handlers) => {
-        asyncHandlers.push(...handlers);
-      });
+      // Step 2: Process FormToShow handler if present
+      this.processFormShowHandler(formId, openFormHandlers || immediateHandlers);
 
-      try {
-        // Send LoadForm interaction
-        // BC expects namedParameters as a JSON string with these properties
-        const immediateHandlers = await this.client.invoke({
-          interactionName: 'LoadForm',
-          namedParameters: {
-            delayed: true,
-            openForm: true,
-            loadData: true
-          },
-          formId,
-          timeoutMs: opts.timeoutMs
-        });
+      // Step 3: Apply all handler changes to FormState
+      this.applyHandlerChanges(formId, [...immediateHandlers, ...asyncHandlers]);
 
-        // Check if CompletedInteractions is in immediate response
-        const hasCompleted = immediateHandlers.find(
-          (h: any) => h.handlerType === 'DN.CallbackResponseProperties'
-        );
-
-        if (!hasCompleted) {
-          // Wait for CompletedInteractions if not in immediate response
-          await this.client.waitForHandlers(
-            (handlers) => {
-              const callbackHandler = handlers.find(
-                h => h.handlerType === 'DN.CallbackResponseProperties'
-              );
-              return { matched: !!callbackHandler, data: handlers };
-            },
-            { timeoutMs: opts.timeoutMs }
-          );
-        }
-
-        // LoadForm sends metadata asynchronously via LogicalClientChange handlers
-        // Wait for them to arrive (they're being collected by our listener)
-        await new Promise(resolve => setTimeout(resolve, 300));
-
-        // Unregister listener
-        unsubscribe();
-
-        // Check if we have FormToShow data (from OpenForm response)
-        // FormToShow contains the initial control tree structure
-        const handlersToCheck = openFormHandlers || immediateHandlers;
-        const formShowHandler = handlersToCheck.find(
-          (h: any) => h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-               h.parameters?.[0] === 'FormToShow' &&
-               h.parameters?.[1]?.ServerId === formId
-        );
-
-        if (formShowHandler) {
-          // Parse initial form structure from FormToShow
-          const formData = formShowHandler.parameters?.[1];
-          logger.info(`[BCCrudService] Found FormToShow data with ${formData?.Children?.length || 0} top-level controls`);
-
-          // Initialize FormState from FormToShow - this builds the control tree
-          this.formStateService.initFromFormToShow(formId, formData);
-          logger.info(`[BCCrudService] FormState initialized from FormToShow`);
-        }
-
-        // Apply all immediate AND async changes to FormState
-        const allHandlers = [...immediateHandlers, ...asyncHandlers];
-        for (const handler of allHandlers) {
-          if (handler.handlerType === 'DN.LogicalClientChangeHandler') {
-            const handlerFormId = handler.parameters?.[0];
-            if (handlerFormId === formId) {
-              const changes = handler.parameters?.[1];
-              this.formStateService.applyChanges(formId, changes);
-            }
-          }
-        }
-      } finally {
-        // Ensure listener is unregistered even if error occurs
-        unsubscribe();
-      }
-
-      // Build indices
+      // Step 4: Build indices and validate readiness
       if (opts.waitForReady) {
-        this.formStateService.buildIndices(formId);
-        const state = this.formStateService.getFormState(formId);
-
-        if (!state || !state.ready) {
-          if (opts.retry) {
-            logger.warn(`[BCCrudService] FormState not ready after first LoadForm, retrying...`);
-            // Retry once with longer timeout
-            return this.loadForm(formId, { ...options, retry: false, timeoutMs: opts.timeoutMs * 2 });
-          } else {
-            throw new Error(`FormState for ${formId} is incomplete after LoadForm`);
-          }
-        }
-
-        logger.info(`[BCCrudService] Form ${formId} loaded and indexed with ${state.pathIndex.size} controls`);
+        await this.finalizeFormState(formId, options, opts);
       }
     });
+  }
+
+  /** Invoke LoadForm and collect both immediate and async handlers */
+  private async invokeLoadFormWithListener(formId: string, timeoutMs: number): Promise<{
+    immediateHandlers: any[];
+    asyncHandlers: any[];
+  }> {
+    const asyncHandlers: any[] = [];
+    const unsubscribe = this.client.onHandlers((handlers) => {
+      asyncHandlers.push(...handlers);
+    });
+
+    try {
+      const immediateHandlers = await this.client.invoke({
+        interactionName: 'LoadForm',
+        namedParameters: { delayed: true, openForm: true, loadData: true },
+        formId,
+        timeoutMs
+      });
+
+      // Wait for CompletedInteractions if not in immediate response
+      const hasCompleted = immediateHandlers.find(
+        (h: any) => h.handlerType === 'DN.CallbackResponseProperties'
+      );
+
+      if (!hasCompleted) {
+        await this.client.waitForHandlers(
+          (handlers) => {
+            const callbackHandler = handlers.find(h => h.handlerType === 'DN.CallbackResponseProperties');
+            return { matched: !!callbackHandler, data: handlers };
+          },
+          { timeoutMs }
+        );
+      }
+
+      // Wait for async handlers to arrive
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      return { immediateHandlers, asyncHandlers };
+    } finally {
+      unsubscribe();
+    }
+  }
+
+  /** Process FormToShow handler to initialize FormState */
+  private processFormShowHandler(formId: string, handlers: any[]): void {
+    const formShowHandler = handlers.find(
+      (h: any) => h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+           h.parameters?.[0] === 'FormToShow' &&
+           h.parameters?.[1]?.ServerId === formId
+    );
+
+    if (formShowHandler) {
+      const formData = formShowHandler.parameters?.[1];
+      logger.info(`[BCCrudService] Found FormToShow data with ${formData?.Children?.length || 0} top-level controls`);
+      this.formStateService.initFromFormToShow(formId, formData);
+      logger.info(`[BCCrudService] FormState initialized from FormToShow`);
+    }
+  }
+
+  /** Apply LogicalClientChangeHandler changes to FormState */
+  private applyHandlerChanges(formId: string, handlers: any[]): void {
+    for (const handler of handlers) {
+      if (handler.handlerType === 'DN.LogicalClientChangeHandler') {
+        const handlerFormId = handler.parameters?.[0];
+        if (handlerFormId === formId) {
+          const changes = handler.parameters?.[1];
+          this.formStateService.applyChanges(formId, changes);
+        }
+      }
+    }
+  }
+
+  /** Build indices and validate form readiness, retrying if needed */
+  private async finalizeFormState(
+    formId: string,
+    originalOptions: LoadFormOptions | undefined,
+    opts: Required<LoadFormOptions>
+  ): Promise<void> {
+    this.formStateService.buildIndices(formId);
+    const state = this.formStateService.getFormState(formId);
+
+    if (!state || !state.ready) {
+      if (opts.retry) {
+        logger.warn(`[BCCrudService] FormState not ready after first LoadForm, retrying...`);
+        return this.loadForm(formId, { ...originalOptions, retry: false, timeoutMs: opts.timeoutMs * 2 });
+      } else {
+        throw new Error(`FormState for ${formId} is incomplete after LoadForm`);
+      }
+    }
+
+    logger.info(`[BCCrudService] Form ${formId} loaded and indexed with ${state.pathIndex.size} controls`);
   }
 
   /**

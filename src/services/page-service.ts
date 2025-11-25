@@ -83,6 +83,84 @@ export class PageService {
     this.handlerParser = new HandlerParser();
   }
 
+  /** Close all open forms on a connection */
+  private async closeExistingForms(connection: IBCConnection, logger: ReturnType<typeof createConnectionLogger>): Promise<void> {
+    const allOpenForms = connection.getAllOpenFormIds();
+    if (allOpenForms.length === 0) return;
+
+    logger.debug({ count: allOpenForms.length }, 'Closing existing forms');
+    for (const formId of allOpenForms) {
+      try {
+        await connection.invoke({
+          interactionName: 'CloseForm',
+          namedParameters: { FormId: formId },
+          controlPath: 'server:',
+          callbackId: '0',
+        });
+      } catch (error) {
+        logger.warn({ formId, error }, 'Failed to close form');
+      }
+    }
+  }
+
+  /** Build query string for OpenForm */
+  private buildOpenFormQuery(connection: IBCConnection, pageIdStr: string): string {
+    const company = connection.getCompanyName() || 'CRONUS International Ltd.';
+    const tenant = connection.getTenantId() || 'default';
+    return `tenant=${encodeURIComponent(tenant)}&company=${encodeURIComponent(company)}&page=${pageIdStr}&runinframe=1&dc=${Date.now()}&startTraceId=${newId()}&bookmark=`;
+  }
+
+  /** Load child forms and accumulate handlers */
+  private async loadChildFormHandlers(
+    connection: IBCConnection,
+    dataToProcess: unknown,
+    pageIdStr: string,
+    logger: ReturnType<typeof createConnectionLogger>
+  ): Promise<Handler[]> {
+    const additionalHandlers: Handler[] = [];
+    try {
+      const { shellFormId, childFormIds } = extractServerIds(dataToProcess as any[]);
+      const formsToLoad = filterFormsToLoad(childFormIds);
+
+      if (shellFormId) {
+        connection.trackOpenForm(pageIdStr, shellFormId);
+      }
+
+      if (formsToLoad.length > 0) {
+        const childHandlersResult = await connection.loadChildForms(formsToLoad);
+        if (isOk(childHandlersResult)) {
+          additionalHandlers.push(...(Array.from(childHandlersResult.value) as Handler[]));
+        }
+      }
+    } catch (error) {
+      logger.warn({ error }, 'Failed to extract ServerIds, continuing with shell handlers');
+    }
+    return additionalHandlers;
+  }
+
+  /** Store page context for later use */
+  private storePageContext(connection: IBCConnection, pageContextId: string, sessionId: string, pageId: string): void {
+    if (!(connection as any).pageContexts) {
+      (connection as any).pageContexts = new Map();
+    }
+    (connection as any).pageContexts.set(pageContextId, {
+      sessionId,
+      pageId,
+      formIds: connection.getAllOpenFormIds(),
+      openedAt: Date.now(),
+    });
+  }
+
+  /** Determine page type from caption */
+  private determinePageType(caption: string | undefined): PageMetadata['pageType'] {
+    const captionLower = caption?.toLowerCase() || '';
+    if (captionLower.includes('list')) return 'List';
+    if (captionLower.includes('document')) return 'Document';
+    if (captionLower.includes('worksheet')) return 'Worksheet';
+    if (captionLower.includes('report')) return 'Report';
+    return 'Card';
+  }
+
   /**
    * Get metadata for a Business Central page
    */
@@ -97,56 +175,25 @@ export class PageService {
   ): Promise<Result<PageMetadata, BCError>> {
     const pageIdStr = String(pageId);
     const logger = createConnectionLogger('PageService', 'getMetadata');
-
     logger.info({ pageId: pageIdStr }, 'Retrieving page metadata');
 
     // Get or create connection
-    const manager = ConnectionManager.getInstance();
-    let connection: IBCConnection;
-    let sessionId: string;
-
-    if (bcConfig) {
-      const sessionResult = await manager.getOrCreateSession(bcConfig);
-      if (!isOk(sessionResult)) {
-        return err(sessionResult.error);
-      }
-      connection = sessionResult.value.connection;
-      sessionId = sessionResult.value.sessionId;
-    } else {
-      return err(
-        new ProtocolError('No BC configuration provided', { pageId: pageIdStr })
-      );
+    if (!bcConfig) {
+      return err(new ProtocolError('No BC configuration provided', { pageId: pageIdStr }));
     }
 
-    // Close existing forms to ensure fresh page load
-    const allOpenForms = connection.getAllOpenFormIds();
-    if (allOpenForms.length > 0) {
-      logger.debug({ count: allOpenForms.length }, 'Closing existing forms');
-      for (const formId of allOpenForms) {
-        try {
-          await connection.invoke({
-            interactionName: 'CloseForm',
-            namedParameters: { FormId: formId },
-            controlPath: 'server:',
-            callbackId: '0',
-          });
-        } catch (error) {
-          logger.warn({ formId, error }, 'Failed to close form');
-        }
-      }
+    const sessionResult = await ConnectionManager.getInstance().getOrCreateSession(bcConfig);
+    if (!isOk(sessionResult)) {
+      return err(sessionResult.error);
     }
+    const { connection, sessionId } = sessionResult.value;
 
-    // Open the page
-    const company = connection.getCompanyName() || 'CRONUS International Ltd.';
-    const tenant = connection.getTenantId() || 'default';
-    const startTraceId = newId();
-    const dc = Date.now();
-
-    const queryString = `tenant=${encodeURIComponent(tenant)}&company=${encodeURIComponent(company)}&page=${pageIdStr}&runinframe=1&dc=${dc}&startTraceId=${startTraceId}&bookmark=`;
+    // Close existing forms and open the page
+    await this.closeExistingForms(connection, logger);
 
     const shellResult = await connection.invoke({
       interactionName: 'OpenForm',
-      namedParameters: { query: queryString },
+      namedParameters: { query: this.buildOpenFormQuery(connection, pageIdStr) },
       controlPath: 'server:c[0]',
       callbackId: '0',
     });
@@ -158,25 +205,8 @@ export class PageService {
     // Process response and load child forms
     let allHandlers = Array.from(shellResult.value) as Handler[];
     const decompressed = decompressResponse(shellResult.value);
-    const dataToProcess = decompressed || shellResult.value;
-
-    try {
-      const { shellFormId, childFormIds } = extractServerIds(dataToProcess as any[]);
-      const formsToLoad = filterFormsToLoad(childFormIds);
-
-      if (shellFormId) {
-        connection.trackOpenForm(pageIdStr, shellFormId);
-      }
-
-      if (formsToLoad.length > 0) {
-        const childHandlersResult = await connection.loadChildForms(formsToLoad);
-        if (isOk(childHandlersResult)) {
-          allHandlers.push(...(Array.from(childHandlersResult.value) as Handler[]));
-        }
-      }
-    } catch (error) {
-      logger.warn({ error }, 'Failed to extract ServerIds, continuing with shell handlers');
-    }
+    const childHandlers = await this.loadChildFormHandlers(connection, decompressed || shellResult.value, pageIdStr, logger);
+    allHandlers.push(...childHandlers);
 
     // Parse metadata
     const metadataResult = this.metadataParser.parse(allHandlers);
@@ -186,32 +216,14 @@ export class PageService {
 
     const metadata = metadataResult.value;
     const pageContextId = `${sessionId}:page:${metadata.pageId}:${Date.now()}`;
-
-    // Store page context for later use
-    if (!(connection as any).pageContexts) {
-      (connection as any).pageContexts = new Map();
-    }
-    (connection as any).pageContexts.set(pageContextId, {
-      sessionId,
-      pageId: metadata.pageId,
-      formIds: connection.getAllOpenFormIds(),
-      openedAt: Date.now(),
-    });
-
-    // Determine page type
-    let pageType: PageMetadata['pageType'] = 'Card';
-    const captionLower = metadata.caption?.toLowerCase() || '';
-    if (captionLower.includes('list')) pageType = 'List';
-    else if (captionLower.includes('document')) pageType = 'Document';
-    else if (captionLower.includes('worksheet')) pageType = 'Worksheet';
-    else if (captionLower.includes('report')) pageType = 'Report';
+    this.storePageContext(connection, pageContextId, sessionId, metadata.pageId);
 
     return ok({
       pageId: metadata.pageId,
       pageContextId,
       caption: metadata.caption,
       description: this.generateDescription(metadata),
-      pageType,
+      pageType: this.determinePageType(metadata.caption),
       fields: metadata.fields.map(field => ({
         name: field.name ?? field.caption ?? 'Unnamed',
         caption: field.caption ?? field.name ?? 'No caption',
@@ -243,7 +255,39 @@ export class PageService {
     const logger = createConnectionLogger('PageService', 'readData');
     logger.info({ pageContextId, filters, options }, 'Reading page data');
 
-    // Extract sessionId and pageId from pageContextId
+    // Step 1: Validate and get connection
+    const contextResult = this.validatePageContext(pageContextId);
+    if (!isOk(contextResult)) return contextResult;
+    const { sessionId, pageId, connection } = contextResult.value;
+
+    // Step 2: Refresh page and get handlers
+    const handlers = await this.refreshPageData(connection);
+
+    // Step 3: Extract records from handlers
+    const extractResult = this.extractPageRecords(handlers, pageId);
+    if (!isOk(extractResult)) return extractResult;
+    const { records, caption, isListPage } = extractResult.value;
+
+    // Step 4: Apply filters and pagination
+    const filteredRecords = this.applyFiltersAndPagination(records, filters, options);
+
+    return ok({
+      pageId: String(pageId),
+      pageContextId,
+      sessionId,
+      caption,
+      pageType: isListPage ? 'List' : 'Card',
+      records: filteredRecords,
+      totalCount: filteredRecords.length,
+    });
+  }
+
+  /** Validate pageContextId and get connection */
+  private validatePageContext(pageContextId: string): Result<{
+    sessionId: string;
+    pageId: string;
+    connection: IBCConnection;
+  }, BCError> {
     const contextParts = pageContextId.split(':');
     if (contextParts.length < 3) {
       return err(
@@ -264,7 +308,6 @@ export class PageService {
       );
     }
 
-    // Check if page context is still valid
     const pageContext = (connection as any).pageContexts?.get(pageContextId);
     if (!pageContext) {
       return err(
@@ -275,7 +318,11 @@ export class PageService {
       );
     }
 
-    // Refresh the page to get current data
+    return ok({ sessionId, pageId, connection });
+  }
+
+  /** Refresh page and get current handlers */
+  private async refreshPageData(connection: IBCConnection): Promise<readonly unknown[]> {
     const refreshResult = await connection.invoke({
       interactionName: 'RefreshForm',
       namedParameters: {},
@@ -283,21 +330,26 @@ export class PageService {
       callbackId: '0',
     });
 
-    let handlers: readonly unknown[];
     if (isOk(refreshResult)) {
-      handlers = refreshResult.value;
-    } else {
-      // Fall back to getting current state
-      const stateResult = await connection.invoke({
-        interactionName: 'GetState',
-        namedParameters: {},
-        controlPath: 'server:c[0]',
-        callbackId: '0',
-      });
-      handlers = isOk(stateResult) ? stateResult.value : [];
+      return refreshResult.value;
     }
 
-    // Extract LogicalForm
+    // Fall back to getting current state
+    const stateResult = await connection.invoke({
+      interactionName: 'GetState',
+      namedParameters: {},
+      controlPath: 'server:c[0]',
+      callbackId: '0',
+    });
+    return isOk(stateResult) ? stateResult.value : [];
+  }
+
+  /** Extract records from handlers based on page type */
+  private extractPageRecords(handlers: readonly unknown[], pageId: string): Result<{
+    records: Array<{ fields: Record<string, unknown>; primaryKey?: Record<string, unknown> }>;
+    caption: string;
+    isListPage: boolean;
+  }, BCError> {
     const logicalFormResult = this.handlerParser.extractLogicalForm(handlers as any);
     if (!isOk(logicalFormResult)) {
       return err(
@@ -309,14 +361,13 @@ export class PageService {
     const caption = logicalForm.Caption || `Page ${pageId}`;
     const isListPage = this.dataExtractor.isListPage(logicalForm);
 
-    // Extract data based on page type
     let extractionResult;
     if (isListPage) {
       const decompressed = decompressResponse(handlers);
       const dataToProcess = decompressed || handlers;
       extractionResult = this.dataExtractor.extractListPageData(
         dataToProcess as readonly unknown[],
-        logicalForm  // Pass LogicalForm for visibility filtering
+        logicalForm
       );
     } else {
       extractionResult = this.dataExtractor.extractCardPageData(logicalForm);
@@ -326,34 +377,36 @@ export class PageService {
       return extractionResult as Result<never, BCError>;
     }
 
-    const { records, totalCount } = extractionResult.value;
+    return ok({
+      records: extractionResult.value.records,
+      caption,
+      isListPage,
+    });
+  }
 
-    // Apply filters if provided
-    let filteredRecords = records;
+  /** Apply filters and pagination to records */
+  private applyFiltersAndPagination(
+    records: Array<{ fields: Record<string, unknown>; primaryKey?: Record<string, unknown> }>,
+    filters?: Record<string, unknown>,
+    options?: { limit?: number; offset?: number }
+  ): Array<{ fields: Record<string, unknown>; primaryKey?: Record<string, unknown> }> {
+    let result = records;
+
+    // Apply filters
     if (filters && Object.keys(filters).length > 0) {
-      filteredRecords = records.filter(record => {
-        return Object.entries(filters).every(([field, value]) => {
-          return record.fields[field] === value;
-        });
-      });
+      result = result.filter(record =>
+        Object.entries(filters).every(([field, value]) => record.fields[field] === value)
+      );
     }
 
-    // Apply pagination if provided
+    // Apply pagination
     if (options?.offset !== undefined || options?.limit !== undefined) {
       const offset = options.offset || 0;
-      const limit = options.limit || filteredRecords.length;
-      filteredRecords = filteredRecords.slice(offset, offset + limit);
+      const limit = options.limit || result.length;
+      result = result.slice(offset, offset + limit);
     }
 
-    return ok({
-      pageId: String(pageId),
-      pageContextId,
-      sessionId,
-      caption,
-      pageType: isListPage ? 'List' : 'Card',
-      records: filteredRecords,
-      totalCount: filteredRecords.length,
-    });
+    return result;
   }
 
   /**

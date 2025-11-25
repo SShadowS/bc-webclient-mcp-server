@@ -18,6 +18,8 @@ import { createToolLogger } from '../core/logger.js';
 import type { AuditLogger } from '../services/audit-logger.js';
 import { ExecuteActionInputSchema, type ExecuteActionInput } from '../validation/schemas.js';
 import { PageContextCache } from '../services/page-context-cache.js';
+import { createWorkflowIntegration } from '../services/workflow-integration.js';
+import { ControlParser } from '../parsers/control-parser.js';
 
 /**
  * Output from execute_action tool.
@@ -29,6 +31,19 @@ export interface ExecuteActionOutput {
   readonly formId: string;
   readonly message: string;
   readonly handlers?: readonly unknown[];
+}
+
+/** Parsed page context info */
+interface ParsedContext {
+  actualSessionId: string;
+  actualPageId: string;
+}
+
+/** Validated session info */
+interface ValidatedSession {
+  connection: IBCConnection;
+  pageContext: any;
+  formId: string;
 }
 
 /**
@@ -66,6 +81,10 @@ export class ExecuteActionTool extends BaseMCPTool {
         type: 'number',
         description: 'Optional: The BC systemAction code from action metadata. Required for some actions.',
       },
+      workflowId: {
+        type: 'string',
+        description: 'Optional workflow ID to track this operation. For Save/Post actions, automatically clears unsaved changes in workflow.',
+      },
     },
     required: ['pageContextId', 'actionName'],
   };
@@ -94,217 +113,61 @@ export class ExecuteActionTool extends BaseMCPTool {
    * Input is pre-validated by BaseMCPTool using Zod schema.
    */
   protected async executeInternal(input: unknown): Promise<Result<ExecuteActionOutput, BCError>> {
-    // Input is already validated by BaseMCPTool with Zod
-    const { pageContextId, actionName, controlPath, systemAction, key } = input as ExecuteActionInput & { systemAction?: number; key?: string };
+    const { pageContextId, actionName, controlPath, systemAction, key, workflowId } = input as ExecuteActionInput & { systemAction?: number; key?: string; workflowId?: string };
     const logger = createToolLogger('execute_action', pageContextId);
+    const workflow = createWorkflowIntegration(workflowId);
 
     logger.info(`Executing action "${actionName}" using pageContext: ${pageContextId}`);
 
-    // Parse pageContextId (format: sessionId:page:pageId:timestamp)
-    const contextParts = pageContextId.split(':');
-    if (contextParts.length < 3) {
-      return err(
-        new ProtocolError(
-          `Invalid pageContextId format: ${pageContextId}`,
-          { pageContextId, actionName }
-        )
-      );
-    }
+    // Step 1: Parse and validate pageContextId
+    const parseResult = this.parsePageContextId(pageContextId, actionName);
+    if (!isOk(parseResult)) return parseResult;
+    const { actualSessionId, actualPageId } = parseResult.value;
 
-    const manager = ConnectionManager.getInstance();
-    const actualSessionId = contextParts[0];
-    const actualPageId = contextParts[2];
+    // Step 2: Validate session and get connection
+    const sessionResult = this.validateSession(actualSessionId, pageContextId, actionName);
+    if (!isOk(sessionResult)) return sessionResult;
+    const { connection, pageContext, formId } = sessionResult.value;
+    logger.info(`Reusing session: ${actualSessionId}, formId: ${formId}`);
 
-    // Get connection from session
-    const existing = manager.getSession(actualSessionId);
-    if (!existing) {
-      return err(
-        new ProtocolError(
-          `Session ${actualSessionId} from pageContext not found. Page may have been closed. Call get_page_metadata again.`,
-          { pageContextId, actionName, sessionId: actualSessionId }
-        )
-      );
-    }
-
-    const connection = existing;
-    logger.info(`Reusing session from pageContext: ${actualSessionId}`);
-
-    // Get pageContext to access formId
-    const pageContext = (connection as any).pageContexts?.get(pageContextId);
-    if (!pageContext) {
-      return err(
-        new ProtocolError(
-          `Page context ${pageContextId} not found. Page may have been closed. Call get_page_metadata again.`,
-          { pageContextId, actionName }
-        )
-      );
-    }
-
-    // Use formId from pageContext
-    const formIds = pageContext.formIds || [];
-    if (formIds.length === 0) {
-      return err(
-        new ProtocolError(
-          `No formId found in page context. Page may not be properly opened.`,
-          { pageContextId, actionName }
-        )
-      );
-    }
-
-    const formId = formIds[0]; // Use first formId (main form)
-    logger.info(`Using formId from pageContext: ${formId}`);
-
-
-    // Build InvokeAction interaction (real BC protocol)
-    // BC triggers actions via controlPath - the path to the action button
-    //
-    // CRITICAL: Browser WebUI ALWAYS sends these 4 parameters for Document page actions:
-    //   { "systemAction": 0, "key": null, "data": {}, "repeaterControlTarget": null }
-    //
-    // For List page row actions, browser sends:
-    //   { "systemAction": X, "key": "bookmark", "data": {}, "repeaterControlTarget": null }
-    //
-    // Our previous implementation was missing required fields, causing BC to ignore actions.
-    const namedParams: { systemAction: number; key: string | null; data: Record<string, unknown>; repeaterControlTarget: null } = {
-      systemAction: systemAction ?? 0,  // Default to 0 for document page actions
-      key: key ?? null,                  // null for document actions, bookmark for list row actions
-      data: {},                          // Always empty object
-      repeaterControlTarget: null,       // Always null
-    };
-
-    const interaction = {
-      interactionName: 'InvokeAction',
-      skipExtendingSessionLifetime: false,
-      namedParameters: JSON.stringify(namedParams),
-      callbackId: '', // Will be set by connection
-      controlPath: controlPath || undefined, // Required: path to action button
-      formId,
-    };
-
-    const namedParamsJson = JSON.stringify(namedParams);
-    // TODO: Re-enable for debugging when not using stdio transport
-    // console.log(`[ExecuteAction] Building interaction: controlPath=${controlPath}, formId=${formId}`);
-    // console.log(`[ExecuteAction] namedParameters JSON: ${namedParamsJson}`);
-    logger.info(`Building InvokeAction: controlPath=${controlPath}, formId=${formId}, systemAction=${systemAction}, key=${key}`);
-
-    logger.info(`Sending InvokeAction interaction...`);
-
-    // CRITICAL: Use async handler pattern - BC sends action results asynchronously!
-    // BC sends MULTIPLE async Message events after invoke returns.
-    // We need to accumulate ALL handlers over a time window, not just the first one.
-    const rawClient = (connection as any).getRawClient?.();
-    if (!rawClient) {
-      return err(
-        new ProtocolError(
-          `Cannot access raw WebSocket client for async handler capture`,
-          { pageId: actualPageId, actionName, formId }
-        )
-      );
-    }
-
-    // Accumulate all async handlers over a time window
-    // BC may send multiple Message events with different handler types
-    const accumulatedHandlers: any[] = [];
-    let handlerCount = 0;
-    const ACCUMULATION_WINDOW_MS = 1000; // Wait 1 second to accumulate all handlers
-
-    // Set up listener BEFORE calling invoke
-    // TODO: Re-enable for debugging when not using stdio transport
-    // console.log('[ExecuteAction] Setting up async handler listener...');
-    const unsubscribe = rawClient.onHandlers((event: any) => {
-      // TODO: Re-enable for debugging when not using stdio transport
-      // console.log(`[ExecuteAction] onHandlers callback - event:`, JSON.stringify(event).substring(0, 200));
-      // console.log(`[ExecuteAction] event.kind: ${event.kind}, isArray: ${Array.isArray(event)}`);
-
-      // Check if event IS the handlers array (not wrapped in {kind, handlers})
-      if (Array.isArray(event)) {
-        accumulatedHandlers.push(...event);
-        handlerCount++;
-        // TODO: Re-enable for debugging when not using stdio transport
-        // console.log(`[ExecuteAction] Received async handler batch #${handlerCount}: ${event.length} handlers (direct array)`);
-        logger.info(`Received async handler batch #${handlerCount}: ${event.length} handlers`);
-      } else if (event.kind === 'RawHandlers') {
-        accumulatedHandlers.push(...event.handlers);
-        handlerCount++;
-        // TODO: Re-enable for debugging when not using stdio transport
-        // console.log(`[ExecuteAction] Received async handler batch #${handlerCount}: ${event.handlers.length} handlers (wrapped)`);
-        logger.info(`Received async handler batch #${handlerCount}: ${event.handlers.length} handlers`);
-      }
-    });
-
-    try {
-      // TODO: Re-enable for debugging when not using stdio transport
-      // console.log('[ExecuteAction] Firing invoke...');
-      // AWAIT invoke() to capture response handlers - they come back synchronously!
-      const invokeResult = await connection.invoke(interaction);
-
-      if (isOk(invokeResult)) {
-        const responseHandlers = invokeResult.value;
-        // TODO: Re-enable for debugging when not using stdio transport
-        // console.log(`[ExecuteAction] invoke() returned ${responseHandlers.length} handlers`);
-        logger.info(`invoke() returned ${responseHandlers.length} handlers`);
-        accumulatedHandlers.push(...responseHandlers);
+    // Step 2.5: Auto-lookup controlPath from cached metadata if not provided
+    let resolvedControlPath = controlPath;
+    let resolvedSystemAction = systemAction;
+    if (!controlPath) {
+      const lookup = this.lookupActionFromCache(pageContext, actionName, logger);
+      if (lookup) {
+        resolvedControlPath = lookup.controlPath;
+        // Only use cached systemAction if not explicitly provided
+        if (systemAction === undefined && lookup.systemAction !== undefined) {
+          resolvedSystemAction = lookup.systemAction;
+        }
+        logger.info(`Auto-resolved action "${actionName}": controlPath=${resolvedControlPath}, systemAction=${resolvedSystemAction}`);
       } else {
-        // TODO: Re-enable for debugging when not using stdio transport
-        // console.log(`[ExecuteAction] Invoke error: ${invokeResult.error.message}`);
-        logger.info(`Invoke error: ${invokeResult.error.message}`);
+        logger.warn(`Could not find action "${actionName}" in cached metadata - proceeding without controlPath`);
       }
-
-      // Also wait briefly for any additional async handlers
-      // TODO: Re-enable for debugging when not using stdio transport
-      // console.log(`[ExecuteAction] Waiting ${ACCUMULATION_WINDOW_MS}ms for additional handlers...`);
-      await new Promise((resolve) => setTimeout(resolve, ACCUMULATION_WINDOW_MS));
-
-      // TODO: Re-enable for debugging when not using stdio transport
-      // console.log(`[ExecuteAction] Accumulated ${accumulatedHandlers.length} total handlers from ${handlerCount} batches`);
-      logger.info(`Action executed, accumulated ${accumulatedHandlers.length} total handlers from ${handlerCount} batches`);
-    } finally {
-      // Clean up listener
-      // TODO: Re-enable for debugging when not using stdio transport
-      // console.log('[ExecuteAction] Cleaning up listener');
-      unsubscribe();
     }
 
-    const handlers = accumulatedHandlers;
-    logger.info(`Total handlers received: ${handlers.length}`);
+    // Step 3: Build InvokeAction interaction
+    const interaction = this.buildInvokeActionInteraction(formId, resolvedControlPath, resolvedSystemAction, key);
+    logger.info(`Building InvokeAction: controlPath=${resolvedControlPath}, formId=${formId}, systemAction=${resolvedSystemAction}, key=${key}`);
 
-    // Check for errors in response handlers
-    const errorHandler = handlers.find(
-      (h: any) => h.handlerType === 'DN.ErrorMessageProperties' || h.handlerType === 'DN.ErrorDialogProperties'
-    );
+    // Step 4: Execute action and accumulate handlers
+    const handlersResult = await this.accumulateAsyncHandlers(connection, interaction, actualPageId, actionName, formId, logger);
+    if (!isOk(handlersResult)) return handlersResult;
+    const handlers = handlersResult.value;
 
-    if (errorHandler) {
-      const errorParams = (errorHandler as any).parameters?.[0];
-      const errorMessage = errorParams?.Message || errorParams?.ErrorMessage || 'Unknown error';
+    // Step 5: Auto-track dialogs from handlers
+    await this.autoTrackDialogs(handlers, actualSessionId, logger);
 
-      return err(
-        new ProtocolError(
-          `BC returned error: ${errorMessage}`,
-          { pageId: actualPageId, actionName, formId, sessionId: actualSessionId, errorHandler }
-        )
-      );
-    }
+    // Step 6: Check for errors in handlers
+    const errorResult = this.checkForErrors(handlers, actualPageId, actionName, formId, actualSessionId);
+    if (errorResult) return errorResult;
 
-    // CRITICAL: Mark pageContext as needing refresh
-    // Actions may change page state, so cached data would be stale
-    // Set needsRefresh flag so read_page_data will call LoadForm for fresh data
-    try {
-      logger.info(`Setting needsRefresh flag on pageContext (exists: ${!!pageContext})`);
-      if (pageContext) {
-        pageContext.needsRefresh = true;
-        logger.info(`Marked pageContext as needing refresh (needsRefresh=${pageContext.needsRefresh})`);
-      } else {
-        logger.info(`pageContext is null/undefined, cannot set needsRefresh`);
-      }
+    // Step 7: Mark pageContext as stale
+    await this.markPageContextStale(pageContext, pageContextId, logger);
 
-      // Also clear persistent cache (it stores stale data)
-      const cache = PageContextCache.getInstance();
-      await cache.delete(pageContextId);
-      logger.info(`Invalidated persistent cache for pageContext: ${pageContextId}`);
-    } catch (cacheError) {
-      logger.info(`Failed to invalidate cache: ${cacheError}`);
-      // Non-fatal - continue with success
-    }
+    // Step 8: Record workflow operation
+    this.recordWorkflowOperation(workflow, pageContextId, actionName, resolvedControlPath, resolvedSystemAction, actualPageId, formId, logger);
 
     return ok({
       success: true,
@@ -314,5 +177,343 @@ export class ExecuteActionTool extends BaseMCPTool {
       message: `Successfully executed action "${actionName}" on page ${actualPageId}`,
       handlers,
     });
+  }
+
+  // ============================================================================
+  // Helper Methods - Extracted from executeInternal for reduced complexity
+  // ============================================================================
+
+  /** Parse pageContextId and extract session/page info */
+  private parsePageContextId(pageContextId: string, actionName: string): Result<ParsedContext, BCError> {
+    const contextParts = pageContextId.split(':');
+    if (contextParts.length < 3) {
+      return err(new ProtocolError(
+        `Invalid pageContextId format: ${pageContextId}`,
+        { pageContextId, actionName }
+      ));
+    }
+    return ok({
+      actualSessionId: contextParts[0],
+      actualPageId: contextParts[2],
+    });
+  }
+
+  /** Validate session exists and get connection + pageContext */
+  private validateSession(actualSessionId: string, pageContextId: string, actionName: string): Result<ValidatedSession, BCError> {
+    const manager = ConnectionManager.getInstance();
+    const connection = manager.getSession(actualSessionId);
+
+    if (!connection) {
+      return err(new ProtocolError(
+        `Session ${actualSessionId} from pageContext not found. Page may have been closed. Call get_page_metadata again.`,
+        { pageContextId, actionName, sessionId: actualSessionId }
+      ));
+    }
+
+    const pageContext = (connection as any).pageContexts?.get(pageContextId);
+    if (!pageContext) {
+      return err(new ProtocolError(
+        `Page context ${pageContextId} not found. Page may have been closed. Call get_page_metadata again.`,
+        { pageContextId, actionName }
+      ));
+    }
+
+    const formIds = pageContext.formIds || [];
+    if (formIds.length === 0) {
+      return err(new ProtocolError(
+        `No formId found in page context. Page may not be properly opened.`,
+        { pageContextId, actionName }
+      ));
+    }
+
+    return ok({ connection, pageContext, formId: formIds[0] });
+  }
+
+  /** Build InvokeAction interaction object */
+  private buildInvokeActionInteraction(
+    formId: string,
+    controlPath?: string,
+    systemAction?: number,
+    key?: string
+  ): { interactionName: string; skipExtendingSessionLifetime: boolean; namedParameters: string; callbackId: string; controlPath?: string; formId: string } {
+    const namedParams = {
+      systemAction: systemAction ?? 0,
+      key: key ?? null,
+      data: {},
+      repeaterControlTarget: null,
+    };
+
+    return {
+      interactionName: 'InvokeAction',
+      skipExtendingSessionLifetime: false,
+      namedParameters: JSON.stringify(namedParams),
+      callbackId: '',
+      controlPath: controlPath || undefined,
+      formId,
+    };
+  }
+
+  /** Accumulate async handlers from BC response */
+  private async accumulateAsyncHandlers(
+    connection: IBCConnection,
+    interaction: any,
+    actualPageId: string,
+    actionName: string,
+    formId: string,
+    logger: ReturnType<typeof createToolLogger>
+  ): Promise<Result<any[], BCError>> {
+    const rawClient = (connection as any).getRawClient?.();
+    if (!rawClient) {
+      return err(new ProtocolError(
+        `Cannot access raw WebSocket client for async handler capture`,
+        { pageId: actualPageId, actionName, formId }
+      ));
+    }
+
+    const accumulatedHandlers: any[] = [];
+    let handlerCount = 0;
+    const ACCUMULATION_WINDOW_MS = 1000;
+
+    const unsubscribe = rawClient.onHandlers((event: any) => {
+      if (Array.isArray(event)) {
+        accumulatedHandlers.push(...event);
+        handlerCount++;
+        logger.info(`Received async handler batch #${handlerCount}: ${event.length} handlers`);
+      } else if (event.kind === 'RawHandlers') {
+        accumulatedHandlers.push(...event.handlers);
+        handlerCount++;
+        logger.info(`Received async handler batch #${handlerCount}: ${event.handlers.length} handlers`);
+      }
+    });
+
+    try {
+      const invokeResult = await connection.invoke(interaction);
+      if (isOk(invokeResult)) {
+        logger.info(`invoke() returned ${invokeResult.value.length} handlers`);
+        accumulatedHandlers.push(...invokeResult.value);
+      } else {
+        logger.info(`Invoke error: ${invokeResult.error.message}`);
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, ACCUMULATION_WINDOW_MS));
+      logger.info(`Action executed, accumulated ${accumulatedHandlers.length} total handlers from ${handlerCount} batches`);
+    } finally {
+      unsubscribe();
+    }
+
+    return ok(accumulatedHandlers);
+  }
+
+  /** Auto-track dialogs from handlers */
+  private async autoTrackDialogs(handlers: any[], actualSessionId: string, logger: ReturnType<typeof createToolLogger>): Promise<void> {
+    for (const handler of handlers) {
+      if (
+        typeof handler === 'object' &&
+        handler !== null &&
+        'handlerType' in handler &&
+        handler.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+        'parameters' in handler &&
+        Array.isArray(handler.parameters) &&
+        handler.parameters[0] === 'DialogToShow'
+      ) {
+        try {
+          const HandlerParser = (await import('../parsers/handler-parser.js')).HandlerParser;
+          const SessionStateManager = (await import('../services/session-state-manager.js')).SessionStateManager;
+
+          const parser = new HandlerParser();
+          const dialogFormResult = parser.extractDialogForm([handler] as any[]);
+
+          if (isOk(dialogFormResult)) {
+            const dialogForm = dialogFormResult.value as any;
+            const dialogFormId = dialogForm.ServerId;
+            const sessionStateManager = SessionStateManager.getInstance();
+
+            sessionStateManager.addDialog(actualSessionId, {
+              dialogId: dialogFormId,
+              caption: dialogForm.Caption || 'Dialog',
+              isTaskDialog: !!dialogForm.IsTaskDialog,
+              isModal: !!dialogForm.IsModal,
+            });
+
+            logger.info(`Auto-tracked dialog: formId=${dialogFormId}, caption="${dialogForm.Caption}"`);
+          }
+        } catch (error) {
+          logger.warn({ error: String(error) }, 'Failed to auto-track dialog (non-fatal)');
+        }
+        break; // Only process first dialog
+      }
+    }
+  }
+
+  /** Check for error handlers in response */
+  private checkForErrors(
+    handlers: any[],
+    actualPageId: string,
+    actionName: string,
+    formId: string,
+    actualSessionId: string
+  ): Result<never, BCError> | null {
+    const errorHandler = handlers.find(
+      (h: any) => h.handlerType === 'DN.ErrorMessageProperties' || h.handlerType === 'DN.ErrorDialogProperties'
+    );
+
+    if (errorHandler) {
+      const errorParams = (errorHandler as any).parameters?.[0];
+      const errorMessage = errorParams?.Message || errorParams?.ErrorMessage || 'Unknown error';
+
+      return err(new ProtocolError(
+        `BC returned error: ${errorMessage}`,
+        { pageId: actualPageId, actionName, formId, sessionId: actualSessionId, errorHandler }
+      ));
+    }
+
+    return null;
+  }
+
+  /** Mark pageContext as stale and clear cache */
+  private async markPageContextStale(
+    pageContext: any,
+    pageContextId: string,
+    logger: ReturnType<typeof createToolLogger>
+  ): Promise<void> {
+    try {
+      if (pageContext) {
+        pageContext.needsRefresh = true;
+        logger.info(`Marked pageContext as needing refresh`);
+      }
+
+      const cache = PageContextCache.getInstance();
+      await cache.delete(pageContextId);
+      logger.info(`Invalidated persistent cache for pageContext: ${pageContextId}`);
+    } catch (cacheError) {
+      logger.info(`Failed to invalidate cache: ${cacheError}`);
+    }
+  }
+
+  /** Record operation in workflow */
+  private recordWorkflowOperation(
+    workflow: ReturnType<typeof createWorkflowIntegration>,
+    pageContextId: string,
+    actionName: string,
+    controlPath: string | undefined,
+    systemAction: number | undefined,
+    actualPageId: string,
+    formId: string,
+    logger: ReturnType<typeof createToolLogger>
+  ): void {
+    if (!workflow) return;
+
+    const commitActions = ['save', 'post', 'ok', 'yes'];
+    const isCommitAction = commitActions.includes(actionName.toLowerCase());
+
+    if (isCommitAction) {
+      workflow.clearUnsavedChanges();
+      logger.info(`Cleared unsaved changes for commit action: ${actionName}`);
+    }
+
+    workflow.recordOperation(
+      'execute_action',
+      { pageContextId, actionName, controlPath, systemAction },
+      { success: true, data: { actionName, pageId: actualPageId, formId } }
+    );
+  }
+
+  /**
+   * Look up action from cached page metadata.
+   * Searches for action by name (DesignName) or caption.
+   * Returns controlPath and systemAction if found.
+   */
+  private lookupActionFromCache(
+    pageContext: any,
+    actionName: string,
+    logger: ReturnType<typeof createToolLogger>
+  ): { controlPath: string; systemAction?: number } | null {
+    if (!pageContext?.logicalForm) {
+      logger.debug(`[Action Lookup] No logicalForm in pageContext - checking handlers`);
+
+      // Try to find LogicalForm in handlers
+      const handlers = pageContext?.handlers || [];
+      let logicalForm = null;
+
+      for (const handler of handlers) {
+        // LogicalForm might be embedded in handlers
+        if (handler?.t === 'lf' || handler?.DesignName || handler?.c) {
+          logicalForm = handler;
+          break;
+        }
+      }
+
+      if (!logicalForm) {
+        logger.debug(`[Action Lookup] No logicalForm found in handlers either`);
+        return null;
+      }
+
+      // Use the found logicalForm
+      return this.searchActionsInLogicalForm(logicalForm, actionName, logger);
+    }
+
+    return this.searchActionsInLogicalForm(pageContext.logicalForm, actionName, logger);
+  }
+
+  private searchActionsInLogicalForm(
+    logicalForm: any,
+    actionName: string,
+    logger: ReturnType<typeof createToolLogger>
+  ): { controlPath: string; systemAction?: number } | null {
+    const normalizedName = actionName.toLowerCase().replace(/[&_]/g, '');
+
+    // Use ControlParser to properly walk controls and assign controlPath
+    const controlParser = new ControlParser();
+    const actions = controlParser.extractActions(controlParser.walkControls(logicalForm));
+
+    logger.debug(`[Action Lookup] Looking up "${actionName}" (normalized: "${normalizedName}") among ${actions.length} actions`);
+
+    // Find matching action - prefer exact matches over partial matches
+    // Also prefer real actions over _Promoted variants
+    let bestMatch: { controlPath: string; systemAction?: number } | null = null;
+    let bestMatchScore = 0;
+
+    for (const action of actions) {
+      // Caption includes & character (e.g., "Re&lease"), normalize by removing it
+      const rawCaption = action.caption || '';
+      const captionNormalized = rawCaption.toLowerCase().replace(/[&_]/g, '');
+
+      // Check for match
+      let score = 0;
+      if (captionNormalized === normalizedName) {
+        score = 100; // Exact match after normalization
+      } else if (rawCaption.toLowerCase().replace(/&/g, '') === normalizedName) {
+        score = 90; // Exact match preserving underscore
+      } else if (captionNormalized.includes(normalizedName)) {
+        score = 50; // Partial match
+      }
+
+      if (score > 0) {
+        // Penalize _Promoted variants (they are toolbar shortcuts, not the actual action)
+        if (rawCaption.includes('_Promoted')) {
+          score -= 30;
+        }
+
+        logger.debug(`[Action Lookup] Candidate: caption="${rawCaption}", score=${score}, controlPath="${action.controlPath}"`);
+
+        if (score > bestMatchScore && action.controlPath) {
+          bestMatch = { controlPath: action.controlPath, systemAction: action.systemAction };
+          bestMatchScore = score;
+          logger.debug(`[Action Lookup] Best match: caption="${rawCaption}", score=${score}, controlPath="${action.controlPath}"`);
+        }
+      }
+    }
+
+    if (bestMatch) {
+      return bestMatch;
+    }
+
+    // Log available actions if no match
+    if (actions.length > 0) {
+      const preview = actions.slice(0, 15).map(a => a.caption).join(', ');
+      logger.info(`[Action Lookup] Found ${actions.length} actions, but none matched "${actionName}". Sample: ${preview}`);
+    }
+
+    return null;
   }
 }

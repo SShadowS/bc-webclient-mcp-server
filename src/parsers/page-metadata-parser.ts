@@ -70,9 +70,10 @@ export class PageMetadataParser implements IPageMetadataParser {
       // Walk control tree
       const controls = this.controlParser.walkControls(logicalForm);
 
-      // Extract fields and actions
+      // Extract fields, actions, and repeaters
       const fields = this.controlParser.extractFields(controls);
       const actions = this.controlParser.extractActions(controls);
+      const repeaters = this.controlParser.extractRepeaters(controls);
 
       // Build page metadata
       const metadata: PageMetadata = {
@@ -84,6 +85,7 @@ export class PageMetadataParser implements IPageMetadataParser {
         appVersion: logicalForm.AppVersion,
         fields,
         actions,
+        repeaters,  // Include repeater metadata (subpages with line items)
         controlCount: controls.length,
       };
 

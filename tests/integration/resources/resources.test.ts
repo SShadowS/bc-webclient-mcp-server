@@ -16,15 +16,16 @@ import { isOk } from '../../../src/core/result.js';
 
 describe('MCP Resources Integration', () => {
   describe('buildResources', () => {
-    it('should return all three resources', () => {
+    it('should return all four resources', () => {
       const resources = buildResources({ logger });
 
-      expect(resources).toHaveLength(3);
+      expect(resources).toHaveLength(4);
 
       const uris = resources.map((r) => r.uri);
       expect(uris).toContain('bc://docs/workflow-patterns');
       expect(uris).toContain('bc://schema/pages');
       expect(uris).toContain('bc://session/current');
+      expect(uris).toContain('bc://workflow/all');
     });
   });
 
@@ -47,12 +48,13 @@ describe('MCP Resources Integration', () => {
       expect(isOk(listResult)).toBe(true);
       if (!isOk(listResult)) return;
 
-      expect(listResult.value.resources).toHaveLength(3);
+      expect(listResult.value.resources).toHaveLength(4);
 
       const uris = listResult.value.resources.map((r) => r.uri);
       expect(uris).toContain('bc://docs/workflow-patterns');
       expect(uris).toContain('bc://schema/pages');
       expect(uris).toContain('bc://session/current');
+      expect(uris).toContain('bc://workflow/all');
     });
 
     it('should read workflow patterns resource', async () => {
@@ -63,10 +65,11 @@ describe('MCP Resources Integration', () => {
       expect(isOk(readResult)).toBe(true);
       if (!isOk(readResult)) return;
 
-      expect(readResult.value.contents).toContain('BC MCP Workflow Patterns');
-      expect(readResult.value.contents).toContain('Creating a New Customer');
-      expect(readResult.value.contents).toContain('search_pages');
-      expect(readResult.value.contents).toContain('get_page_metadata');
+      const text = readResult.value.contents[0].text;
+      expect(text).toContain('BC MCP Workflow Patterns');
+      expect(text).toContain('Creating a New Customer');
+      expect(text).toContain('search_pages');
+      expect(text).toContain('get_page_metadata');
     });
 
     it('should read page schema resource', async () => {
@@ -75,7 +78,7 @@ describe('MCP Resources Integration', () => {
       expect(isOk(readResult)).toBe(true);
       if (!isOk(readResult)) return;
 
-      const data = JSON.parse(readResult.value.contents);
+      const data = JSON.parse(readResult.value.contents[0].text);
 
       expect(data.pages).toBeDefined();
       expect(Array.isArray(data.pages)).toBe(true);
@@ -99,7 +102,7 @@ describe('MCP Resources Integration', () => {
       expect(isOk(readResult)).toBe(true);
       if (!isOk(readResult)) return;
 
-      const data = JSON.parse(readResult.value.contents);
+      const data = JSON.parse(readResult.value.contents[0].text);
 
       expect(data.timestamp).toBeDefined();
       expect(data.sessionCount).toBeDefined();

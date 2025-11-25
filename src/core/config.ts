@@ -90,7 +90,7 @@ class Config {
         username: process.env.BC_USERNAME || 'sshadows',
         password: process.env.BC_PASSWORD || '1234',
         tenantId: process.env.BC_TENANT_ID || 'default',
-        timeout: this.getNumberEnv('BC_TIMEOUT', 30000),
+        timeout: this.getNumberEnv('BC_TIMEOUT', 120000),
         searchTimingWindowMs: this.getNumberEnv('BC_SEARCH_TIMING_WINDOW_MS', 15000),
       },
       debug: this.parseDebugConfig(),

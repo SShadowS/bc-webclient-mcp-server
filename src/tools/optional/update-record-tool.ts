@@ -154,124 +154,173 @@ export class UpdateRecordTool extends BaseMCPTool {
    */
   protected async executeInternal(input: unknown): Promise<Result<UpdateRecordOutput, BCError>> {
     const logger = createToolLogger('update_record', (input as any)?.pageContextId);
-    // Validate input
+
     const validatedInput = this.validateInput(input);
     if (!isOk(validatedInput)) {
       return validatedInput as Result<never, BCError>;
     }
 
     const { fields, pageId, pageContextId: existingPageContextId } = validatedInput.value;
-    // Extract options from input
-    const autoEdit = (input as any).autoEdit !== false; // Default: true
-    const save = (input as any).save !== false; // Default: true
-    const stopOnError = (input as any).stopOnError !== false; // Default: true
+    const options = this.extractOptions(input);
 
     logger.info(`Updating record...`);
-    if (existingPageContextId) {
-      logger.info(`Using existing page context: ${existingPageContextId}`);
-    } else {
-      logger.info(`Page: ${pageId}`);
-    }
-    logger.info(`Options: autoEdit=${autoEdit}, save=${save}, stopOnError=${stopOnError}`);
+    logger.info(existingPageContextId ? `Using existing page context: ${existingPageContextId}` : `Page: ${pageId}`);
+    logger.info(`Options: autoEdit=${options.autoEdit}, save=${options.save}, stopOnError=${options.stopOnError}`);
 
     try {
-      // Step 1: Open page if needed (skip if pageContextId provided)
-      let pageContextId: string;
+      // Step 1: Get or open page
+      const pageContextResult = await this.getOrOpenPage(existingPageContextId, pageId, logger);
+      if (!isOk(pageContextResult)) return pageContextResult;
+      const pageContextId = pageContextResult.value;
 
-      if (existingPageContextId) {
-        logger.info(`Step 1: Reusing existing page context (skipping open)`);
-        pageContextId = existingPageContextId;
-      } else {
-        logger.info(`Step 1: Opening page ${pageId}...`);
-
-        const metadataResult = await this.getPageMetadataTool.execute({
-          pageId: pageId!,
-        });
-
-        if (!isOk(metadataResult)) {
-          return err(metadataResult.error);
-        }
-
-        pageContextId = (metadataResult.value as GetPageMetadataOutput).pageContextId;
-        logger.info(`Page opened with context: ${pageContextId}`);
-      }
-
-      // Step 2: Execute Edit action if autoEdit is enabled
-      if (autoEdit) {
-        logger.info(`Step 2: Executing Edit action...`);
-
-        const editResult = await this.executeActionTool.execute({
-          pageId: pageId || pageContextId.split(':')[2], // Extract pageId from context if not provided
-          actionName: 'Edit',
-        });
-
-        if (!isOk(editResult)) {
-          logger.info(`Edit action failed: ${editResult.error.message}`);
-          // Don't fail - page might already be in edit mode
-        } else {
-          logger.info(`Edit mode activated`);
-        }
+      // Step 2: Activate edit mode if needed
+      if (options.autoEdit) {
+        await this.activateEditMode(pageId, pageContextId, logger);
       }
 
       // Step 3: Write field values
-      logger.info(`Step 3: Updating ${Object.keys(fields).length} field(s)...`);
+      const writeResult = await this.writeFieldValues(pageContextId, fields, options.stopOnError, logger);
+      if (!isOk(writeResult)) return writeResult;
+      const writeOutput = writeResult.value;
 
-      // Pass fields directly - write_page_data accepts simple map
-      const writeResult = await this.writePageDataTool.execute({
-        pageContextId,
-        fields, // Pass the plain map directly
-        stopOnError,
-        immediateValidation: true,
-      });
+      // Step 4: Save changes if needed
+      const saved = await this.saveChangesIfNeeded(pageId, pageContextId, writeOutput, options.save, logger);
 
-      if (!isOk(writeResult)) {
-        return err(writeResult.error);
-      }
-
-      const writeOutput = writeResult.value as WritePageDataOutput;
-      logger.info(`Fields updated: ${writeOutput.updatedFields?.length || 0} succeeded, ${writeOutput.failedFields?.length || 0} failed`);
-
-      // Step 4: Execute Save action if save is enabled and any fields were updated
-      let saved = false;
-      const anyUpdated = (writeOutput.updatedFields?.length ?? 0) > 0;
-      if (save && anyUpdated) {
-        logger.info(`Step 4: Executing Save action...`);
-
-        const saveResult = await this.executeActionTool.execute({
-          pageId: pageId || pageContextId.split(':')[2], // Extract pageId from context if not provided
-          actionName: 'Save',
-        });
-
-        if (!isOk(saveResult)) {
-          logger.info(`Save action failed: ${saveResult.error.message}`);
-          // Don't fail completely - fields were updated
-        } else {
-          saved = true;
-          logger.info(`Changes saved`);
-        }
-      }
-
-      logger.info(`Record update completed`);
-
-      const finalPageId = pageId || pageContextId.split(':')[2];
-      return ok({
-        success: writeOutput.success,
-        pageContextId: writeOutput.pageContextId,
-        pageId: String(finalPageId),
-        record: writeOutput.record,
-        saved,
-        updatedFields: writeOutput.updatedFields || Object.keys(fields),
-        failedFields: writeOutput.failedFields,
-        message: `Successfully updated ${writeOutput.updatedFields?.length || Object.keys(fields).length} field(s)${saved ? ' (saved)' : ''}`,
-      });
+      // Build result
+      return this.buildUpdateResult(pageId, pageContextId, fields, writeOutput, saved);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       return err(
-        new ProtocolError(
-          `Failed to update record: ${errorMessage}`,
-          { pageId, pageContextId: existingPageContextId, fields, error: errorMessage }
-        )
+        new ProtocolError(`Failed to update record: ${errorMessage}`, {
+          pageId, pageContextId: existingPageContextId, fields, error: errorMessage
+        })
       );
     }
+  }
+
+  /** Extract options with defaults */
+  private extractOptions(input: unknown): { autoEdit: boolean; save: boolean; stopOnError: boolean } {
+    return {
+      autoEdit: (input as any).autoEdit !== false,
+      save: (input as any).save !== false,
+      stopOnError: (input as any).stopOnError !== false,
+    };
+  }
+
+  /** Get existing page context or open new page */
+  private async getOrOpenPage(
+    existingPageContextId: string | undefined,
+    pageId: string | undefined,
+    logger: ReturnType<typeof createToolLogger>
+  ): Promise<Result<string, BCError>> {
+    if (existingPageContextId) {
+      logger.info(`Step 1: Reusing existing page context (skipping open)`);
+      return ok(existingPageContextId);
+    }
+
+    logger.info(`Step 1: Opening page ${pageId}...`);
+    const metadataResult = await this.getPageMetadataTool.execute({ pageId: pageId! });
+
+    if (!isOk(metadataResult)) {
+      return err(metadataResult.error);
+    }
+
+    const pageContextId = (metadataResult.value as GetPageMetadataOutput).pageContextId;
+    logger.info(`Page opened with context: ${pageContextId}`);
+    return ok(pageContextId);
+  }
+
+  /** Activate edit mode on the page */
+  private async activateEditMode(
+    pageId: string | undefined,
+    pageContextId: string,
+    logger: ReturnType<typeof createToolLogger>
+  ): Promise<void> {
+    logger.info(`Step 2: Executing Edit action...`);
+    const editResult = await this.executeActionTool.execute({
+      pageId: pageId || pageContextId.split(':')[2],
+      actionName: 'Edit',
+    });
+
+    if (!isOk(editResult)) {
+      logger.info(`Edit action failed: ${editResult.error.message}`);
+      // Don't fail - page might already be in edit mode
+    } else {
+      logger.info(`Edit mode activated`);
+    }
+  }
+
+  /** Write field values to the page */
+  private async writeFieldValues(
+    pageContextId: string,
+    fields: Record<string, unknown>,
+    stopOnError: boolean,
+    logger: ReturnType<typeof createToolLogger>
+  ): Promise<Result<WritePageDataOutput, BCError>> {
+    logger.info(`Step 3: Updating ${Object.keys(fields).length} field(s)...`);
+
+    const writeResult = await this.writePageDataTool.execute({
+      pageContextId,
+      fields,
+      stopOnError,
+      immediateValidation: true,
+    });
+
+    if (!isOk(writeResult)) {
+      return err(writeResult.error);
+    }
+
+    const writeOutput = writeResult.value as WritePageDataOutput;
+    logger.info(`Fields updated: ${writeOutput.updatedFields?.length || 0} succeeded, ${writeOutput.failedFields?.length || 0} failed`);
+    return ok(writeOutput);
+  }
+
+  /** Save changes if save is enabled and fields were updated */
+  private async saveChangesIfNeeded(
+    pageId: string | undefined,
+    pageContextId: string,
+    writeOutput: WritePageDataOutput,
+    save: boolean,
+    logger: ReturnType<typeof createToolLogger>
+  ): Promise<boolean> {
+    const anyUpdated = (writeOutput.updatedFields?.length ?? 0) > 0;
+    if (!save || !anyUpdated) {
+      return false;
+    }
+
+    logger.info(`Step 4: Executing Save action...`);
+    const saveResult = await this.executeActionTool.execute({
+      pageId: pageId || pageContextId.split(':')[2],
+      actionName: 'Save',
+    });
+
+    if (!isOk(saveResult)) {
+      logger.info(`Save action failed: ${saveResult.error.message}`);
+      return false;
+    }
+
+    logger.info(`Changes saved`);
+    return true;
+  }
+
+  /** Build the final update result */
+  private buildUpdateResult(
+    pageId: string | undefined,
+    pageContextId: string,
+    fields: Record<string, unknown>,
+    writeOutput: WritePageDataOutput,
+    saved: boolean
+  ): Result<UpdateRecordOutput, BCError> {
+    const finalPageId = pageId || pageContextId.split(':')[2];
+    return ok({
+      success: writeOutput.success,
+      pageContextId: writeOutput.pageContextId,
+      pageId: String(finalPageId),
+      record: writeOutput.record,
+      saved,
+      updatedFields: writeOutput.updatedFields || Object.keys(fields),
+      failedFields: writeOutput.failedFields,
+      message: `Successfully updated ${writeOutput.updatedFields?.length || Object.keys(fields).length} field(s)${saved ? ' (saved)' : ''}`,
+    });
   }
 }

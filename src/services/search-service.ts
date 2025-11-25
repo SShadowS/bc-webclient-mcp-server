@@ -18,6 +18,9 @@ import { TellMeParser } from '../protocol/tellme-parser.js';
 import type { BCRawWebSocketClient } from '../connection/clients/BCRawWebSocketClient.js';
 import { retryWithBackoff } from '../core/retry.js';
 
+/** Tell Me system action UUID */
+const TELL_ME_ACTION_ID = '{00000000-0000-0000-0300-0000836BD2D2}';
+
 export interface SearchResult {
   id: string;
   caption: string;
@@ -32,6 +35,14 @@ export interface SearchResults {
   results: SearchResult[];
   totalCount: number;
   sessionId: string;
+}
+
+interface SearchContext {
+  connection: IBCConnection;
+  rawClient: BCRawWebSocketClient;
+  sessionId: string;
+  query: string;
+  logger: ReturnType<typeof createConnectionLogger>;
 }
 
 /**
@@ -59,50 +70,82 @@ export class SearchService {
     const logger = createConnectionLogger('SearchService', 'searchPages');
     logger.info({ query }, 'Searching pages');
 
-    // Validate query
+    // Step 1: Validate and setup
+    const setupResult = await this.setupSearchContext(query, bcConfig, logger);
+    if (!isOk(setupResult)) return setupResult;
+    const ctx = setupResult.value;
+
+    // Step 2: Open Tell Me dialog
+    const dialogResult = await this.openTellMeDialog(ctx);
+    if (!isOk(dialogResult)) return dialogResult;
+    const { dialogHandlers, searchControlId } = dialogResult.value;
+
+    // Step 3: Initialize search
+    await this.initializeSearch(ctx, searchControlId);
+
+    // Step 4: Execute search and get results
+    const searchResult = await this.executeSearchAndGetResults(ctx, searchControlId);
+    if (!isOk(searchResult)) return searchResult;
+    const results = searchResult.value;
+
+    // Step 5: Close dialog and return
+    await this.closeDialog(ctx.connection);
+
+    return ok({
+      query,
+      results,
+      totalCount: results.length,
+      sessionId: ctx.sessionId,
+    });
+  }
+
+  /** Validate query and establish connection */
+  private async setupSearchContext(
+    query: string,
+    bcConfig: { baseUrl: string; username: string; password: string; tenantId: string } | undefined,
+    logger: ReturnType<typeof createConnectionLogger>
+  ): Promise<Result<SearchContext, BCError>> {
     if (!query || query.trim().length === 0) {
-      return err(
-        new ProtocolError('Search query cannot be empty', { query })
-      );
+      return err(new ProtocolError('Search query cannot be empty', { query }));
     }
 
-    // Get or create connection
+    if (!bcConfig) {
+      return err(new ProtocolError('No BC configuration provided', { query }));
+    }
+
     const manager = ConnectionManager.getInstance();
-    let connection: IBCConnection;
-    let sessionId: string;
-
-    if (bcConfig) {
-      const sessionResult = await manager.getOrCreateSession(bcConfig);
-      if (!isOk(sessionResult)) {
-        return err(sessionResult.error);
-      }
-      connection = sessionResult.value.connection;
-      sessionId = sessionResult.value.sessionId;
-    } else {
-      return err(
-        new ProtocolError('No BC configuration provided', { query })
-      );
+    const sessionResult = await manager.getOrCreateSession(bcConfig);
+    if (!isOk(sessionResult)) {
+      return err(sessionResult.error);
     }
 
-    // Cast to BCRawWebSocketClient for event-driven features
+    const connection = sessionResult.value.connection;
     const rawClient = connection as unknown as BCRawWebSocketClient;
+
     if (!rawClient.onHandlers || !rawClient.waitForHandlers) {
-      return err(
-        new ProtocolError('Connection does not support event-driven operations', { query })
-      );
+      return err(new ProtocolError('Connection does not support event-driven operations', { query }));
     }
 
-    // Step 1: Open Tell Me dialog (Alt+Q) with automatic retry
-    logger.debug('Opening Tell Me dialog');
+    return ok({
+      connection,
+      rawClient,
+      sessionId: sessionResult.value.sessionId,
+      query,
+      logger,
+    });
+  }
+
+  /** Open Tell Me dialog with retry */
+  private async openTellMeDialog(
+    ctx: SearchContext
+  ): Promise<Result<{ dialogHandlers: any[]; searchControlId: string }, BCError>> {
+    ctx.logger.debug('Opening Tell Me dialog');
 
     const openDialogResult = await retryWithBackoff(
       async () => {
-        // Invoke Tell Me action
-        const openResult = await connection.invoke({
+        const openResult = await ctx.connection.invoke({
           interactionName: 'SystemAction',
-          namedParameters: {
-            Id: '{00000000-0000-0000-0300-0000836BD2D2}' // Tell Me system action ID
-          },
+          namedParameters: { Id: TELL_ME_ACTION_ID },
           controlPath: 'server:',
           callbackId: '0',
         });
@@ -111,8 +154,7 @@ export class SearchService {
           return openResult as Result<never, BCError>;
         }
 
-        // Wait for dialog to open
-        const dialogHandlers = await rawClient.waitForHandlers(
+        const dialogHandlers = await ctx.rawClient.waitForHandlers(
           (handlers: any[]) => {
             const found = handlers.some((h: any) =>
               h.handlerType === 'DN.FormToShow' &&
@@ -123,67 +165,72 @@ export class SearchService {
           { timeoutMs: 5000 }
         );
 
-        logger.debug('Tell Me dialog opened successfully');
+        ctx.logger.debug('Tell Me dialog opened successfully');
         return ok(dialogHandlers);
       },
       {
-        maxAttempts: 1, // One retry after initial failure
-        initialDelayMs: 500, // Short delay before retry
-        onRetry: () => logger.debug('Dialog open timeout, retrying...'),
+        maxAttempts: 1,
+        initialDelayMs: 500,
+        onRetry: () => ctx.logger.debug('Dialog open timeout, retrying...'),
       }
     );
 
     if (!isOk(openDialogResult)) {
-      return err(
-        new TimeoutError('Tell Me dialog did not open after retries', {
-          query,
-          timeout: 5000,
-          error: openDialogResult.error.message,
-        })
-      );
+      return err(new TimeoutError('Tell Me dialog did not open after retries', {
+        query: ctx.query,
+        timeout: 5000,
+        error: openDialogResult.error.message,
+      }));
     }
 
     const dialogHandlers = openDialogResult.value;
+    const searchControlId = this.extractSearchControlId(dialogHandlers);
 
-    // Extract search control ID from dialog
-    let searchControlId = 'Search';
+    return ok({ dialogHandlers, searchControlId });
+  }
+
+  /** Extract search control ID from dialog handlers */
+  private extractSearchControlId(dialogHandlers: any[]): string {
     const formToShow = dialogHandlers.find((h: any) => h.handlerType === 'DN.FormToShow');
     if (formToShow?.parameters?.[0]?.Controls) {
       const searchControl = this.findSearchControl(formToShow.parameters[0].Controls);
       if (searchControl) {
-        searchControlId = searchControl.ControlId || 'Search';
+        return searchControl.ControlId || 'Search';
       }
     }
+    return 'Search';
+  }
 
-    // Step 2: Initialize search (required by BC protocol)
-    logger.debug('Initializing search');
+  /** Initialize search (required by BC protocol) */
+  private async initializeSearch(ctx: SearchContext, searchControlId: string): Promise<void> {
+    ctx.logger.debug('Initializing search');
 
-    const initResult = await connection.invoke({
+    const initResult = await ctx.connection.invoke({
       interactionName: 'SaveValue',
-      namedParameters: {
-        controlId: searchControlId,
-        newValue: '',
-      },
+      namedParameters: { controlId: searchControlId, newValue: '' },
       controlPath: 'dialog:c[0]',
       callbackId: '0',
     });
 
     if (!isOk(initResult)) {
-      logger.warn({ error: initResult.error }, 'Search initialization failed, continuing anyway');
+      ctx.logger.warn({ error: initResult.error }, 'Search initialization failed, continuing anyway');
     }
+  }
 
-    // Step 3: Set up listener for search results
-    const resultsPromise = rawClient.waitForHandlers(
+  /** Execute search and wait for results */
+  private async executeSearchAndGetResults(
+    ctx: SearchContext,
+    searchControlId: string
+  ): Promise<Result<SearchResult[], BCError>> {
+    // Set up listener before executing search
+    const resultsPromise = ctx.rawClient.waitForHandlers(
       (handlers: any[]) => {
         const found = handlers.some((h: any) => {
           if (h.handlerType === 'DN.LogicalClientChangeHandler') {
             const changes = h.parameters?.[1];
-            if (Array.isArray(changes)) {
-              return changes.some((change: any) =>
-                change.t === 'DataRefreshChange' &&
-                change.RowChanges?.length > 0
-              );
-            }
+            return Array.isArray(changes) && changes.some((change: any) =>
+              change.t === 'DataRefreshChange' && change.RowChanges?.length > 0
+            );
           }
           return false;
         });
@@ -192,74 +239,61 @@ export class SearchService {
       { timeoutMs: 10000 }
     );
 
-    // Step 4: Execute search
-    logger.debug({ query }, 'Executing search');
+    // Execute search
+    ctx.logger.debug({ query: ctx.query }, 'Executing search');
 
-    const searchResult = await connection.invoke({
+    const searchResult = await ctx.connection.invoke({
       interactionName: 'SaveValue',
-      namedParameters: {
-        controlId: searchControlId,
-        newValue: query,
-      },
+      namedParameters: { controlId: searchControlId, newValue: ctx.query },
       controlPath: 'dialog:c[0]',
       callbackId: '0',
     });
 
     if (!isOk(searchResult)) {
-      return err(
-        new ProtocolError('Failed to execute search', {
-          query,
-          error: searchResult.error.message,
-        })
-      );
+      return err(new ProtocolError('Failed to execute search', {
+        query: ctx.query,
+        error: searchResult.error.message,
+      }));
     }
 
-    // Step 5: Wait for and parse results
+    // Wait for results
     let resultHandlers: any[];
     try {
       resultHandlers = await resultsPromise;
-      logger.debug('Search results received');
-    } catch (error) {
-      return err(
-        new TimeoutError('Search results did not arrive within timeout', {
-          query,
-          timeout: 10000,
-        })
-      );
+      ctx.logger.debug('Search results received');
+    } catch {
+      return err(new TimeoutError('Search results did not arrive within timeout', {
+        query: ctx.query,
+        timeout: 10000,
+      }));
     }
 
-    // Parse the results
+    // Parse results
     const parseResult = this.parser.parseTellMeResults(resultHandlers);
     if (!isOk(parseResult)) {
       return err(parseResult.error);
     }
 
     const pages = parseResult.value;
-    logger.info({ query, count: pages.length }, 'Search completed');
+    ctx.logger.info({ query: ctx.query, count: pages.length }, 'Search completed');
 
-    // Convert to search results format
-    const results: SearchResult[] = pages.map(page => ({
+    return ok(pages.map(page => ({
       id: page.id,
       caption: page.caption,
       type: this.determinePageType(page.caption, page.badges),
       tooltip: page.tooltip,
       badges: page.badges,
       navigable: true,
-    }));
+    })));
+  }
 
-    // Close the dialog
+  /** Close the Tell Me dialog */
+  private async closeDialog(connection: IBCConnection): Promise<void> {
     await connection.invoke({
       interactionName: 'DialogCancel',
       namedParameters: {},
       controlPath: 'dialog:c[0]',
       callbackId: '0',
-    });
-
-    return ok({
-      query,
-      results,
-      totalCount: results.length,
-      sessionId,
     });
   }
 

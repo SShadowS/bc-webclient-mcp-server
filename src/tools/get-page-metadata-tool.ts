@@ -21,16 +21,20 @@ import type {
   GetPageMetadataInput,
   GetPageMetadataOutput,
 } from '../types/mcp-types.js';
-import type { Handler } from '../types/bc-types.js';
+import type { Handler, RepeaterMetadata } from '../types/bc-types.js';
 import { PageMetadataParser } from '../parsers/page-metadata-parser.js';
+import { ControlParser } from '../parsers/control-parser.js';
 import { decompressResponse, extractServerIds, filterFormsToLoad, createLoadFormInteraction } from '../util/loadform-helpers.js';
 import { ConnectionManager } from '../connection/connection-manager.js';
 import { ProtocolError } from '../core/errors.js';
 import { newId } from '../core/id.js';
+import { PageStateManager } from '../state/page-state-manager.js';
 import { createToolLogger } from '../core/logger.js';
 import { PageContextCache } from '../services/page-context-cache.js';
+import { extractColumnsFromHandlers } from '../protocol/rcc-extractor.js';
 import { z } from 'zod';
 import { PageIdSchema, PageContextIdSchema } from '../validation/schemas.js';
+import { createWorkflowIntegration } from '../services/workflow-integration.js';
 
 /**
  * Zod schema for get_page_metadata tool input.
@@ -42,6 +46,7 @@ const GetPageMetadataInputZodSchema = z.object({
   pageContextId: PageContextIdSchema.optional(),
   bookmark: z.string().optional(),
   filters: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+  workflowId: z.string().optional(),
 }).refine(
   (data) => data.pageId !== undefined || data.pageContextId !== undefined,
   {
@@ -102,6 +107,11 @@ export class GetPageMetadataTool extends BaseMCPTool {
           type: ['string', 'number'],
         },
       },
+      workflowId: {
+        type: 'string',
+        description: 'Optional workflow ID to track this operation as part of a multi-step business process. ' +
+          'When provided, the tool automatically records the operation in the workflow state.',
+      },
     },
     // At least one of pageId or pageContextId is required
   };
@@ -130,7 +140,10 @@ export class GetPageMetadataTool extends BaseMCPTool {
    */
   protected async executeInternal(input: unknown): Promise<Result<GetPageMetadataOutput, BCError>> {
     // Input is already validated by BaseMCPTool with Zod
-    let { pageId, pageContextId: inputPageContextId, filters, bookmark } = input as GetPageMetadataInputValidated;
+    let { pageId, pageContextId: inputPageContextId, filters, bookmark, workflowId } = input as GetPageMetadataInputValidated;
+
+    // Create workflow integration if workflowId provided
+    const workflow = createWorkflowIntegration(workflowId);
 
     // Track existing formIds from pageContext to preserve them (avoid overwriting with getAllOpenFormIds)
     let existingFormIds: string[] | null = null;
@@ -233,6 +246,9 @@ export class GetPageMetadataTool extends BaseMCPTool {
         );
       }
     }
+
+    // Create pageContextId early for cache operations (will be the final one if not reusing)
+    const workingPageContextId = inputPageContextId || `${actualSessionId}:page:${pageId}:${Date.now()}`;
 
     // If caller provided an existing pageContextId, try to reuse cached metadata instead of reopening the page
     let allHandlers: Handler[] = [];
@@ -461,7 +477,12 @@ export class GetPageMetadataTool extends BaseMCPTool {
             const asyncHandlers = await asyncHandlersPromise;
             if (asyncHandlers && Array.isArray(asyncHandlers)) {
               logger.info(`Received ${asyncHandlers.length} async handlers with list data`);
+
               allHandlers.push(...asyncHandlers);
+
+              // NEW: Extract and enrich column metadata from LoadForm responses
+              // This is where BC sends progressive RCC (Repeater Column Control) messages
+              await this.enrichColumnsFromHandlers(workingPageContextId, asyncHandlers);
             } else {
               logger.info(`No async list data received (predicate returned no data)`);
             }
@@ -487,6 +508,35 @@ export class GetPageMetadataTool extends BaseMCPTool {
 
     const metadata = metadataResult.value;
 
+    // CHILD FORM REPEATER EXTRACTION (Phase 7)
+    // Extract repeaters from all LogicalForms (main + child forms loaded via LoadForm)
+    logger.info(`Extracting repeaters from all forms (main + children)...`);
+    const allForms = this.extractAllLogicalForms(allHandlers);
+    logger.info(`Found ${allForms.length} LogicalForms to scan for repeaters`);
+
+    const controlParser = new ControlParser();
+    const allRepeaters: Array<RepeaterMetadata & { formId: string }> = [];
+
+    for (const { formId, logicalForm } of allForms) {
+      const controls = controlParser.walkControls(logicalForm);
+      const repeaters = controlParser.extractRepeaters(controls);
+
+      if (repeaters.length > 0) {
+        logger.info(`Form ${formId} (${logicalForm.Caption || 'no caption'}): ${repeaters.length} repeaters`);
+        for (const repeater of repeaters) {
+          allRepeaters.push({
+            ...repeater,
+            formId, // Tag with source form for routing
+          });
+          logger.info(`  - ${repeater.caption || repeater.name || 'unnamed'} (${repeater.columns.length} columns)`);
+        }
+      } else {
+        logger.info(`Form ${formId} (${logicalForm.Caption || 'no caption'}): 0 repeaters`);
+      }
+    }
+
+    logger.info(`Total repeaters found across all forms: ${allRepeaters.length}`);
+
     // Generate unique pageContextId that combines session + form instance
     const pageContextId = `${actualSessionId}:page:${metadata.pageId}:${Date.now()}`;
 
@@ -511,6 +561,8 @@ export class GetPageMetadataTool extends BaseMCPTool {
       pageType, // Cache page type
       logicalForm, // Cache LogicalForm for read_page_data
       handlers: allHandlers, // Cache all handlers (including LoadForm data) for list extraction
+      repeaters: allRepeaters, // Cache all repeaters (main + child forms) for subpage resolution
+      childForms: allForms, // Cache child form LogicalForms for write_page_data routing
     };
 
     // Store page context in memory (ConnectionManager)
@@ -522,13 +574,52 @@ export class GetPageMetadataTool extends BaseMCPTool {
     }
 
     // PERSIST to disk (survives MCP server restarts)
+    logger.error(`[DEBUG] About to persist pageContext to cache: ${pageContextId}`);
     try {
       const cache = PageContextCache.getInstance();
+      logger.error(`[DEBUG] Got cache instance, calling save()...`);
       await cache.save(pageContextId, pageContextData);
-      logger.debug(`Persisted pageContext to cache: ${pageContextId}`);
+      logger.error(`[DEBUG] cache.save() completed successfully`);
+      logger.info(`Persisted pageContext to cache: ${pageContextId}`);
     } catch (error) {
       // Non-fatal: continue even if cache save fails
+      logger.error(`[DEBUG] ERROR persisting pageContext: ${error}`);
       logger.warn(`Failed to persist pageContext: ${error}`);
+    }
+
+    // PHASE 1: Initialize PageState from LogicalForm + handlers
+    // This creates the stateful representation that will be kept up-to-date via message processing
+    // ✅ RE-ENABLED: Bug fixed in page-context-cache.ts setPageState() method
+    // Root cause was jsonReplacer corrupting LogicalForm - now serializes PageState separately
+    try {
+      logger.info(`Initializing PageState for pageContext: ${pageContextId}`);
+      const stateManager = new PageStateManager();
+
+      // Initialize state from LogicalForm (structure + initial state)
+      const pageState = stateManager.initFromLoadForm(
+        logicalForm,
+        metadata.pageId,
+        pageType as 'Card' | 'List' | 'Document'
+      );
+      logger.info(`PageState initialized with ${pageState.fields.size} fields, ${pageState.repeaters.size} repeaters`);
+
+      // Apply all accumulated handlers to populate initial data (rows, column metadata, etc.)
+      stateManager.applyMessages(pageState, allHandlers as any);
+      logger.info(`Applied ${allHandlers.length} handlers to PageState`);
+
+      // Log repeater status for diagnostics
+      for (const [key, repeater] of pageState.repeaters.entries()) {
+        logger.info(`  Repeater "${repeater.name}": ${repeater.rows.size} rows loaded, totalRowCount=${repeater.totalRowCount || 'unknown'}, columns=${repeater.columns.size}`);
+      }
+
+      // Save PageState to cache (dual-state approach)
+      const cache = PageContextCache.getInstance();
+      await cache.setPageState(pageContextId, pageState);
+      logger.info(`PageState saved to cache for ${pageContextId}`);
+    } catch (error) {
+      // Non-fatal: PageState is optional in Phase 1
+      logger.warn(`Failed to initialize PageState: ${error}`);
+      logger.warn(`  This is non-fatal in Phase 1 - tools will fall back to LogicalForm`);
     }
 
     // NOTE: Filter-based navigation for Card/Document pages is now handled by
@@ -557,10 +648,32 @@ export class GetPageMetadataTool extends BaseMCPTool {
         controlPath: action.controlPath, // Required for InvokeAction
         systemAction: action.systemAction, // BC numeric action code
       })),
+      repeaters: allRepeaters.map(repeater => ({
+        name: repeater.name || repeater.caption || 'Unnamed',
+        caption: repeater.caption || repeater.name || 'No caption',
+        controlPath: repeater.controlPath,
+        formId: repeater.formId, // Source form for routing
+        columns: repeater.columns.map(col => ({
+          name: col.designName || col.caption || 'Unnamed',
+          caption: col.caption || col.designName || 'No caption',
+          controlPath: col.controlPath,
+        })),
+      })),
     };
 
     logger.info(`Parsed metadata for Page "${pageIdStr}": caption="${metadata.caption}", pageId="${metadata.pageId}"`);
     logger.info(`Generated pageContextId: ${pageContextId}`);
+
+    // Update workflow state with current page (if participating in workflow)
+    if (workflow) {
+      workflow.updateCurrentPage(pageIdStr);
+      // Record successful operation
+      workflow.recordOperation(
+        'get_page_metadata',
+        { pageId: pageIdStr, pageContextId: inputPageContextId, bookmark, filters },
+        { success: true, data: { pageContextId, pageType: output.pageType, fieldCount: output.fields.length } }
+      );
+    }
 
     // DON'T close forms - keep them open for true user simulation!
     // Forms stay open across requests, just like a real BC user session
@@ -704,5 +817,83 @@ export class GetPageMetadataTool extends BaseMCPTool {
       }
     }
     return null;
+  }
+
+  /**
+   * Extract ALL LogicalForms from handlers (main form + child forms).
+   *
+   * Each LogicalForm comes from a FormToShow event.
+   * Returns array of {formId, logicalForm} for repeater extraction.
+   */
+  private extractAllLogicalForms(handlers: readonly Handler[]): Array<{ formId: string; logicalForm: any }> {
+    const forms: Array<{ formId: string; logicalForm: any }> = [];
+
+    for (const handler of handlers) {
+      if (
+        handler.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+        handler.parameters?.[0] === 'FormToShow'
+      ) {
+        const logicalForm = handler.parameters[1];
+        if (logicalForm?.ServerId) {
+          forms.push({
+            formId: logicalForm.ServerId,
+            logicalForm,
+          });
+        }
+      }
+    }
+
+    return forms;
+  }
+
+  /**
+   * Extract column metadata from handlers and enrich cached repeaters.
+   * Called after LoadForm responses to progressively discover column data.
+   *
+   * @param pageContextId - The page context to enrich
+   * @param handlers - Handlers from BC response (may contain RCC messages)
+   */
+  private async enrichColumnsFromHandlers(
+    pageContextId: string,
+    handlers: readonly unknown[]
+  ): Promise<void> {
+    const logger = createToolLogger('get_page_metadata', pageContextId);
+    logger.info(`[ENRICH] enrichColumnsFromHandlers called with ${handlers.length} handlers`);
+
+    try {
+      // Extract column metadata using rcc-extractor
+      const discovered = extractColumnsFromHandlers(handlers as any[]);
+      logger.info(`[ENRICH] extractColumnsFromHandlers returned ${discovered.length} repeater(s)`);
+
+      if (discovered.length === 0) {
+        logger.info(`[ENRICH] No columns discovered, returning early`);
+        return; // No columns found in this response
+      }
+
+      logger.info(`[ENRICH] Discovered ${discovered.length} repeater(s) with columns`);
+
+      // Enrich each discovered repeater in the cache
+      const cache = PageContextCache.getInstance();
+      for (const repeater of discovered) {
+        const success = await cache.enrichRepeaterColumns(
+          pageContextId,
+          repeater.formId,
+          repeater.columns as any
+        );
+
+        if (success) {
+          logger.info(
+            `Enriched repeater "${repeater.caption}" (formId=${repeater.formId}) with ${repeater.columns.length} columns`
+          );
+        } else {
+          logger.warn(
+            `Failed to enrich repeater formId=${repeater.formId} (not found in cache)`
+          );
+        }
+      }
+    } catch (error) {
+      logger.warn(`[ENRICH] Column enrichment failed: ${error}`);
+      // Don't throw - column enrichment is opportunistic
+    }
   }
 }

@@ -35,6 +35,50 @@ export interface BCErrorBody {
   ExceptionType?: string;
 }
 
+/** Error factory function type */
+type ErrorFactory = (message: string, context: Record<string, unknown>) => BCError;
+
+/** Status code to error factory mapping */
+const STATUS_ERROR_MAP: Record<number, { factory: ErrorFactory; defaultMessage: string; contextExtras?: Record<string, unknown> }> = {
+  401: { factory: (m, c) => new AuthenticationError(m, c), defaultMessage: 'Authentication failed' },
+  403: { factory: (m, c) => new PermissionDeniedError(m, undefined, undefined, c), defaultMessage: 'Permission denied' },
+  408: { factory: (m, c) => new TimeoutError(m, c), defaultMessage: 'Request timeout' },
+  409: { factory: (m, c) => new BusinessLogicError(m, c), defaultMessage: 'Conflict - resource state conflict' },
+  412: { factory: (m, c) => new BusinessLogicError(m, c), defaultMessage: 'Precondition failed' },
+  429: { factory: (m, c) => new NetworkError(m, c), defaultMessage: 'Too many requests - rate limited', contextExtras: { rateLimited: true } },
+  500: { factory: (m, c) => new InternalError(m, c), defaultMessage: 'BC server internal error' },
+  502: { factory: (m, c) => new ConnectionError(m, c), defaultMessage: 'Bad gateway - BC server unreachable', contextExtras: { gatewayError: true } },
+  503: { factory: (m, c) => new ConnectionError(m, c), defaultMessage: 'Service unavailable - BC server temporarily unavailable', contextExtras: { serviceUnavailable: true } },
+  504: { factory: (m, c) => new TimeoutError(m, c), defaultMessage: 'Gateway timeout - BC server did not respond in time', contextExtras: { gatewayTimeout: true } },
+  400: { factory: (m, c) => new ProtocolError(m, c), defaultMessage: 'Bad request - invalid request format' },
+  405: { factory: (m, c) => new ProtocolError(m, c), defaultMessage: 'Method not allowed' },
+  415: { factory: (m, c) => new ProtocolError(m, c), defaultMessage: 'Unsupported media type' },
+};
+
+/** Handle 404 with page/record context detection */
+function throw404Error(message: string | undefined, context: Record<string, unknown>): never {
+  const notFoundMessage = message || 'Resource not found';
+  if (context.pageId) {
+    throw new PageNotFoundError(String(context.pageId), notFoundMessage, context);
+  }
+  throw new RecordNotFoundError(
+    context.recordId ? String(context.recordId) : 'unknown',
+    notFoundMessage,
+    context
+  );
+}
+
+/** Handle unknown status codes */
+function throwDefaultError(status: number, message: string | undefined, context: Record<string, unknown>): never {
+  if (status >= 400 && status < 500) {
+    throw new ProtocolError(message || `Client error: ${status}`, context);
+  }
+  if (status >= 500) {
+    throw new InternalError(message || `Server error: ${status}`, context);
+  }
+  throw new InternalError(message || `Unexpected HTTP status: ${status}`, context);
+}
+
 /**
  * Normalizes BC HTTP error into a typed BCError.
  * Throws the appropriate BCError subclass - does not return.
@@ -49,149 +93,23 @@ export function normalizeBCError(
   body?: BCErrorBody,
   context?: Record<string, unknown>
 ): never {
-  // Extract message from various BC error body formats
   const message = extractErrorMessage(body);
-  const errorContext = {
-    ...context,
-    httpStatus: status,
-    errorBody: body,
-  };
+  const errorContext = { ...context, httpStatus: status, errorBody: body };
 
-  // Map HTTP status to error type
-  switch (status) {
-    // Authentication
-    case 401:
-      throw new AuthenticationError(
-        message || 'Authentication failed',
-        errorContext
-      );
-
-    // Authorization
-    case 403:
-      throw new PermissionDeniedError(
-        message || 'Permission denied',
-        undefined,
-        undefined,
-        errorContext
-      );
-
-    // Not Found
-    case 404:
-      // Try to determine if it's a page or record
-      const notFoundMessage = message || 'Resource not found';
-      if (context?.pageId) {
-        throw new PageNotFoundError(
-          String(context.pageId),
-          notFoundMessage,
-          errorContext
-        );
-      } else if (context?.recordId) {
-        throw new RecordNotFoundError(
-          String(context.recordId),
-          notFoundMessage,
-          errorContext
-        );
-      } else {
-        throw new RecordNotFoundError(
-          'unknown',
-          notFoundMessage,
-          errorContext
-        );
-      }
-
-    // Request Timeout
-    case 408:
-      throw new TimeoutError(
-        message || 'Request timeout',
-        errorContext
-      );
-
-    // Conflict
-    case 409:
-      throw new BusinessLogicError(
-        message || 'Conflict - resource state conflict',
-        errorContext
-      );
-
-    // Precondition Failed
-    case 412:
-      throw new BusinessLogicError(
-        message || 'Precondition failed',
-        errorContext
-      );
-
-    // Rate Limiting
-    case 429:
-      throw new NetworkError(
-        message || 'Too many requests - rate limited',
-        { ...errorContext, rateLimited: true }
-      );
-
-    // Server Errors
-    case 500:
-      throw new InternalError(
-        message || 'BC server internal error',
-        errorContext
-      );
-
-    case 502:
-      throw new ConnectionError(
-        message || 'Bad gateway - BC server unreachable',
-        { ...errorContext, gatewayError: true }
-      );
-
-    case 503:
-      throw new ConnectionError(
-        message || 'Service unavailable - BC server temporarily unavailable',
-        { ...errorContext, serviceUnavailable: true }
-      );
-
-    case 504:
-      throw new TimeoutError(
-        message || 'Gateway timeout - BC server did not respond in time',
-        { ...errorContext, gatewayTimeout: true }
-      );
-
-    // Bad Request
-    case 400:
-      throw new ProtocolError(
-        message || 'Bad request - invalid request format',
-        errorContext
-      );
-
-    // Method Not Allowed
-    case 405:
-      throw new ProtocolError(
-        message || 'Method not allowed',
-        errorContext
-      );
-
-    // Unsupported Media Type
-    case 415:
-      throw new ProtocolError(
-        message || 'Unsupported media type',
-        errorContext
-      );
-
-    // Default: Map other 4xx to ProtocolError, 5xx to InternalError
-    default:
-      if (status >= 400 && status < 500) {
-        throw new ProtocolError(
-          message || `Client error: ${status}`,
-          errorContext
-        );
-      } else if (status >= 500) {
-        throw new InternalError(
-          message || `Server error: ${status}`,
-          errorContext
-        );
-      } else {
-        throw new InternalError(
-          message || `Unexpected HTTP status: ${status}`,
-          errorContext
-        );
-      }
+  // Handle 404 specially (needs context detection)
+  if (status === 404) {
+    throw404Error(message, errorContext);
   }
+
+  // Look up in status map
+  const mapping = STATUS_ERROR_MAP[status];
+  if (mapping) {
+    const fullContext = mapping.contextExtras ? { ...errorContext, ...mapping.contextExtras } : errorContext;
+    throw mapping.factory(message || mapping.defaultMessage, fullContext);
+  }
+
+  // Default handling for unmapped status codes
+  throwDefaultError(status, message, errorContext);
 }
 
 /**

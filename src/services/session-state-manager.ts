@@ -22,11 +22,26 @@ export interface OpenPageInfo {
 }
 
 /**
+ * Information about an active dialog in a session.
+ */
+export interface DialogInfo {
+  readonly dialogId: string; // Dialog form ID (ServerId from BC)
+  readonly caption: string;
+  readonly designName?: string;
+  readonly isTaskDialog: boolean;
+  readonly isModal: boolean;
+  readonly originatingFormId?: string; // Form that triggered the dialog
+  readonly originatingControlPath?: string;
+  readonly openedAt: string; // ISO 8601 timestamp
+}
+
+/**
  * Information about a BC session.
  */
 export interface SessionInfo {
   readonly sessionId: string;
   readonly openPages: OpenPageInfo[];
+  readonly activeDialogs: DialogInfo[]; // Stack of active dialogs (last = topmost)
 }
 
 /**
@@ -72,7 +87,7 @@ export class SessionStateManager {
    */
   public createSession(): SessionInfo {
     const sessionId = uuidv4();
-    const session: SessionInfo = { sessionId, openPages: [] };
+    const session: SessionInfo = { sessionId, openPages: [], activeDialogs: [] };
     this.sessions.set(sessionId, session);
     this.logger?.debug('Created new BC session', { sessionId });
     return session;
@@ -89,7 +104,7 @@ export class SessionStateManager {
       return this.sessions.get(sessionId)!;
     }
 
-    const session: SessionInfo = { sessionId, openPages: [] };
+    const session: SessionInfo = { sessionId, openPages: [], activeDialogs: [] };
     this.sessions.set(sessionId, session);
     this.logger?.debug('Created BC session with provided ID', { sessionId });
     return session;
@@ -146,6 +161,7 @@ export class SessionStateManager {
     const updatedSession: SessionInfo = {
       sessionId: session.sessionId,
       openPages: [...session.openPages, openPage],
+      activeDialogs: session.activeDialogs,
     };
 
     this.sessions.set(sessionId, updatedSession);
@@ -171,6 +187,7 @@ export class SessionStateManager {
         const updatedSession: SessionInfo = {
           sessionId: session.sessionId,
           openPages: updatedPages,
+          activeDialogs: session.activeDialogs,
         };
         this.sessions.set(sessionId, updatedSession);
 
@@ -203,8 +220,126 @@ export class SessionStateManager {
       sessions: Array.from(this.sessions.values()).map((s) => ({
         sessionId: s.sessionId,
         openPages: [...s.openPages],
+        activeDialogs: [...s.activeDialogs],
       })),
     };
+  }
+
+  /**
+   * Adds an active dialog to a session.
+   * If the session doesn't exist, it will be created.
+   * Dialogs are stacked (last added is topmost).
+   * @param sessionId - The session ID
+   * @param dialogInfo - Dialog information
+   */
+  public addDialog(sessionId: string, dialogInfo: Omit<DialogInfo, 'openedAt'>): void {
+    let session = this.sessions.get(sessionId);
+    if (!session) {
+      session = this.createSessionWithId(sessionId);
+    }
+
+    // Check if dialog is already tracked
+    const existing = session.activeDialogs.find((d) => d.dialogId === dialogInfo.dialogId);
+    if (existing) {
+      this.logger?.debug('Dialog already tracked in session', {
+        sessionId,
+        dialogId: dialogInfo.dialogId,
+      });
+      return;
+    }
+
+    // Add the dialog with timestamp
+    const dialog: DialogInfo = {
+      ...dialogInfo,
+      openedAt: new Date().toISOString(),
+    };
+
+    // Create a new session object with updated dialogs (immutable pattern)
+    const updatedSession: SessionInfo = {
+      sessionId: session.sessionId,
+      openPages: session.openPages,
+      activeDialogs: [...session.activeDialogs, dialog],
+    };
+
+    this.sessions.set(sessionId, updatedSession);
+
+    this.logger?.debug('Added dialog to session', {
+      sessionId,
+      dialogId: dialogInfo.dialogId,
+      caption: dialogInfo.caption,
+    });
+  }
+
+  /**
+   * Closes a dialog in a session.
+   * If dialogId is not provided, closes the topmost dialog.
+   * @param sessionId - The session ID
+   * @param dialogId - Optional dialog ID to close (defaults to topmost)
+   */
+  public closeDialog(sessionId: string, dialogId?: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      this.logger?.debug('Session not found', { sessionId });
+      return;
+    }
+
+    if (session.activeDialogs.length === 0) {
+      this.logger?.debug('No active dialogs in session', { sessionId });
+      return;
+    }
+
+    let updatedDialogs: DialogInfo[];
+    if (dialogId) {
+      // Close specific dialog
+      updatedDialogs = session.activeDialogs.filter((d) => d.dialogId !== dialogId);
+    } else {
+      // Close topmost dialog (last in array)
+      updatedDialogs = session.activeDialogs.slice(0, -1);
+    }
+
+    const updatedSession: SessionInfo = {
+      sessionId: session.sessionId,
+      openPages: session.openPages,
+      activeDialogs: updatedDialogs,
+    };
+
+    this.sessions.set(sessionId, updatedSession);
+
+    this.logger?.debug('Closed dialog', { sessionId, dialogId });
+  }
+
+  /**
+   * Gets the topmost (currently active) dialog for a session.
+   * @param sessionId - The session ID
+   * @returns The topmost dialog or undefined if no dialogs
+   */
+  public getActiveDialog(sessionId: string): DialogInfo | undefined {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.activeDialogs.length === 0) {
+      return undefined;
+    }
+
+    return session.activeDialogs[session.activeDialogs.length - 1];
+  }
+
+  /**
+   * Gets all active dialogs for a session (in stack order).
+   * @param sessionId - The session ID
+   * @returns Array of dialogs (last = topmost)
+   */
+  public getDialogs(sessionId: string): DialogInfo[] {
+    const session = this.sessions.get(sessionId);
+    return session ? [...session.activeDialogs] : [];
+  }
+
+  /**
+   * Checks if a session has any active dialogs.
+   * @param sessionId - The session ID
+   * @returns True if session has active dialogs
+   */
+  public hasDialogs(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    return session ? session.activeDialogs.length > 0 : false;
   }
 
   /**

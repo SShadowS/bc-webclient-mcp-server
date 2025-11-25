@@ -461,6 +461,29 @@ export interface ActionMetadata {
   readonly controlPath?: string; // BC control path (e.g., "server:c[3]/ha[1]") for invoking the action
 }
 
+/**
+ * Column metadata for repeater controls.
+ * Represents a single column in a subpage/line list (e.g., Sales Line fields).
+ */
+export interface ColumnMetadata {
+  readonly caption?: string;
+  readonly designName?: string;
+  readonly controlPath?: string;  // Full path for SaveValue (e.g., "server:c[5]/rc[1]/c[2]"). Undefined if not enriched yet.
+  readonly columnBinderPath?: string;  // For filtering (Pattern 7)
+}
+
+/**
+ * Repeater control metadata.
+ * Represents subpages containing line items (e.g., Sales Lines on Sales Order).
+ */
+export interface RepeaterMetadata {
+  readonly controlPath: string;  // Repeater control path (e.g., "server:c[5]/rc[1]")
+  readonly caption?: string;  // Subpage caption (e.g., "Sales Lines")
+  readonly name?: string;  // Design name (e.g., "SalesLines")
+  readonly formId?: string;  // FormId from rc/BindablePagePartControl (for linking with RCC messages)
+  readonly columns: readonly ColumnMetadata[];
+}
+
 export interface PageMetadata {
   readonly pageId: string;
   readonly caption: string;
@@ -470,5 +493,6 @@ export interface PageMetadata {
   readonly appVersion?: string;
   readonly fields: readonly FieldMetadata[];
   readonly actions: readonly ActionMetadata[];
+  readonly repeaters: readonly RepeaterMetadata[];  // Subpages containing line items
   readonly controlCount: number;
 }

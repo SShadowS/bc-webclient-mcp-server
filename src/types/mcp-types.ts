@@ -121,16 +121,16 @@ export interface FilterListInput {
 }
 
 export interface HandleDialogInput {
-  readonly pageContextId?: string; // Optional: reuse existing page context
-  readonly dialogId?: string; // Optional: specific dialog ID if known
-  readonly match?: {
-    titleContains?: string;
-    exactTitle?: string;
+  readonly pageContextId: string; // Required: page context to identify session
+  readonly selection?: {
+    bookmark?: string; // Currently only bookmark is supported (rowNumber/rowFilter reserved for future)
+    rowNumber?: number; // Reserved for future implementation
+    rowFilter?: Record<string, any>; // Reserved for future implementation
   };
-  readonly fieldValues?: Record<string, string | number | boolean>;
-  readonly action: string;
+  readonly action: string; // "OK" or "Cancel"
   readonly wait?: 'appear' | 'existing'; // Wait for dialog to appear or assume existing
-  readonly timeoutMs?: number;
+  readonly timeoutMs?: number; // Timeout in milliseconds for wait="appear" (default: 5000)
+  readonly workflowId?: string; // Optional: workflow ID for tracking dialog interactions
 }
 
 export interface UpdateRecordInput {
@@ -185,6 +185,33 @@ export interface GetPageMetadataOutput {
   readonly pageType: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report';
   readonly fields: readonly FieldDescription[];
   readonly actions: readonly ActionDescription[];
+  readonly repeaters: readonly RepeaterDescription[]; // Subpages/repeaters from main + child forms
+}
+
+export interface RepeaterDescription {
+  readonly name: string;
+  readonly caption: string;
+  readonly controlPath: string;
+  readonly formId: string; // Source form ID for routing subpage operations
+  readonly columns: readonly RepeaterColumnDescription[];
+}
+
+/**
+ * Repeater column metadata.
+ *
+ * Note: Columns may be progressively enriched as BC sends 'rcc' (Repeater Column Control)
+ * messages during grid realization (e.g., when Lines/Edit actions are invoked or data is read).
+ * Initial metadata from OpenForm/LoadForm may have empty columns array.
+ */
+export interface RepeaterColumnDescription {
+  readonly name: string; // DesignName from rcc
+  readonly caption: string;
+  readonly controlPath?: string;
+  readonly columnBinder?: string; // ColumnBinder.Name from rcc - used for data binding
+  readonly editable?: boolean; // Whether the column is editable
+  readonly tableEditable?: boolean; // Whether editable in table view
+  readonly horizontalAlignment?: 'Left' | 'Right' | 'Center'; // From Formatter
+  readonly controlIdentifier?: string; // Unique ID from BC
 }
 
 export interface FieldDescription {
@@ -272,17 +299,13 @@ export interface FilterListOutput {
 
 export interface HandleDialogOutput {
   readonly success: boolean;
-  readonly pageContextId?: string; // If dialog was on a page
-  readonly result: 'Closed' | 'Navigated' | 'DialogOpened';
-  readonly action: string;
-  readonly fieldsSet?: readonly string[];
-  readonly navigation?: {
-    pageContextId: string;
-    pageId: string;
-    caption: string;
-  };
-  readonly validationMessages?: readonly string[];
-  readonly message?: string;
+  readonly pageContextId: string; // Page context where dialog appeared
+  readonly sessionId: string; // BC session ID
+  readonly dialogId: string; // Dialog form ID (ServerId)
+  readonly result: 'Closed'; // v1: Always 'Closed' (navigation/validation detection reserved for future)
+  readonly action: string; // "OK" or "Cancel"
+  readonly selectedBookmark?: string; // Bookmark of selected row (if selection was provided)
+  readonly message?: string; // Human-readable result message
 }
 
 export interface UpdateRecordOutput {

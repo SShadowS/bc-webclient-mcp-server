@@ -35,11 +35,11 @@ export interface TimeoutsConfig {
  */
 export const defaultTimeouts: TimeoutsConfig = {
   connectTimeoutMs: 10_000, // 10 seconds - matches current hardcoded value
-  rpcTimeoutMs: 30_000, // 30 seconds - matches current hardcoded value
+  rpcTimeoutMs: 120_000, // 120 seconds - increased for BC heavy operations
   handlerWaitTimeoutMs: 2_500, // 2.5 seconds - matches current default
-  readOpTimeoutMs: 30_000, // 30 seconds - same as rpcTimeout
-  writeOpTimeoutMs: 45_000, // 45 seconds - writes may take longer
-  searchTimeoutMs: 30_000, // 30 seconds - Tell Me search with dialog
+  readOpTimeoutMs: 120_000, // 120 seconds - increased for complex queries/filters
+  writeOpTimeoutMs: 120_000, // 120 seconds - increased for document operations
+  searchTimeoutMs: 120_000, // 120 seconds - Tell Me search with dialog
 };
 
 /**

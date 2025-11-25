@@ -209,6 +209,10 @@ export const WritePageDataInputSchema = z.object({
   fields: FieldUpdatesSchema,
   stopOnError: BooleanSchema.optional().default(true),
   immediateValidation: BooleanSchema.optional().default(true),
+  // Line/subpage operations (NEW)
+  subpage: z.string().trim().optional(),
+  lineBookmark: z.string().trim().optional(),
+  lineNo: z.coerce.number().int().min(1).optional(),
 });
 
 export type WritePageDataInput = z.infer<typeof WritePageDataInputSchema>;

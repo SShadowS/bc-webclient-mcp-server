@@ -215,6 +215,24 @@ export class ConnectionManager {
   }
 
   /**
+   * Find session ID by connection instance.
+   *
+   * Used by global dialog listening in BCPageConnection to track dialogs
+   * against the correct session.
+   *
+   * @param connection - Connection instance to find (accepts any IBCConnection)
+   * @returns Session ID if found, null otherwise
+   */
+  public getSessionIdByConnection(connection: unknown): string | null {
+    for (const session of this.sessions.values()) {
+      if (session.connection === connection) {
+        return session.sessionId;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Register an open form in the session's form registry.
    *
    * This allows tools to check if a page is already open before
