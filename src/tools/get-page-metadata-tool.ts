@@ -21,7 +21,49 @@ import type {
   GetPageMetadataInput,
   GetPageMetadataOutput,
 } from '../types/mcp-types.js';
-import type { Handler, RepeaterMetadata } from '../types/bc-types.js';
+import type {
+  Handler, RepeaterMetadata, LogicalForm,
+  LogicalClientEventRaisingHandler, LogicalClientChangeHandler
+} from '../types/bc-types.js';
+import type { Change, DataRefreshChange } from '../types/bc-protocol-types.js';
+import { isDataRefreshChange } from '../types/bc-protocol-types.js';
+
+/**
+ * PageContext structure stored in connection
+ */
+interface PageContext {
+  sessionId: string;
+  pageId: string;
+  formIds: string[];
+  openedAt: number;
+  pageType?: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report';
+  logicalForm?: LogicalForm | null;
+  handlers: Handler[];
+  repeaters?: RepeaterMetadata[];
+  childForms?: Array<{ formId: string; logicalForm: LogicalForm }>;
+}
+
+/**
+ * Connection type with pageContexts map
+ */
+interface ConnectionWithPageContexts extends IBCConnection {
+  pageContexts?: Map<string, PageContext>;
+}
+
+/**
+ * Type guard for LogicalClientEventRaisingHandler
+ */
+function isLogicalClientEventRaisingHandler(handler: Handler): handler is LogicalClientEventRaisingHandler {
+  return handler.handlerType === 'DN.LogicalClientEventRaisingHandler';
+}
+
+/**
+ * Type guard for LogicalClientChangeHandler
+ */
+function isLogicalClientChangeHandler(handler: Handler): handler is LogicalClientChangeHandler {
+  return handler.handlerType === 'DN.LogicalClientChangeHandler';
+}
+
 import { PageMetadataParser } from '../parsers/page-metadata-parser.js';
 import { ControlParser } from '../parsers/control-parser.js';
 import { decompressResponse, extractServerIds, filterFormsToLoad, createLoadFormInteraction } from '../util/loadform-helpers.js';
@@ -29,6 +71,7 @@ import { ConnectionManager } from '../connection/connection-manager.js';
 import { ProtocolError } from '../core/errors.js';
 import { newId } from '../core/id.js';
 import { PageStateManager } from '../state/page-state-manager.js';
+import type { BcHandlerMessage } from '../state/page-state.js';
 import { createToolLogger } from '../core/logger.js';
 import { PageContextCache } from '../services/page-context-cache.js';
 import { extractColumnsFromHandlers } from '../protocol/rcc-extractor.js';
@@ -253,7 +296,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
     // If caller provided an existing pageContextId, try to reuse cached metadata instead of reopening the page
     let allHandlers: Handler[] = [];
     let reusedFromContext = false;
-    let reusedLogicalForm: any | null = null;
+    let reusedLogicalForm: LogicalForm | null = null;
     let reusedPageType: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report' | undefined;
 
     if (inputPageContextId) {
@@ -286,7 +329,8 @@ export class GetPageMetadataTool extends BaseMCPTool {
         );
       } else {
         // Try in-memory context first
-        let pageContext = (connection as any).pageContexts?.get(inputPageContextId);
+        const connWithContexts = connection as ConnectionWithPageContexts;
+        let pageContext = connWithContexts.pageContexts?.get(inputPageContextId);
 
         // If not in memory, try persistent cache
         if (!pageContext) {
@@ -296,11 +340,11 @@ export class GetPageMetadataTool extends BaseMCPTool {
             const cachedContext = await cache.load(inputPageContextId);
             if (cachedContext) {
               logger.info(`Restored pageContext from cache: ${inputPageContextId}`);
-              if (!(connection as any).pageContexts) {
-                (connection as any).pageContexts = new Map();
+              if (!connWithContexts.pageContexts) {
+                connWithContexts.pageContexts = new Map();
               }
-              (connection as any).pageContexts.set(inputPageContextId, cachedContext);
-              pageContext = cachedContext;
+              connWithContexts.pageContexts.set(inputPageContextId, cachedContext as PageContext);
+              pageContext = cachedContext as PageContext;
             }
           } catch (error) {
             logger.warn(`Failed to load pageContext from cache: ${error}`);
@@ -443,13 +487,18 @@ export class GetPageMetadataTool extends BaseMCPTool {
         // Set up listener for async Message events BEFORE calling LoadForm
         // BC sends list data in Message events, not in LoadForm responses
         const hasListData = (handlers: Handler[]): { matched: boolean; data?: Handler[] } => {
-          const matched = handlers.some((h: any) =>
-            h.handlerType === 'DN.LogicalClientChangeHandler' &&
-            Array.isArray(h.parameters?.[1]) &&
-            h.parameters[1].some((change: any) =>
-              (change.t === 'DataRefreshChange' || change.t === 'InitializeChange') && Array.isArray(change.RowChanges)
-            )
-          );
+          const matched = handlers.some((h) => {
+            if (!isLogicalClientChangeHandler(h)) return false;
+            const params = h.parameters;
+            if (!params || !Array.isArray(params[1])) return false;
+            const changes = params[1] as readonly Change[];
+            return changes.some((change) =>
+              // DataRefreshChange with actual row data (not just empty RowChanges array)
+              isDataRefreshChange(change) &&
+              Array.isArray(change.RowChanges) &&
+              change.RowChanges.length > 0
+            );
+          });
           return matched ? { matched: true, data: handlers } : { matched: false };
         };
 
@@ -566,11 +615,12 @@ export class GetPageMetadataTool extends BaseMCPTool {
     };
 
     // Store page context in memory (ConnectionManager)
-    if ((connection as any).pageContexts) {
-      (connection as any).pageContexts.set(pageContextId, pageContextData);
+    const connWithContexts = connection as ConnectionWithPageContexts;
+    if (connWithContexts.pageContexts) {
+      connWithContexts.pageContexts.set(pageContextId, pageContextData);
     } else {
-      (connection as any).pageContexts = new Map();
-      (connection as any).pageContexts.set(pageContextId, pageContextData);
+      connWithContexts.pageContexts = new Map();
+      connWithContexts.pageContexts.set(pageContextId, pageContextData);
     }
 
     // PERSIST to disk (survives MCP server restarts)
@@ -591,7 +641,9 @@ export class GetPageMetadataTool extends BaseMCPTool {
     // This creates the stateful representation that will be kept up-to-date via message processing
     // ✅ RE-ENABLED: Bug fixed in page-context-cache.ts setPageState() method
     // Root cause was jsonReplacer corrupting LogicalForm - now serializes PageState separately
-    try {
+    if (!logicalForm) {
+      logger.warn(`No LogicalForm available for pageContext ${pageContextId}, skipping PageState initialization`);
+    } else try {
       logger.info(`Initializing PageState for pageContext: ${pageContextId}`);
       const stateManager = new PageStateManager();
 
@@ -604,7 +656,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
       logger.info(`PageState initialized with ${pageState.fields.size} fields, ${pageState.repeaters.size} repeaters`);
 
       // Apply all accumulated handlers to populate initial data (rows, column metadata, etc.)
-      stateManager.applyMessages(pageState, allHandlers as any);
+      stateManager.applyMessages(pageState, allHandlers as unknown as BcHandlerMessage[]);
       logger.info(`Applied ${allHandlers.length} handlers to PageState`);
 
       // Log repeater status for diagnostics
@@ -807,13 +859,10 @@ export class GetPageMetadataTool extends BaseMCPTool {
   /**
    * Extracts LogicalForm from handlers (finds FormToShow handler).
    */
-  private extractLogicalFormFromHandlers(handlers: readonly Handler[]): any | null {
+  private extractLogicalFormFromHandlers(handlers: readonly Handler[]): LogicalForm | null {
     for (const handler of handlers) {
-      if (
-        handler.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-        handler.parameters?.[0] === 'FormToShow'
-      ) {
-        return handler.parameters[1]; // LogicalForm object
+      if (isLogicalClientEventRaisingHandler(handler) && handler.parameters?.[0] === 'FormToShow') {
+        return handler.parameters[1] as LogicalForm; // LogicalForm object
       }
     }
     return null;
@@ -825,15 +874,12 @@ export class GetPageMetadataTool extends BaseMCPTool {
    * Each LogicalForm comes from a FormToShow event.
    * Returns array of {formId, logicalForm} for repeater extraction.
    */
-  private extractAllLogicalForms(handlers: readonly Handler[]): Array<{ formId: string; logicalForm: any }> {
-    const forms: Array<{ formId: string; logicalForm: any }> = [];
+  private extractAllLogicalForms(handlers: readonly Handler[]): Array<{ formId: string; logicalForm: LogicalForm }> {
+    const forms: Array<{ formId: string; logicalForm: LogicalForm }> = [];
 
     for (const handler of handlers) {
-      if (
-        handler.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-        handler.parameters?.[0] === 'FormToShow'
-      ) {
-        const logicalForm = handler.parameters[1];
+      if (isLogicalClientEventRaisingHandler(handler) && handler.parameters?.[0] === 'FormToShow') {
+        const logicalForm = handler.parameters[1] as LogicalForm | undefined;
         if (logicalForm?.ServerId) {
           forms.push({
             formId: logicalForm.ServerId,
@@ -855,14 +901,15 @@ export class GetPageMetadataTool extends BaseMCPTool {
    */
   private async enrichColumnsFromHandlers(
     pageContextId: string,
-    handlers: readonly unknown[]
+    handlers: readonly Handler[]
   ): Promise<void> {
     const logger = createToolLogger('get_page_metadata', pageContextId);
     logger.info(`[ENRICH] enrichColumnsFromHandlers called with ${handlers.length} handlers`);
 
     try {
       // Extract column metadata using rcc-extractor
-      const discovered = extractColumnsFromHandlers(handlers as any[]);
+      // Note: extractColumnsFromHandlers expects any[] but we cast from Handler[]
+      const discovered = extractColumnsFromHandlers(handlers as unknown as Parameters<typeof extractColumnsFromHandlers>[0]);
       logger.info(`[ENRICH] extractColumnsFromHandlers returned ${discovered.length} repeater(s)`);
 
       if (discovered.length === 0) {
@@ -878,7 +925,7 @@ export class GetPageMetadataTool extends BaseMCPTool {
         const success = await cache.enrichRepeaterColumns(
           pageContextId,
           repeater.formId,
-          repeater.columns as any
+          repeater.columns
         );
 
         if (success) {

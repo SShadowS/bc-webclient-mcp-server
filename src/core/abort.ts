@@ -82,12 +82,15 @@ export function composeWithTimeout(
  * });
  * ```
  */
+/** Type guard for objects with a name property */
+type NamedError = { name?: string };
+
 export function isTimeoutAbortReason(reason: unknown): boolean {
   // Node 20+ timeout creates DOMException with name === 'TimeoutError'
   return (
     typeof reason === 'object' &&
     reason !== null &&
-    (reason as any).name === 'TimeoutError'
+    (reason as NamedError).name === 'TimeoutError'
   );
 }
 
@@ -114,7 +117,7 @@ export function isAbortError(e: unknown): boolean {
   return (
     typeof e === 'object' &&
     e !== null &&
-    (e as any).name === 'AbortError'
+    (e as NamedError).name === 'AbortError'
   );
 }
 

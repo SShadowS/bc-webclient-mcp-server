@@ -57,11 +57,11 @@ export class BCWebSocketManager implements IBCWebSocketManager {
   private pendingRequests = new Map<
     string,
     {
-      resolve: (value: any) => void;
+      resolve: (value: unknown) => void;
       reject: (error: Error) => void;
     }
   >();
-  private rawMessageHandlers: Array<(msg: any) => void> = [];
+  private rawMessageHandlers: Array<(msg: unknown) => void> = [];
 
   constructor(
     private readonly config: BCConfig,
@@ -90,35 +90,48 @@ export class BCWebSocketManager implements IBCWebSocketManager {
   /**
    * Handle JSON-RPC response with explicit ID match.
    */
-  private handleJsonRpcResponse(response: any): void {
-    const pending = this.pendingRequests.get(response.id);
+  private handleJsonRpcResponse(response: unknown): void {
+    // Cast to expected structure for property access
+    const data = response as {
+      id?: string;
+      result?: { compressedResult?: unknown; compressedData?: unknown };
+      compressedResult?: unknown;
+      compressedData?: unknown;
+      error?: { message?: string };
+    };
+    const requestId = data.id;
+    if (!requestId) {
+      logger.warn(`Received JSON-RPC response without ID`);
+      return;
+    }
+    const pending = this.pendingRequests.get(requestId);
     if (!pending) {
-      logger.warn(`Received JSON-RPC response with ID ${response.id} but no pending request found`);
+      logger.warn(`Received JSON-RPC response with ID ${requestId} but no pending request found`);
       return;
     }
 
     // BC protocol: Some RPCs have meaningful payload in async Message events.
     // Only resolve here if result contains compressed data.
-    if (response.result && (response.result.compressedResult || response.result.compressedData)) {
-      this.pendingRequests.delete(response.id);
-      pending.resolve(response.result);
-    } else if (response.compressedResult || response.compressedData) {
+    if (data.result && (data.result.compressedResult || data.result.compressedData)) {
+      this.pendingRequests.delete(requestId);
+      pending.resolve(data.result);
+    } else if (data.compressedResult || data.compressedData) {
       // Compressed data at root level (e.g., OpenSession)
-      this.pendingRequests.delete(response.id);
+      this.pendingRequests.delete(requestId);
       pending.resolve(response);
-    } else if (response.error) {
-      this.pendingRequests.delete(response.id);
-      pending.reject(new Error(`RPC Error: ${response.error.message}`));
+    } else if (data.error) {
+      this.pendingRequests.delete(requestId);
+      pending.reject(new Error(`RPC Error: ${data.error.message}`));
     } else {
       // JSON-RPC ack without compressed data - wait for async Message
-      logger.info(`JSON-RPC response ${response.id} has no compressed data, waiting for async Message`);
+      logger.info(`JSON-RPC response ${requestId} has no compressed data, waiting for async Message`);
     }
   }
 
   /**
    * Handle async Message events (BC's primary response format).
    */
-  private handleAsyncMessage(response: any): void {
+  private handleAsyncMessage(response: { params?: Array<{ compressedResult?: unknown; compressedData?: unknown }> }): void {
     logger.info(`Received async Message event`);
 
     const hasCompressedData = response.params?.[0]?.compressedResult || response.params?.[0]?.compressedData;
@@ -133,7 +146,7 @@ export class BCWebSocketManager implements IBCWebSocketManager {
       const [[requestId, pending]] = this.pendingRequests.entries();
       this.pendingRequests.delete(requestId);
       logger.info(`  Resolved pending request ${requestId}, remaining: ${this.pendingRequests.size}`);
-      pending.resolve(response.params[0]);
+      pending.resolve(response.params?.[0]);
     } else {
       // No pending RPC request - forward async data to protocol adapter
       logger.info(`  No pending RPC request - forwarding async Message to protocol adapter`);
@@ -155,7 +168,16 @@ export class BCWebSocketManager implements IBCWebSocketManager {
       const message = data.toString();
       logger.info(`<- Received: ${message.substring(0, 200)}...`);
 
-      const response = JSON.parse(message) as any;
+      /** WebSocket response structure (JSON-RPC or async Message) */
+      interface WsResponse {
+        jsonrpc?: string;
+        id?: string;
+        method?: string;
+        result?: { handlers?: unknown[]; compressedResult?: unknown; compressedData?: unknown };
+        error?: { message?: string };
+        params?: Array<{ compressedResult?: unknown; compressedData?: unknown }>;
+      }
+      const response = JSON.parse(message) as WsResponse;
 
       debugWebSocket('WebSocket message received', {
         messageType: response.method || 'response',
@@ -323,9 +345,9 @@ export class BCWebSocketManager implements IBCWebSocketManager {
    */
   public async sendRpcRequest(
     method: string,
-    params: any[],
+    params: readonly unknown[],
     options?: { signal?: AbortSignal; timeoutMs?: number }
-  ): Promise<any> {
+  ): Promise<unknown> {
     if (!this.ws || !this.connected) {
       throw new ConnectionError('Not connected. Call connect() first.');
     }
@@ -382,7 +404,7 @@ export class BCWebSocketManager implements IBCWebSocketManager {
 
       // Store pending request (will be resolved by message handler)
       this.pendingRequests.set(requestId, {
-        resolve: (value: any) => {
+        resolve: (value: unknown) => {
           cleanup();
           resolve(value);
         },
@@ -443,7 +465,7 @@ export class BCWebSocketManager implements IBCWebSocketManager {
    * unsubscribe();
    * ```
    */
-  public onRawMessage(handler: (msg: any) => void): () => void {
+  public onRawMessage(handler: (msg: unknown) => void): () => void {
     this.rawMessageHandlers.push(handler);
 
     return () => {

@@ -24,7 +24,58 @@ import {
 import { PageContextCache } from '../services/page-context-cache.js';
 import { PageMetadataParser } from '../parsers/page-metadata-parser.js';
 import { decompressResponse, extractServerIds, filterFormsToLoad, createLoadFormInteraction } from '../util/loadform-helpers.js';
-import type { Handler, PageMetadata } from '../types/bc-types.js';
+import type {
+  Handler, PageMetadata, LogicalForm, Control,
+  LogicalClientEventRaisingHandler, LogicalClientChangeHandler
+} from '../types/bc-types.js';
+import type { Change } from '../types/bc-protocol-types.js';
+import {
+  isDataRefreshChangeType,
+  isDataRowUpdatedType,
+  isPropertyChangesType,
+} from '../types/bc-type-discriminators.js';
+
+/**
+ * PageContext structure stored in connection
+ */
+interface PageContext {
+  sessionId: string;
+  pageId: string;
+  formIds: string[];
+  openedAt: number;
+  pageType?: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report';
+  logicalForm?: LogicalForm | null;
+  handlers: Handler[];
+}
+
+/**
+ * Connection type with pageContexts map
+ */
+interface ConnectionWithPageContexts extends IBCConnection {
+  pageContexts?: Map<string, PageContext>;
+}
+
+/**
+ * Generic BC handler for special handler types
+ */
+interface GenericBCHandler {
+  handlerType: string;
+  parameters?: readonly unknown[];
+}
+
+/**
+ * Type guard for LogicalClientEventRaisingHandler
+ */
+function isLogicalClientEventRaisingHandler(handler: Handler): handler is LogicalClientEventRaisingHandler {
+  return handler.handlerType === 'DN.LogicalClientEventRaisingHandler';
+}
+
+/**
+ * Type guard for LogicalClientChangeHandler
+ */
+function isLogicalClientChangeHandler(handler: Handler): handler is LogicalClientChangeHandler {
+  return handler.handlerType === 'DN.LogicalClientChangeHandler';
+}
 
 /**
  * Output from select_and_drill_down tool.
@@ -72,7 +123,7 @@ interface ParsedPageContext {
 /** Validated session info */
 interface ValidatedSession {
   connection: IBCConnection;
-  pageContext: any;
+  pageContext: PageContext;
   formId: string;
 }
 
@@ -262,7 +313,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       );
     }
 
-    const pageContext = (connection as any).pageContexts?.get(pageContextId);
+    const pageContext = (connection as ConnectionWithPageContexts).pageContexts?.get(pageContextId);
     if (!pageContext) {
       return err(
         new ProtocolError(
@@ -293,10 +344,10 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
   private createFormToShowPredicate(logger: ReturnType<typeof createToolLogger>) {
     return (handlers: Handler[]): { matched: boolean; data?: Handler[] } => {
       const matchingHandlers = handlers.filter(
-        (h) =>
-          h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-          Array.isArray((h as any).parameters) &&
-          (h as any).parameters[0] === 'FormToShow'
+        (h) => {
+          if (!isLogicalClientEventRaisingHandler(h)) return false;
+          return Array.isArray(h.parameters) && h.parameters[0] === 'FormToShow';
+        }
       );
 
       if (matchingHandlers.length > 0) {
@@ -310,29 +361,37 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
   /** Create predicate for record data events */
   private createRecordDataPredicate(logger: ReturnType<typeof createToolLogger>) {
     return (handlers: Handler[]): { matched: boolean; data?: Handler[] } => {
-      const matched = handlers.some((h: any) => {
-        if (h.handlerType === 'DN.LogicalClientChangeHandler' && Array.isArray(h.parameters?.[1])) {
-          return h.parameters[1].some((change: any) => {
-            if (change.t === 'DataRefreshChange' || change.t === 'InitializeChange') {
-              return true;
-            }
-            if (change.t === 'DataRowUpdated') {
-              logger.info('Detected DataRowUpdated event (List control data)');
-              return true;
-            }
-            if (change.t === 'PropertyChanges' && change.Changes) {
-              const hasFieldValue = change.Changes.StringValue !== undefined ||
-                                  change.Changes.ObjectValue !== undefined ||
-                                  change.Changes.DecimalValue !== undefined;
+      const matched = handlers.some((h) => {
+        if (!isLogicalClientChangeHandler(h)) return false;
+        const params = h.parameters;
+        if (!params || !Array.isArray(params[1])) return false;
+        const changes = params[1] as readonly Change[];
+        return changes.some((change) => {
+          // BC27+ uses full type name 'DataRefreshChange' instead of shorthand 'drch'
+          if (isDataRefreshChangeType(change.t)) {
+            return true;
+          }
+          // BC27+ uses full type name 'DataRowUpdated' instead of shorthand 'druch'
+          if (isDataRowUpdatedType(change.t)) {
+            logger.info('Detected DataRowUpdatedChange event (List control data)');
+            return true;
+          }
+          // BC27+ uses full type name 'PropertyChanges' instead of shorthand 'lcpchs'
+          if (isPropertyChangesType(change.t)) {
+            // PropertyChanges - check if it has field values in its Changes array
+            const propChanges = (change as { Changes?: readonly { PropertyValue?: unknown }[] }).Changes;
+            if (propChanges) {
+              const hasFieldValue = propChanges.some((pc: { PropertyValue?: unknown }) =>
+                pc.PropertyValue !== undefined
+              );
               if (hasFieldValue) {
                 logger.info('Detected PropertyChanges with field value (Card data)');
                 return true;
               }
             }
-            return false;
-          });
-        }
-        return false;
+          }
+          return false;
+        });
       });
 
       if (matched) {
@@ -392,7 +451,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
 
   /** Find the action control path from metadata */
   private findActionControlPath(
-    pageContext: any,
+    pageContext: PageContext,
     action: string,
     sourcePageId: string,
     pageContextId: string,
@@ -531,7 +590,10 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
     logger: ReturnType<typeof createToolLogger>
   ): Promise<{ allHandlers: Handler[]; shellFormId: string | null }> {
     const decompressed = decompressResponse(navigationHandlers);
-    let allNavigationHandlers = decompressed || navigationHandlers;
+    // Ensure allNavigationHandlers is always Handler[] (decompressed may return non-array)
+    let allNavigationHandlers: Handler[] = Array.isArray(decompressed)
+      ? decompressed as Handler[]
+      : navigationHandlers;
     let targetShellFormId: string | null = null;
 
     try {
@@ -615,11 +677,12 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
     };
 
     // Store in memory
-    if ((connection as any).pageContexts) {
-      (connection as any).pageContexts.set(targetPageContextId, targetPageContextData);
+    const connWithContexts = connection as ConnectionWithPageContexts;
+    if (connWithContexts.pageContexts) {
+      connWithContexts.pageContexts.set(targetPageContextId, targetPageContextData);
     } else {
-      (connection as any).pageContexts = new Map();
-      (connection as any).pageContexts.set(targetPageContextId, targetPageContextData);
+      connWithContexts.pageContexts = new Map();
+      connWithContexts.pageContexts.set(targetPageContextId, targetPageContextData);
     }
 
     // Persist to disk
@@ -642,14 +705,15 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
    * Finds the repeater control path in a LogicalForm.
    * Returns the control path for the main list repeater.
    */
-  private findRepeaterControlPath(logicalForm: any): string | null {
+  private findRepeaterControlPath(logicalForm: LogicalForm | null | undefined): string | null {
+    if (!logicalForm) return null;
     let repeaterPath: string | null = null;
 
-    const walkControl = (control: any, path: string): void => {
+    const walkControl = (control: Control | LogicalForm, path: string): void => {
       if (!control || typeof control !== 'object') return;
 
       // Check if this is a repeater control
-      const controlType = control.t as string;
+      const controlType = control.t;
       if (controlType === 'rc' || controlType === 'lrc') {
         // Found a repeater - use this path
         if (!repeaterPath) {
@@ -659,7 +723,7 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
       }
 
       // Walk children with updated paths
-      if (Array.isArray(control.Children)) {
+      if ('Children' in control && Array.isArray(control.Children)) {
         for (let i = 0; i < control.Children.length; i++) {
           const childPath = path ? `${path}:c[${i}]` : `c[${i}]`;
           walkControl(control.Children[i], childPath);
@@ -677,13 +741,13 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
    * Uses ViewMode/FormStyle if available, falls back to caption heuristics.
    */
   private inferPageType(handlers: Handler[], caption: string): string {
-    // Try to find FormStyleProperties handler
-    const formStyleHandler = handlers.find(
-      (h: any) => h.handlerType === 'DN.FormStyleProperties'
+    // Try to find FormStyleProperties handler (non-standard handler type)
+    const formStyleHandler = (handlers as readonly GenericBCHandler[]).find(
+      (h) => h.handlerType === 'DN.FormStyleProperties'
     );
 
     if (formStyleHandler) {
-      const params = (formStyleHandler as any).parameters?.[0];
+      const params = formStyleHandler.parameters?.[0] as { ViewMode?: number } | undefined;
       const viewMode = params?.ViewMode;
 
       // BC ViewMode enum values
@@ -714,15 +778,16 @@ export class SelectAndDrillDownTool extends BaseMCPTool {
   /**
    * Extracts the LogicalForm from handlers for caching.
    */
-  private extractLogicalFormFromHandlers(handlers: Handler[]): any {
-    const logicalFormHandler = handlers.find(
-      (h: any) => h.handlerType === 'DN.LogicalFormToShowProperties'
+  private extractLogicalFormFromHandlers(handlers: Handler[]): LogicalForm | null {
+    // LogicalFormToShowProperties is a non-standard handler type
+    const logicalFormHandler = (handlers as readonly GenericBCHandler[]).find(
+      (h) => h.handlerType === 'DN.LogicalFormToShowProperties'
     );
 
     if (logicalFormHandler) {
-      const params = (logicalFormHandler as any).parameters;
+      const params = logicalFormHandler.parameters;
       if (params && params.length > 1) {
-        return params[1]; // LogicalForm is second parameter
+        return params[1] as LogicalForm; // LogicalForm is second parameter
       }
     }
 

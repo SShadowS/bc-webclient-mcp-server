@@ -20,6 +20,50 @@ import { ExecuteActionInputSchema, type ExecuteActionInput } from '../validation
 import { PageContextCache } from '../services/page-context-cache.js';
 import { createWorkflowIntegration } from '../services/workflow-integration.js';
 import { ControlParser } from '../parsers/control-parser.js';
+import type { Handler, LogicalForm, LogicalClientEventRaisingHandler } from '../types/bc-types.js';
+
+/**
+ * PageContext structure stored in connection
+ */
+interface PageContext {
+  sessionId: string;
+  pageId: string;
+  formIds: string[];
+  openedAt: number;
+  pageType?: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report';
+  logicalForm?: LogicalForm | null;
+  handlers?: Handler[];
+  needsRefresh?: boolean;
+}
+
+/**
+ * Connection type with pageContexts map
+ */
+interface ConnectionWithPageContexts extends IBCConnection {
+  pageContexts?: Map<string, PageContext>;
+}
+
+/**
+ * Generic BC handler for special handler types
+ */
+interface GenericBCHandler {
+  handlerType: string;
+  parameters?: readonly unknown[];
+}
+
+/**
+ * Raw WebSocket client with onHandlers method
+ */
+interface RawClient {
+  onHandlers: (callback: (event: Handler[] | { kind: string; handlers: Handler[] }) => void) => () => void;
+}
+
+/**
+ * Type guard for LogicalClientEventRaisingHandler
+ */
+function isLogicalClientEventRaisingHandler(handler: Handler | GenericBCHandler): handler is LogicalClientEventRaisingHandler {
+  return handler.handlerType === 'DN.LogicalClientEventRaisingHandler';
+}
 
 /**
  * Output from execute_action tool.
@@ -42,7 +86,7 @@ interface ParsedContext {
 /** Validated session info */
 interface ValidatedSession {
   connection: IBCConnection;
-  pageContext: any;
+  pageContext: PageContext;
   formId: string;
 }
 
@@ -210,7 +254,7 @@ export class ExecuteActionTool extends BaseMCPTool {
       ));
     }
 
-    const pageContext = (connection as any).pageContexts?.get(pageContextId);
+    const pageContext = (connection as ConnectionWithPageContexts).pageContexts?.get(pageContextId);
     if (!pageContext) {
       return err(new ProtocolError(
         `Page context ${pageContextId} not found. Page may have been closed. Call get_page_metadata again.`,
@@ -256,13 +300,13 @@ export class ExecuteActionTool extends BaseMCPTool {
   /** Accumulate async handlers from BC response */
   private async accumulateAsyncHandlers(
     connection: IBCConnection,
-    interaction: any,
+    interaction: { interactionName: string; skipExtendingSessionLifetime: boolean; namedParameters: string; callbackId: string; controlPath?: string; formId: string },
     actualPageId: string,
     actionName: string,
     formId: string,
     logger: ReturnType<typeof createToolLogger>
-  ): Promise<Result<any[], BCError>> {
-    const rawClient = (connection as any).getRawClient?.();
+  ): Promise<Result<Handler[], BCError>> {
+    const rawClient = connection.getRawClient() as RawClient | null;
     if (!rawClient) {
       return err(new ProtocolError(
         `Cannot access raw WebSocket client for async handler capture`,
@@ -270,11 +314,11 @@ export class ExecuteActionTool extends BaseMCPTool {
       ));
     }
 
-    const accumulatedHandlers: any[] = [];
+    const accumulatedHandlers: Handler[] = [];
     let handlerCount = 0;
     const ACCUMULATION_WINDOW_MS = 1000;
 
-    const unsubscribe = rawClient.onHandlers((event: any) => {
+    const unsubscribe = rawClient.onHandlers((event) => {
       if (Array.isArray(event)) {
         accumulatedHandlers.push(...event);
         handlerCount++;
@@ -305,26 +349,18 @@ export class ExecuteActionTool extends BaseMCPTool {
   }
 
   /** Auto-track dialogs from handlers */
-  private async autoTrackDialogs(handlers: any[], actualSessionId: string, logger: ReturnType<typeof createToolLogger>): Promise<void> {
+  private async autoTrackDialogs(handlers: Handler[], actualSessionId: string, logger: ReturnType<typeof createToolLogger>): Promise<void> {
     for (const handler of handlers) {
-      if (
-        typeof handler === 'object' &&
-        handler !== null &&
-        'handlerType' in handler &&
-        handler.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-        'parameters' in handler &&
-        Array.isArray(handler.parameters) &&
-        handler.parameters[0] === 'DialogToShow'
-      ) {
+      if (isLogicalClientEventRaisingHandler(handler) && handler.parameters?.[0] === 'DialogToShow') {
         try {
           const HandlerParser = (await import('../parsers/handler-parser.js')).HandlerParser;
           const SessionStateManager = (await import('../services/session-state-manager.js')).SessionStateManager;
 
           const parser = new HandlerParser();
-          const dialogFormResult = parser.extractDialogForm([handler] as any[]);
+          const dialogFormResult = parser.extractDialogForm([handler]);
 
           if (isOk(dialogFormResult)) {
-            const dialogForm = dialogFormResult.value as any;
+            const dialogForm = dialogFormResult.value;
             const dialogFormId = dialogForm.ServerId;
             const sessionStateManager = SessionStateManager.getInstance();
 
@@ -347,18 +383,18 @@ export class ExecuteActionTool extends BaseMCPTool {
 
   /** Check for error handlers in response */
   private checkForErrors(
-    handlers: any[],
+    handlers: Handler[],
     actualPageId: string,
     actionName: string,
     formId: string,
     actualSessionId: string
   ): Result<never, BCError> | null {
-    const errorHandler = handlers.find(
-      (h: any) => h.handlerType === 'DN.ErrorMessageProperties' || h.handlerType === 'DN.ErrorDialogProperties'
+    const errorHandler = (handlers as readonly GenericBCHandler[]).find(
+      (h) => h.handlerType === 'DN.ErrorMessageProperties' || h.handlerType === 'DN.ErrorDialogProperties'
     );
 
     if (errorHandler) {
-      const errorParams = (errorHandler as any).parameters?.[0];
+      const errorParams = errorHandler.parameters?.[0] as { Message?: string; ErrorMessage?: string } | undefined;
       const errorMessage = errorParams?.Message || errorParams?.ErrorMessage || 'Unknown error';
 
       return err(new ProtocolError(
@@ -372,7 +408,7 @@ export class ExecuteActionTool extends BaseMCPTool {
 
   /** Mark pageContext as stale and clear cache */
   private async markPageContextStale(
-    pageContext: any,
+    pageContext: PageContext,
     pageContextId: string,
     logger: ReturnType<typeof createToolLogger>
   ): Promise<void> {
@@ -424,7 +460,7 @@ export class ExecuteActionTool extends BaseMCPTool {
    * Returns controlPath and systemAction if found.
    */
   private lookupActionFromCache(
-    pageContext: any,
+    pageContext: PageContext,
     actionName: string,
     logger: ReturnType<typeof createToolLogger>
   ): { controlPath: string; systemAction?: number } | null {
@@ -433,12 +469,13 @@ export class ExecuteActionTool extends BaseMCPTool {
 
       // Try to find LogicalForm in handlers
       const handlers = pageContext?.handlers || [];
-      let logicalForm = null;
+      let logicalForm: LogicalForm | null = null;
 
       for (const handler of handlers) {
-        // LogicalForm might be embedded in handlers
-        if (handler?.t === 'lf' || handler?.DesignName || handler?.c) {
-          logicalForm = handler;
+        // LogicalForm might be embedded in handlers - check for LogicalForm structure
+        const handlerObj = handler as unknown as Record<string, unknown>;
+        if (handlerObj?.t === 'lf' || handlerObj?.DesignName || handlerObj?.c) {
+          logicalForm = handlerObj as unknown as LogicalForm;
           break;
         }
       }
@@ -456,7 +493,7 @@ export class ExecuteActionTool extends BaseMCPTool {
   }
 
   private searchActionsInLogicalForm(
-    logicalForm: any,
+    logicalForm: LogicalForm,
     actionName: string,
     logger: ReturnType<typeof createToolLogger>
   ): { controlPath: string; systemAction?: number } | null {

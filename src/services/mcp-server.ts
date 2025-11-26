@@ -516,10 +516,38 @@ export class MCPServer implements IMCPServer {
 
       return ok(mcpResponse);
     } catch (error) {
+      let errorStr: string;
+      let stack: string | undefined;
+      if (error instanceof Error) {
+        errorStr = error.message;
+        stack = error.stack;
+      } else if (error && typeof error === 'object') {
+        // Check if it's a Result error object
+        const obj = error as Record<string, unknown>;
+        if ('error' in obj && obj.error && typeof obj.error === 'object') {
+          const bcError = obj.error as { message?: string; code?: string };
+          errorStr = `Result.error: ${bcError.message || 'unknown'} (code: ${bcError.code || 'unknown'})`;
+        } else if ('message' in obj) {
+          errorStr = String(obj.message);
+        } else {
+          // Try to extract some useful info
+          const keys = Object.keys(obj).slice(0, 5);
+          errorStr = `Object with keys: ${keys.join(', ')}`;
+        }
+      } else {
+        try {
+          errorStr = JSON.stringify(error);
+        } catch {
+          errorStr = `Non-serializable error: ${Object.prototype.toString.call(error)}`;
+        }
+      }
+      // Use console.error directly to ensure we see the error - logger might be swallowing it
+      console.error('[MCP-SERVER] UNCAUGHT EXCEPTION in tool call:', params.name, 'Error:', errorStr, 'Stack:', stack);
+      this.logger?.error('Tool call threw uncaught exception', { toolName: params.name, error: errorStr, stack });
       return err(
         new InternalError(
           'Failed to handle tools/call request',
-          { code: 'TOOL_CALL_FAILED', toolName: params.name, error: String(error) }
+          { code: 'TOOL_CALL_FAILED', toolName: params.name, error: errorStr }
         )
       );
     }

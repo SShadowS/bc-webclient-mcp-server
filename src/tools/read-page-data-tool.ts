@@ -10,10 +10,10 @@ import type { Result } from '../core/result.js';
 import { ok, err, isOk } from '../core/result.js';
 import type { BCError } from '../core/errors.js';
 import { ProtocolError } from '../core/errors.js';
-import type { IBCConnection } from '../core/interfaces.js';
+import type { IBCConnection, ILogger } from '../core/interfaces.js';
 import type { ReadPageDataOutput } from '../types/mcp-types.js';
 import { ReadPageDataInputSchema, type ReadPageDataInput } from '../validation/schemas.js';
-import { PageDataExtractor } from '../parsers/page-data-extractor.js';
+import { PageDataExtractor, type PageRecord } from '../parsers/page-data-extractor.js';
 import { HandlerParser } from '../parsers/handler-parser.js';
 import { decompressResponse } from '../util/loadform-helpers.js';
 import { ConnectionManager } from '../connection/connection-manager.js';
@@ -23,6 +23,48 @@ import { FilterMetadataService } from '../services/filter-metadata-service.js';
 import { ColumnEnrichmentService } from '../services/column-enrichment-service.js';
 import { defaultTimeouts } from '../core/timeouts.js';
 import { createWorkflowIntegration } from '../services/workflow-integration.js';
+import type { LogicalForm, Control, Handler, LogicalClientChangeHandler } from '../types/bc-types.js';
+import type { Change, DataRefreshChange, ControlTypeId } from '../types/bc-protocol-types.js';
+import { isDataRefreshChange } from '../types/bc-protocol-types.js';
+import { isPropertyChangesType } from '../types/bc-type-discriminators.js';
+import type { Logger as PinoLogger } from 'pino';
+
+/**
+ * Type guard for LogicalClientChangeHandler
+ */
+function isLogicalClientChangeHandler(handler: Handler): handler is LogicalClientChangeHandler {
+  return handler.handlerType === 'DN.LogicalClientChangeHandler';
+}
+
+/**
+ * Helper interface for page context stored on connection
+ */
+interface PageContext {
+  sessionId: string;
+  pageId: string;
+  formIds: string[];
+  openedAt: number;
+  pageType?: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report';
+  logicalForm?: LogicalForm;
+  handlers: Handler[];
+  needsRefresh?: boolean;
+}
+
+/**
+ * Extended connection interface with pageContexts map
+ */
+interface ConnectionWithPageContexts extends IBCConnection {
+  pageContexts?: Map<string, PageContext>;
+}
+
+/**
+ * Flattened record format for output and filtering
+ * Converted from PageRecord by extracting field values to top-level properties
+ */
+interface FlatRecord {
+  bookmark?: string;
+  [fieldName: string]: unknown;
+}
 
 /**
  * MCP Tool: read_page_data
@@ -104,10 +146,10 @@ export class ReadPageDataTool extends BaseMCPTool {
    * Finds the repeater control path in a LogicalForm.
    * Returns the control path for the main list repeater.
    */
-  private findRepeaterControlPath(logicalForm: any): string | null {
+  private findRepeaterControlPath(logicalForm: LogicalForm): string | null {
     let repeaterPath: string | null = null;
 
-    const walkControl = (control: any, path: string): void => {
+    const walkControl = (control: Control | LogicalForm, path: string): void => {
       if (!control || typeof control !== 'object') return;
 
       // Check if this is a repeater control
@@ -148,7 +190,7 @@ export class ReadPageDataTool extends BaseMCPTool {
    * @param logicalForm The root LogicalForm object
    * @returns Path to FilterLogicalControl (e.g., "server:c[2]") or null if not found
    */
-  private findFilterLogicalControl(logicalForm: any): string | null {
+  private findFilterLogicalControl(logicalForm: LogicalForm): string | null {
     // Search top-level children for type 'filc' (FilterLogicalControl)
     if (!Array.isArray(logicalForm.Children)) {
       return null;
@@ -166,11 +208,11 @@ export class ReadPageDataTool extends BaseMCPTool {
     return null;
   }
 
-  private extractFieldMetadata(logicalForm: any): Map<string, import('../types/bc-types.js').FieldMetadata> {
+  private extractFieldMetadata(logicalForm: LogicalForm): Map<string, import('../types/bc-types.js').FieldMetadata> {
     const fields = new Map<string, import('../types/bc-types.js').FieldMetadata>();
 
     // Recursive walker that extracts field metadata
-    const walkControl = (control: any): void => {
+    const walkControl = (control: Control | LogicalForm): void => {
       if (!control || typeof control !== 'object') return;
 
       const controlType = control.t as string;
@@ -200,17 +242,19 @@ export class ReadPageDataTool extends BaseMCPTool {
       // Also extract from other field control types for non-list pages
       const fieldTypes = ['sc', 'dc', 'bc', 'i32c', 'sec', 'dtc', 'pc'];
       if (fieldTypes.includes(controlType)) {
-        const fieldName = control.DesignName || control.Name || control.Caption;
+        // Access properties with type safety
+        const ctrlRecord = control as Record<string, unknown>;
+        const fieldName = String(ctrlRecord.DesignName || ctrlRecord.Name || ctrlRecord.Caption || '');
         if (fieldName && !fields.has(fieldName)) {
           fields.set(fieldName, {
-            type: controlType,
-            caption: control.Caption,
-            name: control.Name || control.DesignName,
-            controlId: control.ID || control.ControlIdentifier,
-            enabled: control.Enabled !== false,
-            visible: control.Visible !== false,
-            readonly: control.ReadOnly === true,
-            options: control.Options,
+            type: controlType as import('../types/bc-types.js').ControlType,
+            caption: typeof ctrlRecord.Caption === 'string' ? ctrlRecord.Caption : undefined,
+            name: String(ctrlRecord.Name || ctrlRecord.DesignName || ''),
+            controlId: String(ctrlRecord.ID || ctrlRecord.ControlIdentifier || ''),
+            enabled: ctrlRecord.Enabled !== false,
+            visible: ctrlRecord.Visible !== false,
+            readonly: ctrlRecord.ReadOnly === true,
+            options: ctrlRecord.Options as readonly string[] | undefined,
           });
         }
       }
@@ -285,14 +329,14 @@ export class ReadPageDataTool extends BaseMCPTool {
    */
   private async applyFilters(
     connection: IBCConnection,
-    filters: Record<string, any>,
+    filters: Record<string, unknown>,
     repeaterPath: string,
     sessionId: string,
     pageId: string,
-    logger: any,
-    logicalForm: any,
+    logger: PinoLogger,
+    logicalForm: LogicalForm,
     formId: string
-  ): Promise<Result<{ filteredHandlers?: any[] }, BCError>> {
+  ): Promise<Result<{ filteredHandlers?: Handler[] }, BCError>> {
     if (!filters || Object.keys(filters).length === 0) {
       return ok({});
     }
@@ -302,16 +346,16 @@ export class ReadPageDataTool extends BaseMCPTool {
     // CRITICAL: Set up async handler wait BEFORE applying filters
     // BC sends DataRefreshChange with filtered data AFTER SaveValue completes
     const asyncDataPromise = connection.waitForHandlers(
-      (handlers: any[]) => {
+      (handlers: Handler[]) => {
         const matched =
           Array.isArray(handlers) &&
           handlers.some(
-            (h: any) =>
-              h.handlerType === 'DN.LogicalClientChangeHandler' &&
+            (h) =>
+              isLogicalClientChangeHandler(h) &&
               Array.isArray(h.parameters) &&
               h.parameters.length >= 2 &&
               Array.isArray(h.parameters[1]) &&
-              h.parameters[1].some((p: any) => p?.t === 'DataRefreshChange')
+              (h.parameters[1] as Change[]).some((p) => isDataRefreshChange(p))
           );
         logger.info(`[applyFilters] DataRefreshChange check: matched=${matched}, handlers=${handlers.length}`);
         return { matched, data: matched ? handlers : undefined };
@@ -342,7 +386,7 @@ export class ReadPageDataTool extends BaseMCPTool {
     const fieldMetadata = await filterService.getOrComputeFieldMetadata(
       pageId,
       logicalForm,
-      (form) => this.extractFieldMetadata(form)
+      (form) => this.extractFieldMetadata(form as LogicalForm)
     );
 
     // Pre-validate filter fields (Phase 3: Field Metadata Cache)
@@ -376,11 +420,12 @@ export class ReadPageDataTool extends BaseMCPTool {
 
         // Parse filter spec (simple string/number or { operator, value })
         let operator = '=';
-        let value: any;
+        let value: string | number | unknown[] | unknown;
 
         if (typeof filterSpec === 'object' && filterSpec !== null && 'operator' in filterSpec) {
-          operator = filterSpec.operator || '=';
-          value = filterSpec.value;
+          const spec = filterSpec as { operator?: string; value?: unknown };
+          operator = spec.operator || '=';
+          value = spec.value;
         } else {
           value = filterSpec;
         }
@@ -576,11 +621,11 @@ export class ReadPageDataTool extends BaseMCPTool {
    */
   private async applySetCurrent(
     connection: IBCConnection,
-    records: any[],
-    filters: Record<string, any> | undefined,
+    records: FlatRecord[],
+    filters: Record<string, unknown> | undefined,
     repeaterPath: string,
     formId: string,
-    logger: any
+    logger: PinoLogger
   ): Promise<Result<{ bookmark: string }, BCError>> {
     // Require filters for setCurrent
     if (!filters || Object.keys(filters).length === 0) {
@@ -593,17 +638,18 @@ export class ReadPageDataTool extends BaseMCPTool {
     }
 
     // Helper function to check if a record matches all filters
-    const matchesFilters = (record: any): boolean => {
+    const matchesFilters = (record: FlatRecord): boolean => {
       for (const [fieldName, filterSpec] of Object.entries(filters)) {
         const recordValue = record[fieldName];
 
         // Handle both simple value and operator-based filter specs
         let operator = '=';
-        let filterValue: any;
+        let filterValue: unknown;
 
         if (typeof filterSpec === 'object' && filterSpec !== null && 'operator' in filterSpec) {
-          operator = filterSpec.operator;
-          filterValue = filterSpec.value;
+          const spec = filterSpec as { operator?: string; value?: unknown };
+          operator = spec.operator || '=';
+          filterValue = spec.value;
         } else {
           filterValue = filterSpec;
         }
@@ -625,14 +671,14 @@ export class ReadPageDataTool extends BaseMCPTool {
             if (!String(recordValue).toLowerCase().startsWith(String(filterValue).toLowerCase())) return false;
             break;
           case '>=':
-            if (recordValue < filterValue) return false;
+            if ((recordValue as number) < (filterValue as number)) return false;
             break;
           case '<=':
-            if (recordValue > filterValue) return false;
+            if ((recordValue as number) > (filterValue as number)) return false;
             break;
           case 'between':
             if (!Array.isArray(filterValue) || filterValue.length !== 2) return false;
-            if (recordValue < filterValue[0] || recordValue > filterValue[1]) return false;
+            if ((recordValue as number) < (filterValue[0] as number) || (recordValue as number) > (filterValue[1] as number)) return false;
             break;
           default:
             logger.warn(`Unknown filter operator: ${operator}, treating as equals`);
@@ -796,29 +842,49 @@ export class ReadPageDataTool extends BaseMCPTool {
 
     // Page is already open (from get_page_metadata), no need to open again
     // Get the page context to access the form IDs and cached handlers
-    const pageContext = (connection as any).pageContexts?.get(pageContextId);
+    const connWithContexts = connection as ConnectionWithPageContexts;
+    const pageContext = connWithContexts.pageContexts?.get(pageContextId);
     const formIds = pageContext?.formIds || [];
     const cachedHandlers = pageContext?.handlers; // Handlers from get_page_metadata (includes LoadForm data)
 
     logger.info(`Using existing page context with ${formIds.length} open forms`);
 
-    let handlers: readonly unknown[];
+    let handlers: readonly Handler[];
 
     // Check if page needs refresh (e.g., after execute_action changed state)
     const needsRefresh = pageContext?.needsRefresh === true;
 
     // Validate that cached handlers contain actual data (not just metadata)
-    const hasDataHandlers = Array.isArray(cachedHandlers) && cachedHandlers.some((h: any) =>
-      h.handlerType === 'DN.LogicalClientChangeHandler' && Array.isArray(h.parameters?.[1]) &&
-      h.parameters[1].some((c: any) =>
-        ((c.t === 'DataRefreshChange' || c.t === 'InitializeChange') &&
-         Array.isArray(c.RowChanges) && c.RowChanges.length > 0) ||
-        (c.t === 'PropertyChanges' && c.Changes && (
-          c.Changes.StringValue !== undefined ||
-          c.Changes.ObjectValue !== undefined ||
-          c.Changes.DecimalValue !== undefined
-        ))
-      )
+    const hasDataHandlers = Array.isArray(cachedHandlers) && cachedHandlers.some((h) =>
+      isLogicalClientChangeHandler(h) && Array.isArray(h.parameters?.[1]) &&
+      (h.parameters[1] as Change[]).some((c) => {
+        // Check for DataRefreshChange with row data
+        if (isDataRefreshChange(c) && Array.isArray(c.RowChanges) && c.RowChanges.length > 0) {
+          return true;
+        }
+        // Check for PropertyChanges with actual values
+        // BC27+ uses full type name 'PropertyChanges' instead of shorthand 'lcpchs'
+        // BC27 sends Changes as an OBJECT (not array) with StringValue/ObjectValue directly
+        if (isPropertyChangesType(c.t)) {
+          const changes = (c as unknown as { Changes?: Record<string, unknown> | readonly { StringValue?: unknown; ObjectValue?: unknown; DecimalValue?: unknown }[] }).Changes;
+          if (changes) {
+            // BC27 format: Changes is an object with StringValue/ObjectValue properties
+            if (!Array.isArray(changes)) {
+              return (changes as Record<string, unknown>).StringValue !== undefined ||
+                     (changes as Record<string, unknown>).ObjectValue !== undefined ||
+                     (changes as Record<string, unknown>).DecimalValue !== undefined;
+            }
+            // Legacy format: Changes is an array
+            if (changes.length > 0) {
+              const firstChange = changes[0];
+              return firstChange?.StringValue !== undefined ||
+                     firstChange?.ObjectValue !== undefined ||
+                     firstChange?.DecimalValue !== undefined;
+            }
+          }
+        }
+        return false;
+      })
     );
 
     // Use cached handlers if available, not stale, AND contains actual data
@@ -910,11 +976,11 @@ export class ReadPageDataTool extends BaseMCPTool {
     const cachedLogicalForm = pageContext?.logicalForm;
     const cachedPageType = pageContext?.pageType;
 
-    let logicalForm = cachedLogicalForm;
+    let logicalForm: LogicalForm | undefined = cachedLogicalForm;
 
     if (!cachedLogicalForm) {
       // Fallback: try to extract from handlers if not cached
-      const logicalFormResult = this.handlerParser.extractLogicalForm(handlers as any);
+      const logicalFormResult = this.handlerParser.extractLogicalForm(handlers as Handler[]);
       if (!isOk(logicalFormResult)) {
         return err(
           new ProtocolError(
@@ -924,6 +990,16 @@ export class ReadPageDataTool extends BaseMCPTool {
         );
       }
       logicalForm = logicalFormResult.value;
+    }
+
+    // At this point logicalForm is guaranteed to be defined (either cached or extracted)
+    if (!logicalForm) {
+      return err(
+        new ProtocolError(
+          `Failed to obtain LogicalForm for page ${pageId}. Page context may be stale.`,
+          { pageId }
+        )
+      );
     }
     const caption = logicalForm.Caption || `Page ${pageId}`;
 
@@ -999,13 +1075,33 @@ export class ReadPageDataTool extends BaseMCPTool {
     let repeaterPath: string | null = null;
     let filtersWereApplied = false; // Track if we received filtered data from applyFilters
 
+    // Check for stale filter state: if no filters provided but previous filters were applied,
+    // the BC server still has those filters active. In this case, return an error so caller
+    // can handle it (e.g., open a fresh page context without filters).
+    if (isListPage && !hasFilters) {
+      const filterService = FilterMetadataService.getInstance();
+      const previousFilterState = filterService.getFilterState(sessionId, pageId);
+      if (previousFilterState.size > 0) {
+        logger.info(`[STALE-FILTER] Page ${pageId} has ${previousFilterState.size} previously applied filters, but current call has no filters.`);
+        logger.info(`[STALE-FILTER] BC server still has these filters active. Clearing filter state and returning error.`);
+        // Clear the cached filter state so next call starts fresh
+        filterService.clearFilterStateForPage(sessionId, pageId);
+        return err(
+          new ProtocolError(
+            `Page context has stale filters applied. The BC server has filters active from a previous call, but this call has no filters. Please open a fresh page context to read unfiltered data.`,
+            { pageContextId, pageId, previousFiltersCount: previousFilterState.size }
+          )
+        );
+      }
+    }
+
     if (isListPage && (hasFilters || setCurrent)) {
       // Find repeater control path from LogicalForm (with Phase 2 cache optimization)
       const filterService = FilterMetadataService.getInstance();
       repeaterPath = await filterService.getOrComputeRepeaterPath(
         pageId,
         logicalForm,
-        (form) => this.findRepeaterControlPath(form)
+        (form) => this.findRepeaterControlPath(form as LogicalForm)
       );
 
       if (!repeaterPath) {
@@ -1126,30 +1222,28 @@ export class ReadPageDataTool extends BaseMCPTool {
         });
       }
 
-      // If no data, wait for async data (either DelayedControls or empty sync result)
+      // If no data, wait for async data
       // BC list pages often send data asynchronously even without DelayedControls flag
       // CRITICAL: Skip async wait if we just applied filters - filtered data is already final
-      if (!filtersWereApplied && (hasDelayedControls || (isOk(syncExtractionResult) && syncExtractionResult.value.totalCount === 0))) {
-        if (hasDelayedControls) {
-          logger.info(`DelayedControls detected, waiting for async data...`);
-        } else {
-          logger.info(`No data from sync extraction, waiting for async data...`);
-        }
+      // CRITICAL: Skip async wait if sync extraction already got data (even with DelayedControls flag)
+      const noSyncData = isOk(syncExtractionResult) && syncExtractionResult.value.totalCount === 0;
+      if (!filtersWereApplied && noSyncData) {
+        logger.info(`No data from sync extraction, waiting for async data...`);
 
         // Predicate to detect DataRefreshChange with row data
-        const hasListData = (handlers: any[]): { matched: boolean; data?: any[] } => {
+        const hasListData = (handlers: Handler[]): { matched: boolean; data?: Handler[] } => {
           const changeHandler = handlers.find(
-            (h: any) => h.handlerType === 'DN.LogicalClientChangeHandler'
+            (h) => isLogicalClientChangeHandler(h)
           );
-          if (!changeHandler) return { matched: false };
+          if (!changeHandler || !isLogicalClientChangeHandler(changeHandler)) return { matched: false };
 
           const changes = changeHandler.parameters?.[1];
           if (!Array.isArray(changes)) return { matched: false };
 
-          // Look for DataRefreshChange or InitializeChange with RowChanges
-          const dataChange = changes.find(
-            (c: any) =>
-              (c.t === 'DataRefreshChange' || c.t === 'InitializeChange') &&
+          // Look for DataRefreshChange with RowChanges (drch type ID)
+          const dataChange = (changes as Change[]).find(
+            (c) =>
+              isDataRefreshChange(c) &&
               Array.isArray(c.RowChanges) &&
               c.RowChanges.length > 0
           );

@@ -17,6 +17,33 @@ import { createConnectionLogger } from '../core/logger.js';
 import { TellMeParser } from '../protocol/tellme-parser.js';
 import type { BCRawWebSocketClient } from '../connection/clients/BCRawWebSocketClient.js';
 import { retryWithBackoff } from '../core/retry.js';
+import { isDataRefreshChangeType } from '../types/bc-type-discriminators.js';
+
+/** Handler type with parameters for search service */
+interface SearchHandler {
+  handlerType: string;
+  parameters?: readonly unknown[];
+}
+
+/** Form control with search capability */
+interface DialogControl {
+  Type?: string;
+  Caption?: string;
+  ControlId?: string;
+  Controls?: DialogControl[];
+}
+
+/** FormToShow parameters for Tell Me dialog */
+interface FormToShowParams {
+  Caption?: string;
+  Controls?: DialogControl[];
+}
+
+/** Change entry in LogicalClientChangeHandler */
+interface ChangeEntry {
+  t?: string;
+  RowChanges?: readonly unknown[];
+}
 
 /** Tell Me system action UUID */
 const TELL_ME_ACTION_ID = '{00000000-0000-0000-0300-0000836BD2D2}';
@@ -138,7 +165,7 @@ export class SearchService {
   /** Open Tell Me dialog with retry */
   private async openTellMeDialog(
     ctx: SearchContext
-  ): Promise<Result<{ dialogHandlers: any[]; searchControlId: string }, BCError>> {
+  ): Promise<Result<{ dialogHandlers: unknown[]; searchControlId: string }, BCError>> {
     ctx.logger.debug('Opening Tell Me dialog');
 
     const openDialogResult = await retryWithBackoff(
@@ -155,11 +182,13 @@ export class SearchService {
         }
 
         const dialogHandlers = await ctx.rawClient.waitForHandlers(
-          (handlers: any[]) => {
-            const found = handlers.some((h: any) =>
-              h.handlerType === 'DN.FormToShow' &&
-              h.parameters?.[0]?.Caption?.includes('Tell Me')
-            );
+          (handlers: unknown[]) => {
+            const found = handlers.some((h) => {
+              const handler = h as SearchHandler;
+              if (handler.handlerType !== 'DN.FormToShow') return false;
+              const params = handler.parameters?.[0] as FormToShowParams | undefined;
+              return params?.Caption?.includes('Tell Me') ?? false;
+            });
             return { matched: found, data: found ? handlers : undefined };
           },
           { timeoutMs: 5000 }
@@ -190,12 +219,18 @@ export class SearchService {
   }
 
   /** Extract search control ID from dialog handlers */
-  private extractSearchControlId(dialogHandlers: any[]): string {
-    const formToShow = dialogHandlers.find((h: any) => h.handlerType === 'DN.FormToShow');
-    if (formToShow?.parameters?.[0]?.Controls) {
-      const searchControl = this.findSearchControl(formToShow.parameters[0].Controls);
-      if (searchControl) {
-        return searchControl.ControlId || 'Search';
+  private extractSearchControlId(dialogHandlers: unknown[]): string {
+    const formToShow = dialogHandlers.find((h) => {
+      const handler = h as SearchHandler;
+      return handler.handlerType === 'DN.FormToShow';
+    }) as SearchHandler | undefined;
+    if (formToShow) {
+      const params = formToShow.parameters?.[0] as FormToShowParams | undefined;
+      if (params?.Controls) {
+        const searchControl = this.findSearchControl(params.Controls);
+        if (searchControl) {
+          return searchControl.ControlId || 'Search';
+        }
       }
     }
     return 'Search';
@@ -224,12 +259,13 @@ export class SearchService {
   ): Promise<Result<SearchResult[], BCError>> {
     // Set up listener before executing search
     const resultsPromise = ctx.rawClient.waitForHandlers(
-      (handlers: any[]) => {
-        const found = handlers.some((h: any) => {
-          if (h.handlerType === 'DN.LogicalClientChangeHandler') {
-            const changes = h.parameters?.[1];
-            return Array.isArray(changes) && changes.some((change: any) =>
-              change.t === 'DataRefreshChange' && change.RowChanges?.length > 0
+      (handlers: unknown[]) => {
+        const found = handlers.some((h) => {
+          const handler = h as SearchHandler;
+          if (handler.handlerType === 'DN.LogicalClientChangeHandler') {
+            const changes = handler.parameters?.[1] as readonly ChangeEntry[] | undefined;
+            return Array.isArray(changes) && changes.some((change) =>
+              isDataRefreshChangeType(change.t) && (change.RowChanges?.length ?? 0) > 0
             );
           }
           return false;
@@ -257,7 +293,7 @@ export class SearchService {
     }
 
     // Wait for results
-    let resultHandlers: any[];
+    let resultHandlers: unknown[];
     try {
       resultHandlers = await resultsPromise;
       ctx.logger.debug('Search results received');
@@ -300,7 +336,7 @@ export class SearchService {
   /**
    * Find the search control in the dialog controls hierarchy
    */
-  private findSearchControl(controls: any[]): any {
+  private findSearchControl(controls: DialogControl[]): DialogControl | null {
     if (!controls) return null;
 
     for (const control of controls) {

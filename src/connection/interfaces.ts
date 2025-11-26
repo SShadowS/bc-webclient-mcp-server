@@ -34,10 +34,13 @@ export type { CancelableOptions } from '../core/abort.js';
  *
  * Handlers are the fundamental unit of BC responses, containing
  * instructions for the client (form updates, validation, etc.)
+ *
+ * NOTE: Uses loose types for runtime parsing. For typed handler access,
+ * use Handler type from bc-types.ts which has discriminated unions.
  */
 export type BCHandler = {
   handlerType: string;
-  parameters?: any[];
+  parameters?: readonly unknown[];
 };
 
 /**
@@ -62,14 +65,14 @@ export type HandlerEvent =
     }
   | {
       kind: 'DataRefreshChange';
-      updates: any[];
+      updates: readonly unknown[];
       raw: BCHandler;
     }
   | {
       kind: 'Message';
       sequenceNumber: number;
       openFormIds?: string[];
-      raw: any;
+      raw: unknown;
     }
   | {
       kind: 'SessionInfo';
@@ -121,9 +124,9 @@ export type HandlerEvent =
         formId: string;
         controlPath: string;
         caption: string;
-        columns: any[]; // RepeaterColumnDescription[] but avoid circular import
+        columns: readonly unknown[]; // RepeaterColumnDescription[] but avoid circular import
       }>;
-      raw: any;
+      raw: unknown;
     };
 
 // ============================================================================
@@ -219,12 +222,12 @@ export interface IBCWebSocketManager {
    */
   sendRpcRequest(
     method: string,
-    params: any[],
+    params: readonly unknown[],
     options?: {
       signal?: AbortSignal;
       timeoutMs?: number;
     }
-  ): Promise<any>;
+  ): Promise<unknown>;
 
   /**
    * Check if WebSocket is connected.
@@ -241,7 +244,7 @@ export interface IBCWebSocketManager {
    * @param handler Callback for each message
    * @returns Unsubscribe function
    */
-  onRawMessage(handler: (msg: any) => void): () => void;
+  onRawMessage(handler: (msg: unknown) => void): () => void;
 }
 
 /**
@@ -405,7 +408,7 @@ export interface IBCSessionManager {
    * @throws {ConnectionError} If not connected
    * @throws {ProtocolError} If session initialization fails
    */
-  openSession(connectionRequest: any): Promise<any>;
+  openSession(connectionRequest: unknown): Promise<unknown[]>;
 
   /**
    * Invoke BC action.
@@ -429,7 +432,7 @@ export interface IBCSessionManager {
     lastClientAckSequenceNumber?: number;
     signal?: AbortSignal;
     timeoutMs?: number;
-  }): Promise<any>;
+  }): Promise<unknown[]>;
 
   /**
    * Handle protocol events to update session state.
@@ -539,5 +542,5 @@ export interface IBCFilterMetadataCache {
     columnCaption: string;
     filterValue?: string;
     signal?: AbortSignal;
-  }): Promise<any>;
+  }): Promise<unknown[]>;
 }

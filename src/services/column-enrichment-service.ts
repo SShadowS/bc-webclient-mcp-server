@@ -90,7 +90,7 @@ export class ColumnEnrichmentService {
    */
   public async enrichFromResponse(
     pageContextId: string,
-    response: any
+    response: unknown
   ): Promise<EnrichmentResult> {
     // Extract columns from response
     const discovered = extractColumnsFromResponse(response);
@@ -148,7 +148,7 @@ export class ColumnEnrichmentService {
    * @param response - BC WebSocket response
    * @returns true if response contains RCC messages
    */
-  public hasColumns(response: any): boolean {
+  public hasColumns(response: unknown): boolean {
     const discovered = extractColumnsFromResponse(response);
     return discovered.length > 0;
   }

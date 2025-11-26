@@ -16,6 +16,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { gunzipSync } from 'zlib';
 import { logger } from '../../core/logger.js';
 import { defaultTimeouts, type TimeoutsConfig } from '../../core/timeouts.js';
+import { isPropertyChangesType } from '../../types/bc-type-discriminators.js';
 import type {
   ConnectionRequest,
   UserSettings,
@@ -169,11 +170,11 @@ export class BCRawWebSocketClient {
    *
    * Delegates to BCHandlerEventEmitter
    */
-  public onHandlers(listener: (handlers: any[]) => void): () => void {
+  public onHandlers(listener: (handlers: unknown[]) => void): () => void {
     return this.eventEmitter.onHandlers((event) => {
       // For backward compatibility, extract raw handlers
       if (event.kind === 'RawHandlers') {
-        listener(event.handlers);
+        listener([...event.handlers]);
       }
     });
   }
@@ -184,12 +185,12 @@ export class BCRawWebSocketClient {
    * Delegates to BCHandlerEventEmitter
    */
   public async waitForHandlers<T>(
-    predicate: (handlers: any[]) => { matched: boolean; data?: T },
+    predicate: (handlers: unknown[]) => { matched: boolean; data?: T },
     options?: { timeoutMs?: number; signal?: AbortSignal }
   ): Promise<T> {
     return this.eventEmitter.waitForHandlers((event) => {
       if (event.kind === 'RawHandlers') {
-        return predicate(event.handlers);
+        return predicate([...event.handlers]);
       }
       return { matched: false };
     }, options);
@@ -202,9 +203,9 @@ export class BCRawWebSocketClient {
    */
   private async sendRpcRequest(
     method: string,
-    params: any[],
+    params: unknown[],
     options?: { signal?: AbortSignal; timeoutMs?: number }
-  ): Promise<any> {
+  ): Promise<unknown> {
     return this.wsManager.sendRpcRequest(method, params, options);
   }
 
@@ -213,7 +214,7 @@ export class BCRawWebSocketClient {
    *
    * Week 4 TODO: Extract to BCSessionManager
    */
-  async openSession(connectionRequest: ConnectionRequest): Promise<any> {
+  async openSession(connectionRequest: ConnectionRequest): Promise<unknown[]> {
     logger.info('Opening BC session...');
 
     const sessionId = uuidv4();
@@ -227,6 +228,7 @@ export class BCRawWebSocketClient {
     this.extractRoleCenterFormId(sessionHandlers);
 
     logger.info('BC session opened\n');
+    return sessionHandlers;
   }
 
   /** Build the full OpenSession request matching browser format */
@@ -301,48 +303,53 @@ export class BCRawWebSocketClient {
   }
 
   /** Extract session info (ServerSessionId, SessionKey, CompanyName) from handlers */
-  private extractSessionInfo(sessionHandlers: any[]): void {
-    const searchParams = (params: any): void => {
+  private extractSessionInfo(sessionHandlers: unknown[]): void {
+    const searchParams = (params: unknown): void => {
       if (Array.isArray(params)) {
         for (const item of params) {
           searchParams(item);
         }
       } else if (params && typeof params === 'object') {
-        if (params.ServerSessionId) {
-          this.serverSessionId = params.ServerSessionId;
+        const obj = params as Record<string, unknown>;
+        if (obj.ServerSessionId) {
+          this.serverSessionId = obj.ServerSessionId as string;
           logger.info(`  Server session ID: ${this.serverSessionId}`);
         }
-        if (params.SessionKey) {
-          this.sessionKey = params.SessionKey;
+        if (obj.SessionKey) {
+          this.sessionKey = obj.SessionKey as string;
         }
-        if (params.CompanyName) {
-          this.companyName = params.CompanyName;
+        if (obj.CompanyName) {
+          this.companyName = obj.CompanyName as string;
           logger.info(`  Company: ${this.companyName}`);
         }
-        for (const value of Object.values(params)) {
+        for (const value of Object.values(obj)) {
           searchParams(value);
         }
       }
     };
 
     for (const handler of sessionHandlers) {
-      if (handler.parameters) {
-        searchParams(handler.parameters);
+      const h = handler as { parameters?: unknown[] };
+      if (h.parameters) {
+        searchParams(h.parameters);
       }
     }
   }
 
   /** Extract role center form ID from FormToShow handler */
-  private extractRoleCenterFormId(sessionHandlers: any[]): void {
+  private extractRoleCenterFormId(sessionHandlers: unknown[]): void {
     const formHandler = sessionHandlers.find(
-      (h: any) =>
-        h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-        h.parameters?.[0] === 'FormToShow' &&
-        h.parameters?.[1]?.ServerId
-    );
+      (handler) => {
+        const h = handler as { handlerType?: string; parameters?: unknown[] };
+        return h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+          h.parameters?.[0] === 'FormToShow' &&
+          (h.parameters?.[1] as { ServerId?: string })?.ServerId;
+      }
+    ) as { parameters?: unknown[] } | undefined;
 
-    if (formHandler?.parameters?.[1]?.ServerId) {
-      this.roleCenterFormId = formHandler.parameters[1].ServerId;
+    const formData = formHandler?.parameters?.[1] as { ServerId?: string } | undefined;
+    if (formData?.ServerId) {
+      this.roleCenterFormId = formData.ServerId;
       logger.info(`  Role center form: ${this.roleCenterFormId}`);
 
       // Track role center as open form (BC requires this for subsequent Invoke calls)
@@ -390,7 +397,7 @@ export class BCRawWebSocketClient {
     lastClientAckSequenceNumber?: number;
     signal?: AbortSignal;
     timeoutMs?: number;
-  }): Promise<any> {
+  }): Promise<unknown[]> {
     if (!this.serverSessionId || !this.sessionKey) {
       throw new Error('Session not initialized. Call openSession() first.');
     }
@@ -409,7 +416,7 @@ export class BCRawWebSocketClient {
     logger.info(`[invoke] sequenceNo=${sequenceNo}, lastClientAckSequenceNumber=${lastClientAckSequenceNumber}, openFormIds=${JSON.stringify(openFormIds)}`);
 
     // Build interaction object (matches browser format)
-    const interaction: any = {
+    const interaction: Record<string, unknown> = {
       interactionName: options.interactionName,
       skipExtendingSessionLifetime: false,
       namedParameters: typeof options.namedParameters === 'string'
@@ -429,7 +436,7 @@ export class BCRawWebSocketClient {
     }
 
     // Build full params matching browser format
-    const params: any = {
+    const params: Record<string, unknown> = {
       openFormIds,
       sessionId: this.serverSessionId,
       sequenceNo,
@@ -479,15 +486,16 @@ export class BCRawWebSocketClient {
    * Week 2: Still using local implementation (BCProtocolAdapter handles WebSocket messages)
    * Week 4 TODO: Remove this when session manager is extracted
    */
-  private decompressIfNeeded(result: any): any[] {
-    if (result?.compressedResult) {
-      const compressed = Buffer.from(result.compressedResult, 'base64');
+  private decompressIfNeeded(result: unknown): unknown[] {
+    const res = result as { compressedResult?: string };
+    if (res?.compressedResult) {
+      const compressed = Buffer.from(res.compressedResult, 'base64');
       const decompressed = gunzipSync(compressed);
       const decompressedJson = decompressed.toString('utf-8');
-      const actualResponse = JSON.parse(decompressedJson);
+      const actualResponse = JSON.parse(decompressedJson) as unknown;
       return Array.isArray(actualResponse) ? actualResponse : [];
     }
-    return Array.isArray(result) ? result : [];
+    return Array.isArray(result) ? [...result] : [];
   }
 
   /**
@@ -495,19 +503,20 @@ export class BCRawWebSocketClient {
    *
    * Week 4 TODO: Extract to BCFilterMetadataCache
    */
-  cacheFilterMetadata(formId: string, handlers: any[]): number {
+  cacheFilterMetadata(formId: string, handlers: unknown[]): number {
     let fieldCount = 0;
     const formCache = new Map<string, string>();
 
     for (const handler of handlers) {
+      const h = handler as { handlerType?: string; parameters?: unknown[] };
       if (
-        handler.handlerType === 'DN.LogicalClientChangeHandler' &&
-        Array.isArray(handler.parameters?.[1])
+        h.handlerType === 'DN.LogicalClientChangeHandler' &&
+        Array.isArray(h.parameters?.[1])
       ) {
-        const changes = handler.parameters[1];
+        const changes = h.parameters[1] as { t?: string; ControlReference?: { controlPath?: string }; Columns?: { Id?: string; Caption?: string }[] }[];
 
         for (const change of changes) {
-          if (change.t === 'PropertyChanges' && change.ControlReference) {
+          if (isPropertyChangesType(change.t) && change.ControlReference) {
             const controlPath = change.ControlReference.controlPath;
 
             if (change.Columns) {
@@ -575,7 +584,7 @@ export class BCRawWebSocketClient {
     columnCaption: string;
     filterValue?: string;
     signal?: AbortSignal;
-  }): Promise<any> {
+  }): Promise<readonly unknown[]> {
     const canonicalId = this.resolveFilterFieldId(
       params.formId,
       params.columnCaption
@@ -606,7 +615,7 @@ export class BCRawWebSocketClient {
 
     // Step 2: SaveValue to set filter value
     const filterControlPath = `${controlPath}::${fieldId}`;
-    await this.invoke({
+    const result = await this.invoke({
       interactionName: 'SaveValue',
       namedParameters: {
         newValue: params.filterValue || '',
@@ -618,6 +627,6 @@ export class BCRawWebSocketClient {
 
     logger.info(`Filter applied`);
 
-    return { success: true };
+    return result;
   }
 }

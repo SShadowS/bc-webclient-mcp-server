@@ -18,6 +18,18 @@ import { FormStateService } from './form-state-service.js';
 import { ButtonIntent } from '../types/form-state.js';
 import { logger } from '../core/logger.js';
 
+/** Handler type for BC protocol handlers */
+interface CrudHandler {
+  handlerType: string;
+  parameters?: readonly unknown[];
+}
+
+/** FormToShow handler data (for checking ServerId) */
+interface FormToShowCheck {
+  ServerId?: string;
+  Children?: readonly unknown[];
+}
+
 /**
  * SaveValue options
  */
@@ -99,7 +111,7 @@ export class BCCrudService {
   private singleFlightMode = true;
 
   /** In-flight request tracker */
-  private inflightRequest: Promise<any> | null = null;
+  private inflightRequest: Promise<unknown> | null = null;
 
   constructor(client: BCRawWebSocketClient, formStateService?: FormStateService) {
     this.client = client;
@@ -147,7 +159,7 @@ export class BCCrudService {
    * @param options - Load options
    * @param openFormHandlers - Optional: handlers from OpenForm (contains FormToShow with control tree)
    */
-  async loadForm(formId: string, options?: LoadFormOptions, openFormHandlers?: any[]): Promise<void> {
+  async loadForm(formId: string, options?: LoadFormOptions, openFormHandlers?: unknown[]): Promise<void> {
     const opts: Required<LoadFormOptions> = {
       waitForReady: true,
       retry: true,
@@ -176,10 +188,10 @@ export class BCCrudService {
 
   /** Invoke LoadForm and collect both immediate and async handlers */
   private async invokeLoadFormWithListener(formId: string, timeoutMs: number): Promise<{
-    immediateHandlers: any[];
-    asyncHandlers: any[];
+    immediateHandlers: unknown[];
+    asyncHandlers: unknown[];
   }> {
-    const asyncHandlers: any[] = [];
+    const asyncHandlers: unknown[] = [];
     const unsubscribe = this.client.onHandlers((handlers) => {
       asyncHandlers.push(...handlers);
     });
@@ -193,14 +205,15 @@ export class BCCrudService {
       });
 
       // Wait for CompletedInteractions if not in immediate response
-      const hasCompleted = immediateHandlers.find(
-        (h: any) => h.handlerType === 'DN.CallbackResponseProperties'
-      );
+      const hasCompleted = immediateHandlers.find((h) => {
+        const handler = h as CrudHandler;
+        return handler.handlerType === 'DN.CallbackResponseProperties';
+      });
 
       if (!hasCompleted) {
         await this.client.waitForHandlers(
           (handlers) => {
-            const callbackHandler = handlers.find(h => h.handlerType === 'DN.CallbackResponseProperties');
+            const callbackHandler = handlers.find(h => (h as { handlerType?: string }).handlerType === 'DN.CallbackResponseProperties');
             return { matched: !!callbackHandler, data: handlers };
           },
           { timeoutMs }
@@ -217,29 +230,34 @@ export class BCCrudService {
   }
 
   /** Process FormToShow handler to initialize FormState */
-  private processFormShowHandler(formId: string, handlers: any[]): void {
-    const formShowHandler = handlers.find(
-      (h: any) => h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-           h.parameters?.[0] === 'FormToShow' &&
-           h.parameters?.[1]?.ServerId === formId
-    );
+  private processFormShowHandler(formId: string, handlers: unknown[]): void {
+    const formShowHandler = handlers.find((h) => {
+      const handler = h as CrudHandler;
+      if (handler.handlerType !== 'DN.LogicalClientEventRaisingHandler') return false;
+      if (handler.parameters?.[0] !== 'FormToShow') return false;
+      const formData = handler.parameters?.[1] as FormToShowCheck | undefined;
+      return formData?.ServerId === formId;
+    }) as CrudHandler | undefined;
 
     if (formShowHandler) {
-      const formData = formShowHandler.parameters?.[1];
+      const formData = formShowHandler.parameters?.[1] as FormToShowCheck | undefined;
       logger.info(`[BCCrudService] Found FormToShow data with ${formData?.Children?.length || 0} top-level controls`);
-      this.formStateService.initFromFormToShow(formId, formData);
+      // Pass as unknown for compatibility with FormStateService's internal FormToShowData type
+      this.formStateService.initFromFormToShow(formId, formShowHandler.parameters?.[1] as never);
       logger.info(`[BCCrudService] FormState initialized from FormToShow`);
     }
   }
 
   /** Apply LogicalClientChangeHandler changes to FormState */
-  private applyHandlerChanges(formId: string, handlers: any[]): void {
-    for (const handler of handlers) {
+  private applyHandlerChanges(formId: string, handlers: unknown[]): void {
+    for (const h of handlers) {
+      const handler = h as CrudHandler;
       if (handler.handlerType === 'DN.LogicalClientChangeHandler') {
         const handlerFormId = handler.parameters?.[0];
         if (handlerFormId === formId) {
+          // Pass changes as never for compatibility with FormStateService's BcChange type
           const changes = handler.parameters?.[1];
-          this.formStateService.applyChanges(formId, changes);
+          this.formStateService.applyChanges(formId, changes as never);
         }
       }
     }
@@ -331,7 +349,7 @@ export class BCCrudService {
       // Wait for CompletedInteractions
       await this.client.waitForHandlers(
         (handlers) => {
-          const completed = handlers.find(h => h.handlerType === 'DN.CallbackResponseProperties');
+          const completed = handlers.find(h => (h as { handlerType?: string }).handlerType === 'DN.CallbackResponseProperties');
           return { matched: !!completed, data: handlers };
         },
         { timeoutMs: opts.timeoutMs }
@@ -340,15 +358,26 @@ export class BCCrudService {
       logger.info(`[BCCrudService] Field "${fieldKey}" saved successfully`);
 
       // Update FormState with any changes
-      const handlers = await this.client.waitForHandlers(
+      // Type for handlers from waitForHandlers
+      interface BcHandler {
+        handlerType?: string;
+        parameters?: readonly unknown[];
+      }
+      const rawHandlers = await this.client.waitForHandlers(
         (h) => ({ matched: true, data: h }),
         { timeoutMs: 100 }
-      ).catch(() => [] as any[]);
+      ).catch(() => [] as unknown[]);
+      // Cast handlers to typed array for property access
+      const handlers = rawHandlers as BcHandler[];
 
       for (const handler of handlers) {
         if (handler.handlerType === 'DN.LogicalClientChangeHandler' &&
             handler.parameters?.[0] === formId) {
-          this.formStateService.applyChanges(formId, handler.parameters?.[1]);
+          // Cast changes parameter to expected type (it contains BC change objects)
+          this.formStateService.applyChanges(
+            formId,
+            handler.parameters?.[1] as Parameters<typeof this.formStateService.applyChanges>[1]
+          );
         }
       }
     });
@@ -362,7 +391,7 @@ export class BCCrudService {
     systemAction: number,
     controlPath: string,
     options?: { timeoutMs?: number; key?: string }
-  ): Promise<any> {
+  ): Promise<unknown[]> {
     const timeoutMs = options?.timeoutMs || 5000;
 
     return this.withSingleFlight(async () => {
@@ -383,7 +412,7 @@ export class BCCrudService {
       // Wait for CompletedInteractions
       const handlers = await this.client.waitForHandlers(
         (handlers) => {
-          const completed = handlers.find(h => h.handlerType === 'DN.CallbackResponseProperties');
+          const completed = handlers.find(h => (h as { handlerType?: string }).handlerType === 'DN.CallbackResponseProperties');
           return { matched: !!completed, data: handlers };
         },
         { timeoutMs }
@@ -449,7 +478,7 @@ export class BCCrudService {
       // Wait for confirmation
       await this.client.waitForHandlers(
         (handlers) => {
-          const completed = handlers.find(h => h.handlerType === 'DN.CallbackResponseProperties');
+          const completed = handlers.find(h => (h as { handlerType?: string }).handlerType === 'DN.CallbackResponseProperties');
           return { matched: !!completed, data: handlers };
         },
         { timeoutMs }

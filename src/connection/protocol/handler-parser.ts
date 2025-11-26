@@ -45,7 +45,7 @@ import { logger } from '../../core/logger.js';
  * // handlers: [{ handlerType: 'DN...', parameters: [...] }, ...]
  * ```
  */
-export function decompressHandlers(base64: string): any[] {
+export function decompressHandlers(base64: string): unknown[] {
   logger.info('  Decompressing gzip response...');
 
   // Base64 decode
@@ -58,13 +58,22 @@ export function decompressHandlers(base64: string): any[] {
   logger.info(`  Decompressed: ${decompressedJson.substring(0, 200)}...`);
 
   // Parse decompressed JSON as handler array
-  const actualResponse = JSON.parse(decompressedJson);
+  const actualResponse: unknown = JSON.parse(decompressedJson);
 
   if (!Array.isArray(actualResponse)) {
     throw new Error('Decompressed response is not an array');
   }
 
   return actualResponse;
+}
+
+/** Response structure for compressed data extraction */
+interface CompressedResponse {
+  method?: string;
+  params?: Array<{ compressedResult?: string; compressedData?: string }>;
+  compressedResult?: string;
+  jsonrpc?: string;
+  result?: { compressedResult?: string };
 }
 
 /**
@@ -93,25 +102,27 @@ export function decompressHandlers(base64: string): any[] {
  * }
  * ```
  */
-export function extractCompressedResult(response: any): string | null {
+export function extractCompressedResult(response: unknown): string | null {
+  const typedResponse = response as CompressedResponse;
+
   // 1) Async Message envelope with nested compressedResult (most common for Tell Me)
-  if (response.method === 'Message' && response.params?.[0]?.compressedResult) {
-    return response.params[0].compressedResult;
+  if (typedResponse.method === 'Message' && typedResponse.params?.[0]?.compressedResult) {
+    return typedResponse.params[0].compressedResult;
   }
 
   // 1b) Async Message envelope with compressedData (LoadForm async responses)
-  if (response.method === 'Message' && response.params?.[0]?.compressedData) {
-    return response.params[0].compressedData;
+  if (typedResponse.method === 'Message' && typedResponse.params?.[0]?.compressedData) {
+    return typedResponse.params[0].compressedData;
   }
 
   // 2) Top-level compressedResult
-  if (response.compressedResult) {
-    return response.compressedResult;
+  if (typedResponse.compressedResult) {
+    return typedResponse.compressedResult;
   }
 
   // 3) JSON-RPC result with compressedResult
-  if (response.jsonrpc && response.result?.compressedResult) {
-    return response.result.compressedResult;
+  if (typedResponse.jsonrpc && typedResponse.result?.compressedResult) {
+    return typedResponse.result.compressedResult;
   }
 
   // No compressed data found
@@ -133,6 +144,6 @@ export function extractCompressedResult(response: any): string | null {
  * }
  * ```
  */
-export function hasCompressedResult(response: any): boolean {
+export function hasCompressedResult(response: unknown): boolean {
   return extractCompressedResult(response) !== null;
 }

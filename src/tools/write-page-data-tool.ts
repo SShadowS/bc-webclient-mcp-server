@@ -24,11 +24,114 @@ import { ConnectionManager } from '../connection/connection-manager.js';
 import { createToolLogger, logger as moduleLogger } from '../core/logger.js';
 import type { AuditLogger } from '../services/audit-logger.js';
 import { ControlParser } from '../parsers/control-parser.js';
-import type { LogicalForm, FieldMetadata, RepeaterMetadata, ColumnMetadata } from '../types/bc-types.js';
+import type {
+  LogicalForm, FieldMetadata, RepeaterMetadata, ColumnMetadata,
+  Handler, LogicalClientChangeHandler, BCHandler
+} from '../types/bc-types.js';
 import { PageContextCache } from '../services/page-context-cache.js';
 import type { PageState, RepeaterState } from '../state/page-state.js';
 import { PageStateManager } from '../state/page-state-manager.js';
 import { createWorkflowIntegration } from '../services/workflow-integration.js';
+import type {
+  Change, PropertyChanges, PropertyChange, ControlReference,
+  DataRefreshChange, DataRowInsertedChange
+} from '../types/bc-protocol-types.js';
+import { isPropertyChange, isPropertyChanges } from '../types/bc-protocol-types.js';
+import {
+  isDataRefreshChangeType,
+  isDataRowInsertedType,
+  isPropertyChangesType,
+  isPropertyChangeType,
+} from '../types/bc-type-discriminators.js';
+
+/**
+ * PageContext structure stored in connection
+ */
+interface PageContext {
+  pageId: string;
+  formId: string;
+  sessionId: string;
+  logicalForm: LogicalForm;
+  handlers: Handler[];
+  pageType?: string;
+  fields?: readonly FieldMetadata[];
+  repeaters?: readonly RepeaterMetadata[];
+  needsRefresh?: boolean;
+}
+
+/**
+ * Extended connection type with pageContexts map
+ */
+interface ConnectionWithPageContexts extends IBCConnection {
+  pageContexts?: Map<string, PageContext>;
+}
+
+/**
+ * Type guard to check if a handler is a LogicalClientChangeHandler
+ */
+function isLogicalClientChangeHandler(handler: Handler | BCHandler): handler is LogicalClientChangeHandler {
+  return handler.handlerType === 'DN.LogicalClientChangeHandler';
+}
+
+/**
+ * BCError with optional context for validation messages
+ */
+interface BCErrorWithContext extends BCError {
+  context?: {
+    validationMessage?: string;
+    [key: string]: unknown;
+  };
+}
+
+/**
+ * Generic BC handler interface for special handler types not in standard union
+ * (e.g., ErrorMessageProperties, ValidationMessageProperties, ConfirmDialogProperties)
+ */
+interface GenericBCHandler {
+  handlerType: string;
+  parameters?: readonly unknown[];
+}
+
+/**
+ * Get the handlerType from any handler (standard or generic)
+ */
+function getHandlerType(handler: Handler | GenericBCHandler): string {
+  return handler.handlerType;
+}
+
+/**
+ * Get parameters from any handler (standard or generic)
+ */
+function getHandlerParams(handler: Handler | GenericBCHandler): readonly unknown[] | undefined {
+  return handler.parameters;
+}
+
+/**
+ * Mutable PropertyChange structure for cache updates
+ */
+interface MutablePropertyChange {
+  t: string;
+  ControlReference?: {
+    controlPath?: string;
+    ControlPath?: string;
+    formId?: string;
+  };
+  Changes?: {
+    StringValue?: string;
+    DecimalValue?: number;
+    IntegerValue?: number;
+    BooleanValue?: boolean;
+    ObjectValue?: unknown;
+  };
+}
+
+/**
+ * Mutable handler structure for cache updates
+ */
+interface MutableHandler {
+  handlerType: string;
+  parameters?: unknown[];
+}
 
 /**
  * MCP Tool: write_page_data
@@ -347,7 +450,8 @@ export class WritePageDataTool extends BaseMCPTool {
    * Sets field values on the current record using SaveValue interactions.
    */
   protected async executeInternal(input: unknown): Promise<Result<WritePageDataOutput, BCError>> {
-    const logger = createToolLogger('write_page_data', (input as any)?.pageContextId);
+    const inputObj = input as Record<string, unknown> | null;
+    const logger = createToolLogger('write_page_data', inputObj?.pageContextId as string | undefined);
 
     // Validate and normalize input
     const validatedInput = this.validateInput(input);
@@ -402,7 +506,8 @@ export class WritePageDataTool extends BaseMCPTool {
       actualSessionId = sessionId;
 
       // Check if the page context is still valid in memory
-      let pageContext = (connection as any).pageContexts?.get(pageContextId);
+      const connWithCtx = connection as ConnectionWithPageContexts;
+      let pageContext = connWithCtx.pageContexts?.get(pageContextId);
 
       // If not in memory, try restoring from persistent cache
       if (!pageContext) {
@@ -414,11 +519,12 @@ export class WritePageDataTool extends BaseMCPTool {
           if (cachedContext) {
             logger.info(`Restored pageContext from cache: ${pageContextId}`);
             // Restore to memory
-            if (!(connection as any).pageContexts) {
-              (connection as any).pageContexts = new Map();
+            if (!connWithCtx.pageContexts) {
+              connWithCtx.pageContexts = new Map();
             }
-            (connection as any).pageContexts.set(pageContextId, cachedContext);
-            pageContext = cachedContext;
+            // Cast through unknown since CachedPageContext may have different optional fields
+            connWithCtx.pageContexts.set(pageContextId, cachedContext as unknown as PageContext);
+            pageContext = cachedContext as unknown as PageContext;
           }
         } catch (error) {
           logger.warn(`Failed to load from cache: ${error}`);
@@ -469,7 +575,7 @@ export class WritePageDataTool extends BaseMCPTool {
 
     // OPTIMIZATION: Use cached LogicalForm for client-side field validation
     // This follows the caching pattern: extract metadata once in get_page_metadata, reuse here
-    const pageContext = (connection as any).pageContexts?.get(pageContextId);
+    const pageContext = (connection as ConnectionWithPageContexts).pageContexts?.get(pageContextId);
     let fieldMap: Map<string, FieldMetadata | ColumnMetadata> | null = null;
     let targetRowBookmark: string | undefined;  // Bookmark for existing row modification in subpages
 
@@ -648,7 +754,8 @@ export class WritePageDataTool extends BaseMCPTool {
         logger.info(`Field "${fieldName}" updated successfully`);
       } else {
         const errorMsg = result.error.message;
-        const validationMsg = (result.error as any).context?.validationMessage;
+        const errorWithCtx = result.error as BCErrorWithContext;
+        const validationMsg = errorWithCtx.context?.validationMessage;
         failedFields.push({
           field: fieldName,
           error: errorMsg,
@@ -696,7 +803,7 @@ export class WritePageDataTool extends BaseMCPTool {
         // Track only the fields that succeeded
         const successfulFieldsObj: Record<string, unknown> = {};
         for (const fieldName of updatedFields) {
-          successfulFieldsObj[fieldName] = (fields as any)[fieldName];
+          successfulFieldsObj[fieldName] = fields[fieldName];
         }
         workflow.trackUnsavedChanges(successfulFieldsObj);
 
@@ -761,7 +868,7 @@ export class WritePageDataTool extends BaseMCPTool {
    */
   private async findRepeaterBySubpage(
     pageContextId: string,
-    pageContext: any,
+    pageContext: PageContext | undefined,
     subpageName: string
   ): Promise<Result<RepeaterMetadata, BCError>> {
     const logger = moduleLogger.child({ method: 'findRepeaterBySubpage' });
@@ -966,28 +1073,29 @@ export class WritePageDataTool extends BaseMCPTool {
    * Extracts bookmark from DataRefreshChange event (for new line creation).
    * BC sends this async event when a new line is inserted with the new bookmark.
    */
-  private extractBookmarkFromDataRefresh(handlers: readonly any[]): string | undefined {
+  private extractBookmarkFromDataRefresh(handlers: readonly Handler[]): string | undefined {
     const logger = createToolLogger('write_page_data', 'bookmark-extraction');
 
     // Look for LogicalClientChangeHandler with DataRefreshChange
     for (const handler of handlers) {
-      if (handler.handlerType === 'DN.LogicalClientChangeHandler') {
-        const changes = handler.parameters?.[1];
+      if (isLogicalClientChangeHandler(handler)) {
+        const changes = handler.parameters?.[1] as readonly Change[] | undefined;
         if (Array.isArray(changes)) {
           for (const change of changes) {
-            if (change.t === 'DataRefreshChange') {
+            // BC27+ uses full type name 'DataRefreshChange' instead of shorthand 'drch'
+            if (isDataRefreshChangeType(change.t)) {
               // Look for DataRowInserted with bookmark
-              const rowChanges = change.RowChanges || [];
+              const dataRefresh = change as DataRefreshChange;
+              const rowChanges = dataRefresh.RowChanges || [];
               for (const rowChange of rowChanges) {
-                if (rowChange.t === 'DataRowInserted') {
-                  const insertedData = rowChange.DataRowInserted;
-                  if (Array.isArray(insertedData) && insertedData.length >= 2) {
-                    const rowData = insertedData[1];
-                    const bookmark = rowData?.bookmark;
-                    if (bookmark) {
-                      logger.info(`Extracted bookmark from new line: ${bookmark}`);
-                      return bookmark;
-                    }
+                // BC27+ uses full type name 'DataRowInserted' instead of shorthand 'drich'
+                if (isDataRowInsertedType(rowChange.t)) {
+                  // DataRowInsertedChange has Row: ClientDataRow with Bookmark property
+                  const rowData = rowChange.Row;
+                  const bookmark = rowData?.Bookmark;
+                  if (bookmark) {
+                    logger.info(`Extracted bookmark from new line: ${bookmark}`);
+                    return bookmark;
                   }
                 }
               }
@@ -1062,12 +1170,10 @@ export class WritePageDataTool extends BaseMCPTool {
     const abortController = new AbortController();
 
     // Set up async handler listener BEFORE sending interaction
-    const asyncHandlerPromise = connection.waitForHandlers(
-      (handlers: any[]) => {
+    const asyncHandlerPromise = connection.waitForHandlers<Handler[]>(
+      (handlers: Handler[]) => {
         // Look for LogicalClientChangeHandler with PropertyChanges for our field
-        const logicalHandler = handlers.find((h: any) =>
-          h.handlerType === 'DN.LogicalClientChangeHandler'
-        );
+        const logicalHandler = handlers.find((h) => isLogicalClientChangeHandler(h));
 
         if (logicalHandler) {
           moduleLogger.info(`[PropertyChanges] Found async LogicalClientChangeHandler after SaveValue`);
@@ -1097,22 +1203,20 @@ export class WritePageDataTool extends BaseMCPTool {
     let foundPropertyChangesInSync = false;
     moduleLogger.info(`[PropertyChanges] Checking ${result.value.length} synchronous handlers for PropertyChanges`);
     for (const handler of result.value) {
-      moduleLogger.info(`[PropertyChanges] Sync handler type: ${(handler as any).handlerType}`);
-      if ((handler as any).handlerType === 'DN.LogicalClientChangeHandler') {
-        const params = (handler as any).parameters;
+      moduleLogger.info(`[PropertyChanges] Sync handler type: ${handler.handlerType}`);
+      if (isLogicalClientChangeHandler(handler)) {
+        const params = handler.parameters;
         moduleLogger.info(`[PropertyChanges] Found LogicalClientChangeHandler in sync response, params.length=${Array.isArray(params) ? params.length : 'not array'}`);
         if (Array.isArray(params) && params.length >= 2) {
-          const changes = params[1];
-          moduleLogger.info(`[PropertyChanges] Changes is array: ${Array.isArray(changes)}, length: ${Array.isArray(changes) ? changes.length : 'N/A'}`);
-          if (Array.isArray(changes)) {
-            for (const change of changes) {
-              moduleLogger.info(`[PropertyChanges] Change type: ${change?.t}`);
-              // BC uses both "PropertyChanges" (plural) and "PropertyChange" (singular)
-              if (change?.t === 'PropertyChanges' || change?.t === 'PropertyChange') {
-                foundPropertyChangesInSync = true;
-                moduleLogger.info(`[PropertyChanges] Found PropertyChange(s) in sync response!`);
-                break;
-              }
+          const changes = params[1] as readonly Change[];
+          moduleLogger.info(`[PropertyChanges] Changes is array: ${Array.isArray(changes)}, length: ${changes.length}`);
+          for (const change of changes) {
+            moduleLogger.info(`[PropertyChanges] Change type: ${change?.t}`);
+            // BC uses both "prc" (PropertyChanges) and "prch" (PropertyChange) type ids
+            if (isPropertyChanges(change) || isPropertyChange(change)) {
+              foundPropertyChangesInSync = true;
+              moduleLogger.info(`[PropertyChanges] Found PropertyChange(s) in sync response!`);
+              break;
             }
           }
         }
@@ -1131,7 +1235,7 @@ export class WritePageDataTool extends BaseMCPTool {
     // Wait for async PropertyChanges handlers (will be aborted if already found in sync)
     // Use Promise.race with setTimeout as a defensive fallback in case AbortSignal.timeout fails
     const FALLBACK_TIMEOUT_MS = 2000; // Slightly longer than the 1000ms primary timeout
-    let asyncHandlers: any[] = [];
+    let asyncHandlers: Handler[] = [];
     try {
       const fallbackTimeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error('Fallback timeout')), FALLBACK_TIMEOUT_MS);
@@ -1139,12 +1243,13 @@ export class WritePageDataTool extends BaseMCPTool {
 
       asyncHandlers = await Promise.race([asyncHandlerPromise, fallbackTimeoutPromise]);
       moduleLogger.info(`[PropertyChanges] Received ${asyncHandlers.length} async handlers after SaveValue`);
-    } catch (error: any) {
+    } catch (error: unknown) {
       // AbortError means we found PropertyChanges in sync response - this is good!
       // Timeout (either AbortSignal or fallback) means no async handlers - this is also OK for some fields
-      if (error?.name === 'AbortError') {
+      const errorObj = error as { name?: string; message?: string } | null;
+      if (errorObj?.name === 'AbortError') {
         moduleLogger.info(`[PropertyChanges] Async wait aborted (PropertyChanges already in sync response)`);
-      } else if (error?.message === 'Fallback timeout') {
+      } else if (errorObj?.message === 'Fallback timeout') {
         moduleLogger.info(`[PropertyChanges] Fallback timeout - no async handlers received`);
       } else {
         moduleLogger.info(`[PropertyChanges] No async handlers received (timeout) - this is OK for some fields`);
@@ -1153,16 +1258,17 @@ export class WritePageDataTool extends BaseMCPTool {
 
     // If immediateValidation is enabled, inspect handlers for errors and other messages
     if (immediateValidation) {
-      const handlers = result.value;
+      // Cast to GenericBCHandler for checking special handler types not in standard union
+      const handlers = result.value as unknown as GenericBCHandler[];
 
       // Check for BC error messages (blocking errors)
       const errorHandler = handlers.find(
-        (h: any) => h.handlerType === 'DN.ErrorMessageProperties' || h.handlerType === 'DN.ErrorDialogProperties'
+        (h) => h.handlerType === 'DN.ErrorMessageProperties' || h.handlerType === 'DN.ErrorDialogProperties'
       );
 
       if (errorHandler) {
-        const errorParams = (errorHandler as any).parameters?.[0];
-        const errorMessage = errorParams?.Message || errorParams?.ErrorMessage || 'Unknown error';
+        const errorParams = errorHandler.parameters?.[0] as Record<string, unknown> | undefined;
+        const errorMessage = String(errorParams?.Message || errorParams?.ErrorMessage || 'Unknown error');
 
         return err(
           new ProtocolError(
@@ -1174,12 +1280,12 @@ export class WritePageDataTool extends BaseMCPTool {
 
       // Check for validation errors (blocking validation)
       const validationHandler = handlers.find(
-        (h: any) => h.handlerType === 'DN.ValidationMessageProperties'
+        (h) => h.handlerType === 'DN.ValidationMessageProperties'
       );
 
       if (validationHandler) {
-        const validationParams = (validationHandler as any).parameters?.[0];
-        const validationMessage = validationParams?.Message || 'Validation failed';
+        const validationParams = validationHandler.parameters?.[0] as Record<string, unknown> | undefined;
+        const validationMessage = String(validationParams?.Message || 'Validation failed');
 
         return err(
           new ProtocolError(
@@ -1191,12 +1297,12 @@ export class WritePageDataTool extends BaseMCPTool {
 
       // Check for confirmation dialogs (require user interaction)
       const confirmHandler = handlers.find(
-        (h: any) => h.handlerType === 'DN.ConfirmDialogProperties' || h.handlerType === 'DN.YesNoDialogProperties'
+        (h) => h.handlerType === 'DN.ConfirmDialogProperties' || h.handlerType === 'DN.YesNoDialogProperties'
       );
 
       if (confirmHandler) {
-        const confirmParams = (confirmHandler as any).parameters?.[0];
-        const confirmMessage = confirmParams?.Message || confirmParams?.ConfirmText || 'Confirmation required';
+        const confirmParams = confirmHandler.parameters?.[0] as Record<string, unknown> | undefined;
+        const confirmMessage = String(confirmParams?.Message || confirmParams?.ConfirmText || 'Confirmation required');
 
         return err(
           new ProtocolError(
@@ -1217,12 +1323,12 @@ export class WritePageDataTool extends BaseMCPTool {
     // without requiring LoadForm (which returns stale Card page data)
 
     // Combine synchronous response handlers + async Message handlers
-    const allHandlers = [...result.value, ...asyncHandlers];
-    const pageContext = (connection as any).pageContexts?.get(pageContextId);
+    const allHandlers: Handler[] = [...result.value, ...asyncHandlers];
+    const pageContext = (connection as ConnectionWithPageContexts).pageContexts?.get(pageContextId);
 
     moduleLogger.info(`[PropertyChanges] SaveValue total handlers: ${allHandlers.length} (sync: ${result.value.length}, async: ${asyncHandlers.length}), pageContext exists: ${!!pageContext}, pageContext.handlers exists: ${!!pageContext?.handlers}`);
     if (allHandlers.length > 0) {
-      moduleLogger.info(`[PropertyChanges] Handler types: ${allHandlers.map((h: any) => h.handlerType).join(', ')}`);
+      moduleLogger.info(`[PropertyChanges] Handler types: ${allHandlers.map((h) => h.handlerType).join(', ')}`);
     }
 
     // Track whether we successfully updated the cache
@@ -1256,43 +1362,77 @@ export class WritePageDataTool extends BaseMCPTool {
       // Find LogicalClientChangeHandler with PropertyChanges for recalculated fields
       let foundLogicalHandler = false;
       for (const handler of allHandlers) {
-        if ((handler as any).handlerType === 'DN.LogicalClientChangeHandler') {
+        if (isLogicalClientChangeHandler(handler)) {
           foundLogicalHandler = true;
-          const params = (handler as any).parameters;
+          const params = handler.parameters;
           moduleLogger.info(`[PropertyChanges] Found LogicalClientChangeHandler, params length: ${Array.isArray(params) ? params.length : 'not array'}`);
 
           if (Array.isArray(params) && params.length >= 2) {
             const formIdParam = params[0];
-            const changes = params[1];
-            moduleLogger.info(`[PropertyChanges] FormId match: request=${formId}, response=${formIdParam}, changes is array: ${Array.isArray(changes)}, changes length: ${Array.isArray(changes) ? changes.length : 'N/A'}`);
+            const changes = params[1] as readonly Change[];
+            moduleLogger.info(`[PropertyChanges] FormId match: request=${formId}, response=${formIdParam}, changes is array: ${Array.isArray(changes)}, changes length: ${changes.length}`);
 
             // Verify this is for our form
-            if (formIdParam === formId && Array.isArray(changes)) {
+            if (formIdParam === formId) {
               moduleLogger.error(`[CACHE DEBUG] FormId matches! ${changes.length} changes. Looking for controlPath="${controlPath}"`);
               moduleLogger.info(`[PropertyChanges] FormId matches! Processing ${changes.length} changes...`);
 
               // Process each change
               for (let i = 0; i < changes.length; i++) {
                 const change = changes[i];
-                moduleLogger.error(`[CACHE DEBUG]   Change[${i}]: t=${change?.t}, controlPath=${change?.ControlReference?.controlPath}`);
+                const changeWithRef = change as PropertyChanges | PropertyChange;
+                // BC27 uses lowercase controlPath, older versions use ControlPath
+                const changeControlPath = changeWithRef?.ControlReference?.controlPath ?? changeWithRef?.ControlReference?.ControlPath;
+                moduleLogger.error(`[CACHE DEBUG]   Change[${i}]: t=${change?.t}, controlPath=${changeControlPath}`);
                 moduleLogger.info(`[PropertyChanges]   Change[${i}].t = ${change?.t}`);
 
-                // BC uses both "PropertyChanges" (plural) and "PropertyChange" (singular)
-                if (change?.t === 'PropertyChanges' || change?.t === 'PropertyChange') {
-                  // Extract controlPath from response (needed for cache update matching)
-                  const responseControlPath = change.ControlReference?.controlPath;
-                  moduleLogger.info(`[PropertyChanges]   PropertyChanges found! controlPath=${responseControlPath}`);
+                // BC uses both "prc" (PropertyChanges) and "prch" (PropertyChange) type ids
+                if (isPropertyChanges(change)) {
+                  // PropertyChanges (batch) - has Changes which can be array OR object (BC27 format)
+                  // BC27 uses lowercase controlPath, older versions use ControlPath
+                  const responseControlPath = changeWithRef.ControlReference?.controlPath ?? changeWithRef.ControlReference?.ControlPath;
+                  moduleLogger.info(`[PropertyChanges]   PropertyChanges (batch) found! controlPath=${responseControlPath}`);
 
-                  // Extract updated value (BC uses StringValue, ObjectValue, DecimalValue, etc.)
-                  // BC sends values in Changes property, not directly on change object
-                  const changesObj = change.Changes;
-                  const updatedValue = changesObj?.StringValue ?? changesObj?.ObjectValue ?? changesObj?.DecimalValue ??
-                                      changesObj?.BooleanValue ?? changesObj?.IntegerValue;
+                  // BC27 sends Changes as object with StringValue/ObjectValue properties
+                  // Legacy sends Changes as array of PropertyChange items
+                  // Cast through unknown since TypeScript types don't reflect BC27's object format
+                  const changesValue = change.Changes as unknown;
+                  if (Array.isArray(changesValue)) {
+                    // Legacy format: array of PropertyChange items
+                    for (const innerChange of changesValue as readonly PropertyChange[]) {
+                      const updatedValue = innerChange.PropertyValue;
+                      moduleLogger.info(`[PropertyChanges]   Inner change: ${innerChange.PropertyName} = ${JSON.stringify(updatedValue)}`);
+
+                      if (updatedValue !== undefined && responseControlPath) {
+                        moduleLogger.info(`[PropertyChanges]   Calling updateCachedPropertyChange for controlPath=${responseControlPath}`);
+                        const updated = this.updateCachedPropertyChange(pageContext.handlers, formId, responseControlPath, updatedValue);
+                        if (updated) cacheUpdated = true;
+                        moduleLogger.info(`[PropertyChanges]   updateCachedPropertyChange returned: ${updated}`);
+                      }
+                    }
+                  } else if (changesValue && typeof changesValue === 'object') {
+                    // BC27 format: object with StringValue, ObjectValue, DecimalValue etc.
+                    const bc27Changes = changesValue as Record<string, unknown>;
+                    const updatedValue = bc27Changes.StringValue ?? bc27Changes.ObjectValue ?? bc27Changes.DecimalValue ?? bc27Changes.IntValue ?? bc27Changes.DateTimeValue;
+                    moduleLogger.info(`[PropertyChanges]   BC27 format Changes object, extracted value: ${JSON.stringify(updatedValue)}`);
+
+                    if (updatedValue !== undefined && responseControlPath) {
+                      moduleLogger.info(`[PropertyChanges]   Calling updateCachedPropertyChange for controlPath=${responseControlPath}`);
+                      const updated = this.updateCachedPropertyChange(pageContext.handlers, formId, responseControlPath, updatedValue);
+                      if (updated) cacheUpdated = true;
+                      moduleLogger.info(`[PropertyChanges]   updateCachedPropertyChange returned: ${updated}`);
+                    }
+                  }
+                } else if (isPropertyChange(change)) {
+                  // Single PropertyChange - has PropertyName and PropertyValue directly
+                  // BC27 uses lowercase controlPath, older versions use ControlPath
+                  const responseControlPath = changeWithRef.ControlReference?.controlPath ?? changeWithRef.ControlReference?.ControlPath;
+                  moduleLogger.info(`[PropertyChanges]   PropertyChange found! controlPath=${responseControlPath}`);
+
+                  const updatedValue = change.PropertyValue;
                   moduleLogger.info(`[PropertyChanges]   Extracted value: ${JSON.stringify(updatedValue)}`);
 
                   if (updatedValue !== undefined && responseControlPath) {
-                    // Update the field in cached handlers using controlPath from response
-                    // This ensures we match the exact same field in the cache
                     moduleLogger.info(`[PropertyChanges]   Calling updateCachedPropertyChange for controlPath=${responseControlPath}`);
                     const updated = this.updateCachedPropertyChange(pageContext.handlers, formId, responseControlPath, updatedValue);
                     moduleLogger.info(`[PropertyChanges]   updateCachedPropertyChange returned: ${updated}`);
@@ -1356,24 +1496,24 @@ export class WritePageDataTool extends BaseMCPTool {
    * @returns true if cache was updated/inserted, false if LogicalClientChangeHandler not found
    */
   private updateCachedPropertyChange(
-    cachedHandlers: any[],
+    cachedHandlers: Handler[],
     formId: string,
     controlPath: string,
     newValue: unknown
   ): boolean {
     // Find the LogicalClientChangeHandler for this form
-    let targetHandler: any = null;
-    let targetChanges: any[] | null = null;
+    // Cast to mutable types since we need to modify the cache
+    const mutableHandlers = cachedHandlers as unknown as MutableHandler[];
+    let targetChanges: MutablePropertyChange[] | null = null;
 
-    for (const handler of cachedHandlers) {
-      if ((handler as any).handlerType === 'DN.LogicalClientChangeHandler') {
-        const params = (handler as any).parameters;
+    for (const handler of mutableHandlers) {
+      if (handler.handlerType === 'DN.LogicalClientChangeHandler') {
+        const params = handler.parameters;
         if (Array.isArray(params) && params.length >= 2) {
-          const formIdParam = params[0];
-          const changes = params[1];
+          const formIdParam = params[0] as string;
+          const changes = params[1] as MutablePropertyChange[];
 
           if (formIdParam === formId && Array.isArray(changes)) {
-            targetHandler = handler;
             targetChanges = changes;
             break;
           }
@@ -1381,16 +1521,17 @@ export class WritePageDataTool extends BaseMCPTool {
       }
     }
 
-    if (!targetHandler || !targetChanges) {
+    if (!targetChanges) {
       moduleLogger.debug(`[PropertyChanges] No LogicalClientChangeHandler found for formId "${formId}"`);
       return false;
     }
 
     // Try to find existing PropertyChange for this controlPath
-    // BC uses both "PropertyChanges" (plural) and "PropertyChange" (singular)
-    let existingChange: any = null;
+    // BC uses both "prc"/"lcpchs" (PropertyChanges) and "prch"/"lcpch" (PropertyChange) type ids
+    let existingChange: MutablePropertyChange | null = null;
     for (const change of targetChanges) {
-      if ((change?.t === 'PropertyChanges' || change?.t === 'PropertyChange') && change.ControlReference?.controlPath === controlPath) {
+      const changeControlPath = change.ControlReference?.controlPath || change.ControlReference?.ControlPath;
+      if ((isPropertyChangesType(change?.t) || isPropertyChangeType(change?.t)) && changeControlPath === controlPath) {
         existingChange = change;
         break;
       }
@@ -1398,7 +1539,8 @@ export class WritePageDataTool extends BaseMCPTool {
 
     if (existingChange) {
       // UPDATE existing PropertyChange
-      moduleLogger.error(`[CACHE DIAGNOSTIC] Found existing change to update: t=${existingChange.t}, controlPath=${existingChange.ControlReference?.controlPath}`);
+      const existingControlPath = existingChange.ControlReference?.controlPath || existingChange.ControlReference?.ControlPath;
+      moduleLogger.error(`[CACHE DIAGNOSTIC] Found existing change to update: t=${existingChange.t}, controlPath=${existingControlPath}`);
       if (!existingChange.Changes) {
         existingChange.Changes = {};
       }
@@ -1421,24 +1563,25 @@ export class WritePageDataTool extends BaseMCPTool {
       return true;
     } else {
       // INSERT new PropertyChange into existing LogicalClientChangeHandler
-      const newPropertyChange: any = {
-        t: 'PropertyChanges',
+      const newPropertyChange: MutablePropertyChange = {
+        t: 'prc',
         ControlReference: {
           controlPath,
+          ControlPath: controlPath,
           formId
         },
         Changes: {}
       };
 
       if (typeof newValue === 'string') {
-        newPropertyChange.Changes.StringValue = newValue;
+        newPropertyChange.Changes!.StringValue = newValue;
       } else if (typeof newValue === 'number') {
-        newPropertyChange.Changes.DecimalValue = newValue;
-        newPropertyChange.Changes.IntegerValue = newValue;
+        newPropertyChange.Changes!.DecimalValue = newValue;
+        newPropertyChange.Changes!.IntegerValue = newValue;
       } else if (typeof newValue === 'boolean') {
-        newPropertyChange.Changes.BooleanValue = newValue;
+        newPropertyChange.Changes!.BooleanValue = newValue;
       } else if (typeof newValue === 'object') {
-        newPropertyChange.Changes.ObjectValue = newValue;
+        newPropertyChange.Changes!.ObjectValue = newValue;
       }
 
       targetChanges.push(newPropertyChange);

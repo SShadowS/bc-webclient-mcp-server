@@ -6,6 +6,7 @@
  */
 
 import { gunzipSync } from 'zlib';
+import type { Control } from '../types/bc-types.js';
 import { logger } from '../core/logger.js';
 
 /**
@@ -13,8 +14,8 @@ import { logger } from '../core/logger.js';
  */
 export interface ChildFormInfo {
   serverId: string;
-  container: any;
-  form: any;
+  container: Control;
+  form: Control;
 }
 
 /**
@@ -23,6 +24,12 @@ export interface ChildFormInfo {
 export interface ServerIdsExtractResult {
   shellFormId: string;
   childFormIds: ChildFormInfo[];
+}
+
+/** Response structure for decompression */
+interface CompressedPayload {
+  compressedResult?: string;
+  params?: Array<{ compressedData?: string }>;
 }
 
 /**
@@ -35,21 +42,22 @@ export interface ServerIdsExtractResult {
  * @param payload - Raw response payload from BC
  * @returns Decompressed data or null if not compressed
  */
-export function decompressResponse(payload: any): any {
+export function decompressResponse(payload: unknown): unknown {
   if (!payload) {
     return null;
   }
 
+  const typedPayload = payload as CompressedPayload;
   let compressedBase64: string | null = null;
 
   // First response pattern
-  if (payload.compressedResult) {
-    compressedBase64 = payload.compressedResult;
+  if (typedPayload.compressedResult) {
+    compressedBase64 = typedPayload.compressedResult;
   }
 
   // Subsequent responses pattern
-  if (payload.params?.[0]?.compressedData) {
-    compressedBase64 = payload.params[0].compressedData;
+  if (typedPayload.params?.[0]?.compressedData) {
+    compressedBase64 = typedPayload.params[0].compressedData;
   }
 
   if (!compressedBase64) {
@@ -66,6 +74,17 @@ export function decompressResponse(payload: any): any {
   }
 }
 
+/** Handler structure for form lookups */
+interface FormHandler {
+  parameters?: readonly unknown[];
+}
+
+/** Form structure in handler parameters */
+interface FormStructure {
+  ServerId?: string;
+  Children?: unknown[];
+}
+
 /**
  * Find the handler containing form structure in response array.
  *
@@ -76,15 +95,24 @@ export function decompressResponse(payload: any): any {
  * @param response - Array of handlers from BC response
  * @returns Form structure handler or null if not found
  */
-export function findFormStructureHandler(response: any[]): any {
+export function findFormStructureHandler(response: unknown[]): FormHandler | null {
   if (!Array.isArray(response)) {
     return null;
   }
 
-  return response.find(handler =>
-    handler?.parameters?.[1]?.ServerId &&
-    handler?.parameters?.[1]?.Children
-  );
+  return response.find((h) => {
+    const handler = h as FormHandler;
+    const form = handler?.parameters?.[1] as FormStructure | undefined;
+    return form?.ServerId && form?.Children;
+  }) as FormHandler | undefined ?? null;
+}
+
+/** Extended form structure with Children */
+interface RootFormStructure {
+  ServerId?: string;
+  Children?: Array<{
+    Children?: Array<{ ServerId?: string } & Control>;
+  } & Control>;
 }
 
 /**
@@ -98,14 +126,14 @@ export function findFormStructureHandler(response: any[]): any {
  * @returns Shell form ID and array of child forms
  * @throws Error if form structure not found
  */
-export function extractServerIds(response: any[]): ServerIdsExtractResult {
+export function extractServerIds(response: unknown[]): ServerIdsExtractResult {
   const formHandler = findFormStructureHandler(response);
 
   if (!formHandler) {
     throw new Error('[LoadFormHelpers] Form structure handler not found in response');
   }
 
-  const rootForm = formHandler.parameters[1];
+  const rootForm = formHandler.parameters![1] as RootFormStructure;
   const shellFormId = rootForm.ServerId;
 
   if (!shellFormId) {
@@ -120,8 +148,8 @@ export function extractServerIds(response: any[]): ServerIdsExtractResult {
       if (child?.Children?.[0]?.ServerId) {
         childFormIds.push({
           serverId: child.Children[0].ServerId,
-          container: child,
-          form: child.Children[0]
+          container: child as Control,
+          form: child.Children[0] as Control
         });
       }
     }
@@ -176,6 +204,19 @@ export function filterFormsToLoad(childForms: ChildFormInfo[]): ChildFormInfo[] 
   return childForms.filter(shouldLoadForm);
 }
 
+/** LoadForm interaction structure */
+interface LoadFormInteraction {
+  interactionName: string;
+  formId: string;
+  controlPath: string;
+  callbackId: string;
+  namedParameters: {
+    delayed: boolean;
+    openForm: boolean;
+    loadData: boolean;
+  };
+}
+
 /**
  * Create LoadForm interaction parameters.
  *
@@ -188,7 +229,7 @@ export function filterFormsToLoad(childForms: ChildFormInfo[]): ChildFormInfo[] 
  * @param callbackId - Unique callback ID
  * @returns LoadForm interaction object
  */
-export function createLoadFormInteraction(formId: string, callbackId: string): any {
+export function createLoadFormInteraction(formId: string, callbackId: string): LoadFormInteraction {
   return {
     interactionName: 'LoadForm',
     formId: formId,

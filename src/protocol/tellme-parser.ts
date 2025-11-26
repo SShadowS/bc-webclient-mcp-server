@@ -11,6 +11,7 @@ import { ProtocolError } from '../core/errors.js';
 import {
   extractTellMeResults,
   extractTellMeResultsFromChangeHandler,
+  type TellMeSearchResultRow,
 } from './logical-form-parser.js';
 
 export interface TellMePage {
@@ -18,6 +19,15 @@ export interface TellMePage {
   caption: string;
   tooltip?: string;
   badges?: string[];
+}
+
+/**
+ * Handler structure for type checking
+ */
+interface BcHandler {
+  handlerType: string;
+  parameters?: readonly unknown[];
+  LogicalForm?: unknown;
 }
 
 /**
@@ -29,13 +39,18 @@ export class TellMeParser {
    */
   parseTellMeResults(handlers: readonly unknown[]): Result<TellMePage[], BCError> {
     try {
+      // Cast to handler array for type checking
+      const typedHandlers = handlers as readonly BcHandler[];
+
       // Try BC27+ format first (DataRefreshChange)
-      const changeHandler = handlers.find((h: any) =>
+      const changeHandler = typedHandlers.find((h) =>
         h?.handlerType === 'DN.LogicalClientChangeHandler'
       );
 
       if (changeHandler) {
-        const resultsResult = extractTellMeResultsFromChangeHandler([changeHandler]);
+        // Create mutable array for extractTellMeResultsFromChangeHandler
+        const handlersArray = [changeHandler] as unknown as Parameters<typeof extractTellMeResultsFromChangeHandler>[0];
+        const resultsResult = extractTellMeResultsFromChangeHandler(handlersArray);
         if (isOk(resultsResult)) {
           const results = resultsResult.value;
           if (results && results.length > 0) {
@@ -45,7 +60,8 @@ export class TellMeParser {
       }
 
       // Fall back to legacy format
-      const resultsResult = extractTellMeResults(handlers);
+      const legacyInput = handlers as unknown as Parameters<typeof extractTellMeResults>[0];
+      const resultsResult = extractTellMeResults(legacyInput);
       if (isOk(resultsResult)) {
         const results = resultsResult.value;
         if (results && results.length > 0) {
@@ -67,12 +83,12 @@ export class TellMeParser {
   /**
    * Transform raw result to TellMePage format
    */
-  private transformResult(result: any): TellMePage {
+  private transformResult(result: TellMeSearchResultRow): TellMePage {
     return {
-      id: String(result.objectId || result.id || result.PageId || ''),
-      caption: String(result.name || result.caption || result.Caption || ''),
-      tooltip: result.tooltip || result.context || result.Tooltip,
-      badges: result.badges || result.Badges,
+      id: String(result.objectId || ''),
+      caption: String(result.name || ''),
+      tooltip: result.tooltip || result.context,
+      badges: undefined, // TellMeSearchResultRow doesn't have badges
     };
   }
 }

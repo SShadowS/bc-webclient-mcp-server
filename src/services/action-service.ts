@@ -121,7 +121,9 @@ export class ActionService {
       );
     }
 
-    const pageContext = (connection as any).pageContexts?.get(pageContextId);
+    // Check pageContexts on connection (BCPageConnection has this property)
+    const connectionWithContexts = connection as IBCConnection & { pageContexts?: Map<string, unknown> };
+    const pageContext = connectionWithContexts.pageContexts?.get(pageContextId);
     if (!pageContext) {
       return err(
         new ProtocolError(
@@ -290,19 +292,31 @@ export class ActionService {
     });
   }
 
+  /** Handler structure for dialog check */
+  private static isDialogHandler(h: unknown): h is { handlerType: string; parameters?: readonly unknown[] } {
+    return h !== null && typeof h === 'object' && 'handlerType' in h;
+  }
+
   /**
    * Check if handlers contain a dialog
    */
   private checkForDialog(handlers: readonly unknown[]): boolean {
     if (!Array.isArray(handlers)) return false;
 
-    return handlers.some((handler: any) => {
-      if (handler?.handlerType === 'DN.FormToShow') {
-        const formType = handler.parameters?.[0]?.FormType;
+    return handlers.some((handler) => {
+      if (!ActionService.isDialogHandler(handler)) return false;
+      if (handler.handlerType === 'DN.FormToShow') {
+        const formParams = handler.parameters?.[0] as { FormType?: string } | undefined;
+        const formType = formParams?.FormType;
         return formType === 'Dialog' || formType === 'ConfirmDialog';
       }
       return false;
     });
+  }
+
+  /** Error context structure */
+  private static hasContext(e: unknown): e is { context?: Record<string, unknown> } {
+    return e !== null && typeof e === 'object';
   }
 
   /**
@@ -311,23 +325,30 @@ export class ActionService {
   private extractValidationErrors(
     error: BCError
   ): Array<{ field?: string; message: string }> | undefined {
-    const context = (error as any).context;
+    if (!ActionService.hasContext(error)) return undefined;
+    const context = error.context;
     if (!context) return undefined;
 
     const errors: Array<{ field?: string; message: string }> = [];
 
     // Check for validation messages in context
-    if (context.validationMessages && Array.isArray(context.validationMessages)) {
-      context.validationMessages.forEach((msg: any) => {
-        errors.push({
-          field: msg.field,
-          message: msg.message || msg,
-        });
-      });
+    const validationMessages = context.validationMessages;
+    if (validationMessages && Array.isArray(validationMessages)) {
+      for (const msg of validationMessages) {
+        if (typeof msg === 'string') {
+          errors.push({ message: msg });
+        } else if (msg && typeof msg === 'object') {
+          const typedMsg = msg as { field?: string; message?: string };
+          errors.push({
+            field: typedMsg.field,
+            message: typedMsg.message || String(msg),
+          });
+        }
+      }
     }
 
     // Check for error in message format
-    if (context.errorMessage) {
+    if (typeof context.errorMessage === 'string') {
       errors.push({
         message: context.errorMessage,
       });

@@ -2,13 +2,14 @@
 export interface JsonRpcRequest {
   jsonrpc: "2.0";
   method: string;
-  params?: any;
+  /** BC accepts both arrays (positional params) and objects (named params) */
+  params?: unknown;
   id: string | number;
 }
 
 export interface JsonRpcResponse {
   jsonrpc: "2.0";
-  result?: any;
+  result?: unknown;
   error?: JsonRpcError;
   id: string | number;
 }
@@ -16,7 +17,7 @@ export interface JsonRpcResponse {
 export interface JsonRpcError {
   code: number;
   message: string;
-  data?: any;
+  data?: unknown;
 }
 
 // Business Central Connection Types

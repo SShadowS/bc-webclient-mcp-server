@@ -30,6 +30,100 @@ import {
 
 import { ControlParser } from '../parsers/control-parser.js';
 import { createToolLogger } from '../core/logger.js';
+import type { LogicalForm } from '../types/bc-types.js';
+// Note: PageStateManager uses its own change type abstractions that don't match
+// the BC protocol types exactly (uses full names vs type IDs). These local types
+// represent the processed/transformed change objects.
+
+/** Base interface for all change types in PageStateManager */
+interface BaseChange {
+  t: string;
+  ControlReference?: { controlPath: string };
+}
+
+/** DataRefreshChange - contains row-level deltas */
+interface PageDataRefreshChange extends BaseChange {
+  t: 'DataRefreshChange';
+  RowChanges?: RowChange[];
+}
+
+/** Row data structure passed in DataRowInserted/DataRowUpdated */
+interface RowDataPayload {
+  bookmark?: string;
+  oldBookmark?: string;
+  cells?: Record<string, unknown>;
+}
+
+/** Row change types */
+interface RowChange {
+  t: string;
+  /** Tuple: [index, rowData] for inserts */
+  DataRowInserted?: [number, RowDataPayload];
+  /** Tuple: [index, rowData] for updates (BC uses same format as insert) */
+  DataRowUpdated?: [number, RowDataPayload];
+  /** Object with bookmark for deletes */
+  DataRowDeleted?: { RowBookmark?: string };
+  DataRowFlush?: unknown;
+}
+
+/** PropertyChanges - batch of property updates */
+interface PagePropertyChanges extends BaseChange {
+  t: 'PropertyChanges';
+  Changes?: Array<{ PropertyName?: string; PropertyValue?: unknown; StringValue?: string }>;
+}
+
+/** CursorMove - row cursor position change */
+interface PageCursorMoveChange extends BaseChange {
+  t: 'CursorMove';
+  NewRowBookmark?: string;
+  RowCount?: number;
+}
+
+/** ViewportChange - visible rows in repeater */
+interface PageViewportChange extends BaseChange {
+  t: 'ViewportChange';
+  FirstRow?: number;
+  LastRow?: number;
+}
+
+/** RCC - RepeaterColumnControl enrichment (BC sends shorthand 'rcc') */
+interface PageRCCChange extends BaseChange {
+  t: 'rcc';
+  ColumnIndex?: number;
+  Index?: number;
+  TemplateControlPath?: string;
+  FormId?: string;
+  Columns?: Array<{ Caption?: string; SourceField?: string; ControlId?: string; columnIndex?: number }>;
+}
+
+/** Union of all change types handled by PageStateManager */
+type PageChange =
+  | PageDataRefreshChange
+  | PagePropertyChanges
+  | PageCursorMoveChange
+  | PageViewportChange
+  | PageRCCChange
+  | BaseChange;
+
+/** Callback response for form operations */
+interface CallbackResponseParams {
+  CompletedInteractions?: Array<{ Result?: { value?: string } }>;
+}
+
+/** Validation error structure */
+interface ValidationErrorInfo {
+  controlPath?: string;
+  ControlReference?: { controlPath?: string };
+  Message?: string;
+  message?: string;
+}
+
+/** Dialog message structure */
+interface DialogInfo {
+  formId?: string;
+  Caption?: string;
+  IsModal?: boolean;
+}
 
 const logger = createToolLogger('PageStateManager');
 
@@ -51,7 +145,7 @@ export class PageStateManager {
    * @returns Initialized PageState (with empty data, ready for messages)
    */
   initFromLoadForm(
-    logicalForm: any,
+    logicalForm: LogicalForm,
     pageId: string,
     pageType: 'Card' | 'List' | 'Document'
   ): PageState {
@@ -166,14 +260,17 @@ export class PageStateManager {
     switch (handler.handlerType) {
       case 'DN.LogicalClientChangeHandler':
         // parameters[1] is array of change objects
-        for (const change of handler.parameters[1] ?? []) {
-          this.applyChange(state, change);
+        const changes = handler.parameters[1];
+        if (Array.isArray(changes)) {
+          for (const change of changes) {
+            this.applyChange(state, change as BaseChange);
+          }
         }
         break;
 
       case 'DN.CallbackResponseProperties':
         // Handle property changes from callbacks
-        this.applyCallbackResponse(state, handler.parameters);
+        this.applyCallbackResponse(state, handler.parameters as CallbackResponseParams[]);
         break;
 
       default:
@@ -194,26 +291,29 @@ export class PageStateManager {
    * @param change - Change object from handler.parameters[1]
    * @returns Same PageState object (mutated)
    */
-  private applyChange(state: PageState, change: any): PageState {
+  private applyChange(state: PageState, change: PageChange): PageState {
+    // Type narrowing via switch doesn't work perfectly with union containing
+    // BaseChange (t: string), so we use type assertions in each case.
     switch (change.t) {
       case 'DataRefreshChange':
-        this.applyDataRefreshChange(state, change);
+        this.applyDataRefreshChange(state, change as PageDataRefreshChange);
         break;
 
       case 'PropertyChanges':
-        this.applyPropertyChanges(state, change);
+        this.applyPropertyChanges(state, change as PagePropertyChanges);
         break;
 
-      case 'RepeaterColumnControl':
-        this.applyRCCEnrichment(state, change);
+      case 'rcc':
+        logger.info(`[RCC] Received RCC change for formId=${(change as PageRCCChange).FormId}, Index=${(change as PageRCCChange).Index}`);
+        this.applyRCCEnrichment(state, change as PageRCCChange);
         break;
 
       case 'CursorMove':
-        this.applyCursorMove(state, change);
+        this.applyCursorMove(state, change as PageCursorMoveChange);
         break;
 
       case 'ViewportChange':
-        this.applyViewportChange(state, change);
+        this.applyViewportChange(state, change as PageViewportChange);
         break;
 
       default:
@@ -243,7 +343,7 @@ export class PageStateManager {
    * @param change - DataRefreshChange object
    * @returns Same PageState object (mutated)
    */
-  private applyDataRefreshChange(state: PageState, change: any): PageState {
+  private applyDataRefreshChange(state: PageState, change: PageDataRefreshChange): PageState {
     // 1. Identify target repeater by controlPath
     const targetPath = change.ControlReference?.controlPath;
     const repeater = this.findRepeaterByPath(state, targetPath);
@@ -321,10 +421,15 @@ export class PageStateManager {
    */
   private upsertRow(
     repeater: RepeaterState,
-    change: any,
+    change: RowChange,
     operation: 'insert' | 'update'
   ): void {
-    const [index, rowData] = change.DataRowUpdated || change.DataRowInserted;
+    const tupleData = change.DataRowUpdated || change.DataRowInserted;
+    if (!tupleData) {
+      logger.warn('upsertRow: No DataRowUpdated or DataRowInserted in change');
+      return;
+    }
+    const [index, rowData] = tupleData;
     const bookmark = rowData.bookmark;
 
     if (!bookmark) {
@@ -413,16 +518,18 @@ export class PageStateManager {
    * @param repeater - RepeaterState to update
    * @param change - DataRowDeleted object
    */
-  private deleteRow(repeater: RepeaterState, change: any): void {
-    const [index] = change.DataRowDeleted;
-    const bookmark = repeater.rowOrder[index];
+  private deleteRow(repeater: RepeaterState, change: RowChange): void {
+    const deleted = change.DataRowDeleted;
+    if (!deleted) return;
+    const bookmark = deleted.RowBookmark || repeater.rowOrder[0];
 
     if (bookmark) {
+      const orderIndex = repeater.rowOrder.indexOf(bookmark);
       repeater.rows.delete(bookmark);
       repeater.rowOrder = repeater.rowOrder.filter((b) => b !== bookmark);
-      logger.debug(`Row deleted at index ${index}: ${bookmark}`);
+      logger.debug(`Row deleted at index ${orderIndex}: ${bookmark}`);
     } else {
-      logger.warn(`deleteRow: No bookmark found at index ${index}`);
+      logger.warn(`deleteRow: No bookmark found in change or rowOrder`);
     }
   }
 
@@ -454,7 +561,7 @@ export class PageStateManager {
    * @param rcc - RepeaterColumnControl change object
    * @returns Same PageState object (mutated)
    */
-  private applyRCCEnrichment(state: PageState, rcc: any): PageState {
+  private applyRCCEnrichment(state: PageState, rcc: PageRCCChange): PageState {
     const formId = rcc.FormId;
     const repeater = this.findRepeaterByFormId(state, formId);
 
@@ -464,12 +571,16 @@ export class PageStateManager {
     }
 
     const columnIndex = rcc.Index;
+    if (columnIndex === undefined) {
+      logger.warn(`RCC enrichment: No Index in RCC message for formId "${formId}"`);
+      return state;
+    }
     const column = this.findColumnByIndex(repeater, columnIndex);
 
     if (column && rcc.TemplateControlPath) {
       column.controlPath = rcc.TemplateControlPath;
-      logger.debug(
-        `Column enriched: "${column.designName}" → controlPath="${column.controlPath}"`
+      logger.info(
+        `[RCC ENRICHMENT] Column enriched: "${column.designName}" → controlPath="${column.controlPath}"`
       );
     } else {
       logger.warn(
@@ -493,7 +604,7 @@ export class PageStateManager {
    * @param change - PropertyChanges object
    * @returns Same PageState object (mutated)
    */
-  private applyPropertyChanges(state: PageState, change: any): PageState {
+  private applyPropertyChanges(state: PageState, change: PagePropertyChanges): PageState {
     // TODO: Implement property changes reducer
     // This will update field values, visibility, enabled state, etc.
     logger.debug('PropertyChanges not yet implemented');
@@ -507,7 +618,7 @@ export class PageStateManager {
    * @param parameters - Callback parameters
    * @returns Same PageState object (mutated)
    */
-  private applyCallbackResponse(state: PageState, parameters: any[]): PageState {
+  private applyCallbackResponse(state: PageState, parameters: CallbackResponseParams[]): PageState {
     // TODO: Implement callback response handler
     logger.debug('CallbackResponse not yet implemented');
     return state;
@@ -524,9 +635,10 @@ export class PageStateManager {
    * @param change - CursorMove object
    * @returns Same PageState object (mutated)
    */
-  private applyCursorMove(state: PageState, change: any): PageState {
+  private applyCursorMove(state: PageState, change: PageCursorMoveChange): PageState {
+    const cursorChange = change as unknown as { repeaterName?: string; newBookmark?: string };
     const repeaterName =
-      change.repeaterName || this.findRepeaterNameByPath(state, change.ControlReference?.controlPath);
+      cursorChange.repeaterName || this.findRepeaterNameByPath(state, change.ControlReference?.controlPath);
     const repeater = state.repeaters.get(repeaterName);
 
     if (!repeater) {
@@ -534,8 +646,8 @@ export class PageStateManager {
       return state;
     }
 
-    repeater.cursorBookmark = change.newBookmark;
-    logger.debug(`Cursor moved in "${repeater.name}" to bookmark: ${change.newBookmark}`);
+    repeater.cursorBookmark = cursorChange.newBookmark || change.NewRowBookmark;
+    logger.debug(`Cursor moved in "${repeater.name}" to bookmark: ${repeater.cursorBookmark}`);
 
     return state;
   }
@@ -547,26 +659,27 @@ export class PageStateManager {
    * @param change - ViewportChange object
    * @returns Same PageState object (mutated)
    */
-  private applyViewportChange(state: PageState, change: any): PageState {
-    const repeater = state.repeaters.get(change.repeaterName);
+  private applyViewportChange(state: PageState, change: PageViewportChange): PageState {
+    const viewportChange = change as unknown as { repeaterName?: string; firstIndex?: number; lastIndex?: number; totalCount?: number };
+    const repeater = state.repeaters.get(viewportChange.repeaterName || '');
 
     if (!repeater) {
-      logger.warn(`ViewportChange: Repeater not found: ${change.repeaterName}`);
+      logger.warn(`ViewportChange: Repeater not found: ${viewportChange.repeaterName}`);
       return state;
     }
 
     repeater.viewport = {
-      firstVisibleIndex: change.firstIndex,
-      lastVisibleIndex: change.lastIndex,
+      firstVisibleIndex: viewportChange.firstIndex ?? change.FirstRow ?? 0,
+      lastVisibleIndex: viewportChange.lastIndex ?? change.LastRow ?? 0,
     };
 
     // Also update totalRowCount if provided
-    if (change.totalCount !== undefined) {
-      repeater.totalRowCount = change.totalCount;
+    if (viewportChange.totalCount !== undefined) {
+      repeater.totalRowCount = viewportChange.totalCount;
     }
 
     logger.debug(
-      `Viewport changed in "${repeater.name}": ${change.firstIndex}-${change.lastIndex}, total=${repeater.totalRowCount}`
+      `Viewport changed in "${repeater.name}": ${repeater.viewport.firstVisibleIndex}-${repeater.viewport.lastVisibleIndex}, total=${repeater.totalRowCount}`
     );
 
     return state;
@@ -583,27 +696,29 @@ export class PageStateManager {
    * @param error - Validation error object
    * @returns Same PageState object (mutated)
    */
-  applyValidationError(state: PageState, error: any): PageState {
+  applyValidationError(state: PageState, error: ValidationErrorInfo & { scope?: string; repeaterName?: string; bookmark?: string; fieldName?: string }): PageState {
+    const errorMessage = error.Message || error.message || 'Unknown validation error';
+
     if (error.scope === 'page') {
-      state.globalErrors.push(error.message);
+      state.globalErrors.push(errorMessage);
       state.status = 'Error';
-      logger.error(`Page validation error: ${error.message}`);
+      logger.error(`Page validation error: ${errorMessage}`);
     } else if (error.scope === 'repeater') {
-      const repeater = state.repeaters.get(error.repeaterName);
+      const repeater = state.repeaters.get(error.repeaterName || '');
       if (repeater) {
-        repeater.lastError = error.message;
+        repeater.lastError = errorMessage;
         repeater.isDirty = false; // BC rejected the change
         repeater.pendingOperations = Math.max(0, repeater.pendingOperations - 1);
-        logger.error(`Repeater "${error.repeaterName}" validation error: ${error.message}`);
+        logger.error(`Repeater "${error.repeaterName}" validation error: ${errorMessage}`);
       }
     } else if (error.scope === 'field') {
-      const repeater = state.repeaters.get(error.repeaterName);
-      const row = repeater?.rows.get(error.bookmark);
+      const repeater = state.repeaters.get(error.repeaterName || '');
+      const row = repeater?.rows.get(error.bookmark || '');
       if (row) {
         if (!row.validationErrors) row.validationErrors = new Map();
-        row.validationErrors.set(error.fieldName, error.message);
+        row.validationErrors.set(error.fieldName || '', errorMessage);
         logger.error(
-          `Field "${error.fieldName}" validation error in "${error.repeaterName}": ${error.message}`
+          `Field "${error.fieldName}" validation error in "${error.repeaterName}": ${errorMessage}`
         );
       }
     }
@@ -620,9 +735,10 @@ export class PageStateManager {
    * @param dialog - Dialog message object
    * @returns Same PageState object (mutated)
    */
-  applyDialogMessage(state: PageState, dialog: any): PageState {
+  applyDialogMessage(state: PageState, dialog: DialogInfo & { message?: string }): PageState {
     // BC shows validation dialog
-    state.globalErrors.push(dialog.message);
+    const dialogMessage = dialog.message || dialog.Caption || 'Dialog displayed';
+    state.globalErrors.push(dialogMessage);
     state.status = 'Error';
 
     // Clear any pending operations (they failed)
@@ -633,7 +749,7 @@ export class PageStateManager {
       }
     }
 
-    logger.error(`Dialog message: ${dialog.message}`);
+    logger.error(`Dialog message: ${dialogMessage}`);
 
     return state;
   }

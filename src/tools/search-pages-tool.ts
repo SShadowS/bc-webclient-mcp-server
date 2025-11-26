@@ -28,16 +28,40 @@ import {
   extractTellMeResults,
   extractTellMeResultsFromChangeHandler,
   convertToPageSearchResults,
+  type BcHandler,
 } from '../protocol/logical-form-parser.js';
 import { bcConfig } from '../core/config.js';
-import type { BCConnectionPool } from '../services/connection-pool.js';
+import type { BCConnectionPool, PooledConnection } from '../services/connection-pool.js';
 import type { CacheManager } from '../services/cache-manager.js';
 import { createWorkflowIntegration } from '../services/workflow-integration.js';
+import type { TellMeSearchResultRow } from '../protocol/logical-form-parser.js';
+
+/** Handler with parameters for search predicates */
+interface SearchToolHandler {
+  handlerType: string;
+  parameters?: readonly unknown[];
+}
+
+/** FormToShow parameters for Tell Me */
+interface FormToShowData {
+  ServerId?: string;
+}
+
+/** Change handler update entry */
+interface ChangeUpdate {
+  NewValue?: { ServerId?: string };
+}
+
+/** Change handler parameters */
+interface ChangeParams {
+  Type?: string;
+  Updates?: ChangeUpdate[];
+}
 
 /** Connection state for search operation */
 interface ConnectionState {
   client: BCRawWebSocketClient;
-  pooledConnection: any;
+  pooledConnection: PooledConnection | null;
   shouldDisconnect: boolean;
 }
 
@@ -239,7 +263,18 @@ export class SearchPagesTool extends BaseMCPTool {
     }
 
     const { baseUrl, username, password, tenantId } = this.getCredentials();
-    const client = new BCRawWebSocketClient({ baseUrl } as any, username, password, tenantId);
+    // BCRawWebSocketClient expects types.ts BCConfig which has different fields
+    // We provide the essential fields and use type assertion for compatibility
+    const config = {
+      baseUrl,
+      tenantId,
+      environment: 'production',
+      azureClientId: '',
+      azureTenantId: '',
+      azureAuthority: '',
+      roleCenterPageId: 0,
+    };
+    const client = new BCRawWebSocketClient(config, username, password, tenantId);
 
     await client.authenticateWeb();
     await client.connect();
@@ -254,25 +289,31 @@ export class SearchPagesTool extends BaseMCPTool {
   }
 
   /** Create predicate for Tell Me dialog detection */
-  private createTellMeDialogPredicate(): (handlers: any[]) => PredicateResult<string> {
-    return (handlers: any[]) => {
+  private createTellMeDialogPredicate(): (handlers: unknown[]) => PredicateResult<string> {
+    return (handlers: unknown[]) => {
       // Try legacy FormToShow format first
-      const legacy = handlers.find((h: any) =>
-        h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-        h.parameters?.[0] === 'FormToShow' &&
-        h.parameters?.[1]?.ServerId
-      );
+      const legacy = handlers.find((h) => {
+        const handler = h as SearchToolHandler;
+        if (handler.handlerType !== 'DN.LogicalClientEventRaisingHandler') return false;
+        if (handler.parameters?.[0] !== 'FormToShow') return false;
+        const formData = handler.parameters?.[1] as FormToShowData | undefined;
+        return !!formData?.ServerId;
+      }) as SearchToolHandler | undefined;
       if (legacy) {
-        return { matched: true, data: legacy.parameters[1].ServerId };
+        const formData = legacy.parameters?.[1] as FormToShowData;
+        return { matched: true, data: formData.ServerId! };
       }
 
       // Try BC27+ ChangeHandler format
-      const change = handlers.find((h: any) =>
-        h.handlerType === 'DN.LogicalClientChangeHandler' &&
-        (h.parameters?.[0]?.Type === 'DataRefreshChange' || h.parameters?.[0]?.Type === 'InitializeChange')
-      );
+      const change = handlers.find((h) => {
+        const handler = h as SearchToolHandler;
+        if (handler.handlerType !== 'DN.LogicalClientChangeHandler') return false;
+        const params = handler.parameters?.[0] as ChangeParams | undefined;
+        return params?.Type === 'DataRefreshChange' || params?.Type === 'InitializeChange';
+      }) as SearchToolHandler | undefined;
       if (change) {
-        const updates = change.parameters?.[0]?.Updates;
+        const params = change.parameters?.[0] as ChangeParams | undefined;
+        const updates = params?.Updates;
         if (Array.isArray(updates)) {
           for (const update of updates) {
             if (update.NewValue?.ServerId) {
@@ -327,21 +368,22 @@ export class SearchPagesTool extends BaseMCPTool {
   }
 
   /** Create predicate for search results detection */
-  private createSearchResultsPredicate(): (handlers: any[]) => PredicateResult<any[]> {
-    return (handlers: any[]) => {
-      // Try BC27+ format first
-      const bc27Results = extractTellMeResultsFromChangeHandler(handlers);
+  private createSearchResultsPredicate(): (handlers: unknown[]) => PredicateResult<TellMeSearchResultRow[]> {
+    return (handlers: unknown[]) => {
+      // Try BC27+ format first (cast to BcHandler[] for type compatibility)
+      const bc27Results = extractTellMeResultsFromChangeHandler(handlers as BcHandler[]);
       if (isOk(bc27Results) && bc27Results.value.length > 0) {
         return { matched: true, data: bc27Results.value };
       }
 
       // Try legacy format
       const searchFormHandler = Array.isArray(handlers)
-        ? handlers.find((h: any) =>
-            h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-            h.parameters?.[0] === 'FormToShow'
-          )
-        : null;
+        ? handlers.find((h) => {
+            const handler = h as SearchToolHandler;
+            return handler.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+                   handler.parameters?.[0] === 'FormToShow';
+          }) as SearchToolHandler | undefined
+        : undefined;
 
       const logicalForm = searchFormHandler?.parameters?.[1];
       if (logicalForm) {
@@ -361,7 +403,7 @@ export class SearchPagesTool extends BaseMCPTool {
     query: string,
     formId: string,
     ownerFormId: string
-  ): Promise<Result<any[], BCError>> {
+  ): Promise<Result<TellMeSearchResultRow[], BCError>> {
     try {
       const waitPromise = client.waitForHandlers(this.createSearchResultsPredicate(), {
         timeoutMs: Math.max(5000, bcConfig.searchTimingWindowMs),
@@ -393,7 +435,7 @@ export class SearchPagesTool extends BaseMCPTool {
 
   /** Filter by type and apply limit */
   private filterAndLimitResults(
-    rawResults: any[],
+    rawResults: TellMeSearchResultRow[],
     type: 'Card' | 'List' | 'Document' | 'Worksheet' | 'Report' | undefined,
     limit: number
   ): PageSearchResult[] {

@@ -39,13 +39,13 @@ export interface ControlNode {
   /** Current value if applicable */
   value?: {
     /** Raw value from server */
-    raw?: any;
+    raw?: unknown;
     /** Formatted display string (use this for oldValue!) */
     formatted?: string;
   };
 
   /** Additional metadata from BC */
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 /**

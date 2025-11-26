@@ -283,11 +283,12 @@ export class HandlerParser implements IHandlerParser {
       );
     }
 
+    // Access BC-specific dialog properties via index signature
     logger.debug({
       dialogId: logicalForm.ServerId,
       caption: logicalForm.Caption,
-      isTaskDialog: (logicalForm as any).IsTaskDialog,
-      isModal: (logicalForm as any).IsModal,
+      isTaskDialog: logicalForm['IsTaskDialog'],
+      isModal: logicalForm['IsModal'],
     }, '[HandlerParser] Extracted dialog form');
 
     return ok(logicalForm);

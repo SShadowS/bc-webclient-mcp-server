@@ -67,25 +67,35 @@ export function decompressHandlers(base64: string): BCHandler[] {
  * extractCompressedData(msg3); // 'H4sI...'
  * ```
  */
-export function extractCompressedData(message: any): string | null {
+/** Type for BC messages that may contain compressed data */
+interface CompressedDataMessage {
+  method?: string;
+  params?: Array<{ compressedResult?: string; compressedData?: string }>;
+  compressedResult?: string;
+  result?: { compressedResult?: string };
+}
+
+export function extractCompressedData(message: unknown): string | null {
+  const msg = message as CompressedDataMessage;
+
   // Format 1: Async Message envelope with nested compressedResult
-  if (message.method === 'Message' && message.params?.[0]?.compressedResult) {
-    return message.params[0].compressedResult;
+  if (msg.method === 'Message' && msg.params?.[0]?.compressedResult) {
+    return msg.params[0].compressedResult;
   }
 
   // Format 2: Async Message envelope with compressedData (alternative field name)
-  if (message.method === 'Message' && message.params?.[0]?.compressedData) {
-    return message.params[0].compressedData;
+  if (msg.method === 'Message' && msg.params?.[0]?.compressedData) {
+    return msg.params[0].compressedData;
   }
 
   // Format 3: Top-level compressedResult
-  if (message.compressedResult) {
-    return message.compressedResult;
+  if (msg.compressedResult) {
+    return msg.compressedResult;
   }
 
   // Format 4: JSON-RPC result with compressedResult
-  if (message.result?.compressedResult) {
-    return message.result.compressedResult;
+  if (msg.result?.compressedResult) {
+    return msg.result.compressedResult;
   }
 
   return null;
@@ -127,7 +137,9 @@ function searchParamsForSessionFields(params: unknown, result: SessionInfo): voi
     // Check for each session field
     for (const [bcField, resultField] of Object.entries(SESSION_FIELD_MAP)) {
       if (obj[bcField] && !result[resultField as keyof SessionInfo]) {
-        (result as any)[resultField] = obj[bcField];
+        // Type-safe assignment using indexed access
+        const mutableResult = result as Record<string, unknown>;
+        mutableResult[resultField] = obj[bcField];
       }
     }
 
@@ -138,16 +150,25 @@ function searchParamsForSessionFields(params: unknown, result: SessionInfo): voi
   }
 }
 
+/** Form data structure for FormToShow handler */
+interface FormToShowData {
+  ServerId?: string;
+}
+
 /**
  * Find role center form ID from FormToShow handler.
  */
 function findRoleCenterFormId(handlers: BCHandler[]): string | undefined {
   const formToShowHandler = handlers.find(
-    h => h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-         h.parameters?.[0] === 'FormToShow' &&
-         h.parameters?.[1]?.ServerId
+    h => {
+      if (h.handlerType !== 'DN.LogicalClientEventRaisingHandler') return false;
+      if (h.parameters?.[0] !== 'FormToShow') return false;
+      const formData = h.parameters?.[1] as FormToShowData | undefined;
+      return !!formData?.ServerId;
+    }
   );
-  return formToShowHandler?.parameters?.[1]?.ServerId;
+  const formData = formToShowHandler?.parameters?.[1] as FormToShowData | undefined;
+  return formData?.ServerId;
 }
 
 /**
@@ -224,9 +245,17 @@ export function extractSessionInfo(handlers: BCHandler[]): SessionInfo | null {
  * // ['form1', 'form2']
  * ```
  */
-export function extractOpenFormIds(message: any): string[] | null {
-  if (message.method === 'Message' && message.params?.[0]?.openFormIds) {
-    return message.params[0].openFormIds;
+/** Type for BC Message events that may contain openFormIds */
+interface OpenFormIdsMessage {
+  method?: string;
+  params?: Array<{ openFormIds?: string[] }>;
+}
+
+export function extractOpenFormIds(message: unknown): string[] | null {
+  const msg = message as OpenFormIdsMessage;
+
+  if (msg.method === 'Message' && msg.params?.[0]?.openFormIds) {
+    return msg.params[0].openFormIds;
   }
 
   return null;

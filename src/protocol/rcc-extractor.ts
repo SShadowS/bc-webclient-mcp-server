@@ -4,6 +4,10 @@
  * Extracts column metadata from BC WebSocket responses containing 'rcc' messages.
  * Columns appear when BC realizes a repeater as an active grid (systemAction 40/120, Navigate, etc.)
  *
+ * KEY INSIGHT: BC stores TemplateControlPath on CurrentRow.Children (dc/sc/lc controls),
+ * NOT on the rcc column definitions. This module enriches rcc columns with TemplateControlPath
+ * from CurrentRow when available.
+ *
  * See: COLUMN_METADATA_DISCOVERY.md for full analysis
  */
 
@@ -42,10 +46,28 @@ export interface DiscoveredRepeater {
 }
 
 /**
+ * CurrentRow child control (dc/sc/lc types) that contains TemplateControlPath
+ * BC stores actual TemplateControlPath on data cells in CurrentRow.Children, not on rcc column definitions
+ */
+interface CurrentRowChild {
+  t?: string;
+  Caption?: string;
+  DesignName?: string;
+  TemplateControlPath?: string;
+}
+
+/**
  * Check if an object is an RCC message
  */
-function isRccMessage(obj: any): obj is RawRccMessage {
-  return obj && typeof obj === 'object' && obj.t === 'rcc' && typeof obj.Caption === 'string';
+function isRccMessage(obj: unknown): obj is RawRccMessage {
+  return (
+    obj !== null &&
+    typeof obj === 'object' &&
+    't' in obj &&
+    (obj as Record<string, unknown>).t === 'rcc' &&
+    'Caption' in obj &&
+    typeof (obj as Record<string, unknown>).Caption === 'string'
+  );
 }
 
 /**
@@ -65,14 +87,59 @@ function convertRccToColumn(rcc: RawRccMessage): RepeaterColumnDescription {
 }
 
 /**
- * Extract columns from a Columns array in LogicalForm structure
+ * Build a map of TemplateControlPath by caption/designName from CurrentRow.Children
+ * These are the actual data cells which have the TemplateControlPath that rcc columns lack
  */
-function extractColumnsFromArray(columnsArray: any[]): RepeaterColumnDescription[] {
+function extractTemplateControlPaths(currentRowChildren: unknown[]): Map<string, string> {
+  const pathMap = new Map<string, string>();
+
+  for (const child of currentRowChildren) {
+    const typedChild = child as CurrentRowChild;
+    // CurrentRow children have t: 'dc', 'sc', or 'lc' and may contain TemplateControlPath
+    if (typedChild.TemplateControlPath && (typedChild.Caption || typedChild.DesignName)) {
+      // Use both caption and designName as keys to maximize matching
+      const caption = typedChild.Caption?.toLowerCase();
+      const designName = typedChild.DesignName?.toLowerCase();
+      if (caption) {
+        pathMap.set(caption, typedChild.TemplateControlPath);
+      }
+      if (designName && designName !== caption) {
+        pathMap.set(designName, typedChild.TemplateControlPath);
+      }
+    }
+  }
+
+  return pathMap;
+}
+
+/**
+ * Extract columns from a Columns array in LogicalForm structure
+ * Optionally enriches with TemplateControlPath from CurrentRow.Children
+ */
+function extractColumnsFromArray(
+  columnsArray: unknown[],
+  templatePathMap?: Map<string, string>
+): RepeaterColumnDescription[] {
   const columns: RepeaterColumnDescription[] = [];
 
   for (const item of columnsArray) {
     if (isRccMessage(item)) {
-      columns.push(convertRccToColumn(item));
+      let col = convertRccToColumn(item);
+
+      // Enrich with TemplateControlPath from CurrentRow if available and column doesn't have one
+      if (templatePathMap && !col.controlPath) {
+        const captionKey = item.Caption?.toLowerCase();
+        const designNameKey = item.DesignName?.toLowerCase();
+        const templatePath = (captionKey && templatePathMap.get(captionKey)) ||
+                            (designNameKey && templatePathMap.get(designNameKey));
+        if (templatePath) {
+          // Create new object with enriched controlPath (readonly property)
+          col = { ...col, controlPath: templatePath };
+          logger.debug(`[RCC] Enriched "${col.caption}" with TemplateControlPath from CurrentRow: ${templatePath}`);
+        }
+      }
+
+      columns.push(col);
     }
   }
 
@@ -82,26 +149,38 @@ function extractColumnsFromArray(columnsArray: any[]): RepeaterColumnDescription
 /**
  * Find all repeaters with Columns in a LogicalForm tree
  */
-function findRepeatersWithColumns(obj: any, path = '', formId = ''): DiscoveredRepeater[] {
+function findRepeatersWithColumns(obj: unknown, path = '', formId = ''): DiscoveredRepeater[] {
   const discovered: DiscoveredRepeater[] = [];
 
   if (!obj || typeof obj !== 'object') {
     return discovered;
   }
 
+  const record = obj as Record<string, unknown>;
+
   // Check if this is a repeater control with Columns
-  if (obj.t === 'rc' && Array.isArray(obj.Columns) && obj.Columns.length > 0) {
-    const firstCol = obj.Columns[0];
+  if (record.t === 'rc' && Array.isArray(record.Columns) && record.Columns.length > 0) {
+    const firstCol = record.Columns[0];
 
     // Only process if Columns contains rcc messages
     if (isRccMessage(firstCol)) {
-      const columns = extractColumnsFromArray(obj.Columns);
+      // Check for CurrentRow.Children to extract TemplateControlPath
+      let templatePathMap: Map<string, string> | undefined;
+      const currentRow = record.CurrentRow as Record<string, unknown> | undefined;
+      if (currentRow && Array.isArray(currentRow.Children) && currentRow.Children.length > 0) {
+        templatePathMap = extractTemplateControlPaths(currentRow.Children);
+        if (templatePathMap.size > 0) {
+          logger.debug(`[RCC] Found ${templatePathMap.size} TemplateControlPaths in CurrentRow.Children`);
+        }
+      }
+
+      const columns = extractColumnsFromArray(record.Columns as unknown[], templatePathMap);
 
       if (columns.length > 0) {
         discovered.push({
           formId,
           controlPath: path,
-          caption: obj.Caption || obj.DesignName || 'Unknown',
+          caption: (record.Caption as string) || (record.DesignName as string) || 'Unknown',
           columns
         });
 
@@ -116,13 +195,18 @@ function findRepeatersWithColumns(obj: any, path = '', formId = ''): DiscoveredR
       discovered.push(...findRepeatersWithColumns(item, `${path}[${i}]`, formId));
     });
   } else {
-    for (const key in obj) {
+    for (const key in record) {
       const newPath = key === 'Children' ? path : `${path}.${key}`;
-      discovered.push(...findRepeatersWithColumns(obj[key], newPath, formId));
+      discovered.push(...findRepeatersWithColumns(record[key], newPath, formId));
     }
   }
 
   return discovered;
+}
+
+/** Handler structure for type-safe access */
+interface ExtractorHandler {
+  parameters?: readonly unknown[];
 }
 
 /**
@@ -133,14 +217,15 @@ function findRepeatersWithColumns(obj: any, path = '', formId = ''): DiscoveredR
  * @param handlers - Array of handler objects from BC response
  * @returns Array of discovered repeaters with their column metadata
  */
-export function extractColumnsFromHandlers(handlers: any[]): DiscoveredRepeater[] {
+export function extractColumnsFromHandlers(handlers: unknown[]): DiscoveredRepeater[] {
   const discovered: DiscoveredRepeater[] = [];
 
   if (!Array.isArray(handlers)) {
     return discovered;
   }
 
-  for (const handler of handlers) {
+  for (const h of handlers) {
+    const handler = h as ExtractorHandler;
     // Look for handlers with parameters containing LogicalForm-like structures
     if (handler.parameters && Array.isArray(handler.parameters)) {
       const [formId, logicalForm] = handler.parameters;
@@ -161,22 +246,33 @@ export function extractColumnsFromHandlers(handlers: any[]): DiscoveredRepeater[
   return discovered;
 }
 
+/** Response structure for type-safe access */
+interface ExtractorResponse {
+  result?: {
+    handlers?: unknown[];
+  };
+}
+
 /**
  * Extract columns from a complete BC WebSocket response
  *
  * @param response - JsonRpcResponse or raw response object
  * @returns Array of discovered repeaters with columns
  */
-export function extractColumnsFromResponse(response: any): DiscoveredRepeater[] {
+export function extractColumnsFromResponse(response: unknown): DiscoveredRepeater[] {
+  const typedResponse = response as ExtractorResponse | unknown[] | null;
+
   // Handle both wrapped and unwrapped responses
-  const result = response?.result || response;
+  const result = (typedResponse && typeof typedResponse === 'object' && 'result' in typedResponse)
+    ? (typedResponse as ExtractorResponse).result
+    : typedResponse;
 
   if (!result) {
     return [];
   }
 
   // Check for handlers array
-  if (Array.isArray(result.handlers)) {
+  if (result && typeof result === 'object' && 'handlers' in result && Array.isArray(result.handlers)) {
     return extractColumnsFromHandlers(result.handlers);
   }
 

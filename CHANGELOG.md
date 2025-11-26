@@ -2,7 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
-## [2.5.0] - 2025-01-25
+## [2.5.1]
+
+### Fixed
+
+- **RCC column TemplateControlPath enrichment**: Fixed extraction of `TemplateControlPath` for repeater columns
+  - BC stores `TemplateControlPath` on `CurrentRow.Children` (dc/sc/lc data cells), NOT on rcc column definitions
+  - Added `extractTemplateControlPaths()` to build caption→path map from CurrentRow.Children
+  - Modified `extractColumnsFromArray()` to enrich columns with paths when CurrentRow is available
+  - Verified: 95/101 columns enriched when CurrentRow exists (e.g., after row selection)
+
+### Changed
+
+- **TypeScript type safety**: Replaced `any` types with `unknown` in `rcc-extractor.ts`
+  - `isRccMessage()` now uses proper type guards with `unknown` input
+  - All internal functions use explicit type assertions
+
+### Technical Details
+
+- Enrichment occurs when BC sends `CurrentRow` (e.g., systemAction 40 "Drill Down")
+- Fresh page opens don't have CurrentRow, so enrichment cannot happen initially
+- SaveValue operations work via fallback Caption matching when controlPath unavailable
+
+## [2.5.0]
 
 ### Added
 
@@ -37,7 +59,7 @@ All notable changes to this project will be documented in this file.
 
 - **Tool count**: Core tools increased from 6 to 10 (7 core + 3 workflow)
 
-## [2.4.0] - 2025-01-22
+## [2.4.0]
 
 ### Added
 
@@ -74,7 +96,7 @@ All notable changes to this project will be documented in this file.
   - Range filter: "No." >= "101007"
 - **Integration tests**: Phase 1 tests pass (10/10) with no regressions
 
-## [2.2.0] - 2025-11-21
+## [2.2.0]
 
 ### Fixed
 
@@ -88,7 +110,7 @@ All notable changes to this project will be documented in this file.
 - **Fixed logging levels**: Changed misused `logger.error` calls to appropriate levels (`info`/`debug`/`warn`) in BCPageConnection, LoadFormHelpers, and PageMetadataParser
 - **Removed emojis from logs**: Replaced emojis with plain text to fix encoding issues on Windows
 
-## [2.1.0] - 2025-11-21
+## [2.1.0]
 
 ### Added
 
@@ -107,7 +129,7 @@ All notable changes to this project will be documented in this file.
 
 - **TypeScript error**: Added missing `callbackId` property to LoadForm interaction call
 
-## [2.0.0] - 2025-11-20
+## [2.0.0]
 
 ### Added
 

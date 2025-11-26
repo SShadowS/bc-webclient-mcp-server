@@ -169,9 +169,11 @@ export class ControlParser implements IControlParser {
     }
 
     // Look for lf (Logical Form) child with IsPart and IsSubForm
+    // LogicalForm can have IsPart/IsSubForm properties from BC protocol
+    type LogicalFormWithPart = Control & { IsPart?: boolean; IsSubForm?: boolean };
     for (const child of fhcControl.Children) {
-      const childAny = child as any;
-      if (child.t === 'lf' && childAny.IsPart === true && childAny.IsSubForm === true) {
+      const childWithPart = child as LogicalFormWithPart;
+      if (child.t === 'lf' && childWithPart.IsPart === true && childWithPart.IsSubForm === true) {
         // Now search for rc/lrc within this subform
         return this.findGridInSubtree(child);
       }
@@ -223,12 +225,14 @@ export class ControlParser implements IControlParser {
    * Converts a control to field metadata.
    */
   private controlToFieldMetadata(control: Control): FieldMetadata {
+    // Control may have controlPath added during tree walk
+    type ControlWithPath = Control & { controlPath?: string };
     return {
       type: control.t as ControlType,
       caption: control.Caption ? String(control.Caption) : undefined,
       name: control.DesignName ? String(control.DesignName) : (control.Name ? String(control.Name) : undefined),
       controlId: control.ControlIdentifier ? String(control.ControlIdentifier) : undefined,
-      controlPath: (control as any).controlPath,  // CRITICAL: needed for cache updates in write_page_data
+      controlPath: (control as ControlWithPath).controlPath,  // CRITICAL: needed for cache updates in write_page_data
       enabled: (control.Enabled ?? true) as boolean,
       visible: (control.Visible ?? true) as boolean,
     };
@@ -243,11 +247,20 @@ export class ControlParser implements IControlParser {
       return null;
     }
 
-    const iconId = (control as { Icon?: { Identifier?: string } }).Icon?.Identifier;
-    const synopsis = (control as { Synopsis?: string }).Synopsis;
+    // Extended control properties for actions
+    type ActionControlExt = Control & {
+      Icon?: { Identifier?: string };
+      Synopsis?: string;
+      SystemAction?: number;
+      ActionReference?: { TargetId?: number };
+    };
+    const actionControl = control as ActionControlExt;
+
+    const iconId = actionControl.Icon?.Identifier;
+    const synopsis = actionControl.Synopsis;
     // SystemAction can be directly on control OR in ActionReference.TargetId
-    let systemAction = (control as { SystemAction?: number }).SystemAction;
-    const actionRef = (control as any).ActionReference;
+    let systemAction = actionControl.SystemAction;
+    const actionRef = actionControl.ActionReference;
     if (systemAction === undefined && actionRef?.TargetId !== undefined) {
       systemAction = actionRef.TargetId;
     }
@@ -278,16 +291,28 @@ export class ControlParser implements IControlParser {
    * otherwise extracts columns from the Children array of the repeater control.
    */
   private controlToRepeaterMetadata(control: Control & { controlPath?: string }): RepeaterMetadata {
-    const controlAny = control as any;
+    // Extended repeater control with Columns array and FormId
+    type RepeaterColumn = {
+      Caption?: string;
+      DesignName?: string;
+      TemplateControlPath?: string;
+      ColumnBinder?: { Name?: string };
+    };
+    type RepeaterControlExt = Control & {
+      controlPath?: string;
+      Columns?: RepeaterColumn[];
+      FormId?: string | number;
+    };
+    const repeaterControl = control as RepeaterControlExt;
     const columns: ColumnMetadata[] = [];
 
     // First, check if control has already-enriched Columns array (from cache)
     // This is the "passive consumer" pattern from GPT-5.1
-    if (controlAny.Columns && Array.isArray(controlAny.Columns)) {
-      logger.debug(`[ControlParser] Extracting from Columns array (${controlAny.Columns.length} columns)`);
+    if (repeaterControl.Columns && Array.isArray(repeaterControl.Columns)) {
+      logger.debug(`[ControlParser] Extracting from Columns array (${repeaterControl.Columns.length} columns)`);
 
-      for (let i = 0; i < controlAny.Columns.length; i++) {
-        const col = controlAny.Columns[i];
+      for (let i = 0; i < repeaterControl.Columns.length; i++) {
+        const col = repeaterControl.Columns[i];
         // CRITICAL: Only use TemplateControlPath when provided by BC.
         // DO NOT generate synthetic paths - they will be invalid and cause ArgumentOutOfRangeException.
         // When TemplateControlPath is missing, leave controlPath as undefined so BC can resolve it.
@@ -309,7 +334,7 @@ export class ControlParser implements IControlParser {
       controlPath: control.controlPath || '', // Required field
       caption: control.Caption ? String(control.Caption) : undefined,
       name: control.DesignName ? String(control.DesignName) : (control.Name ? String(control.Name) : undefined),
-      formId: (control as any).FormId ? String((control as any).FormId) : undefined,  // Extract FormId for RCC linking
+      formId: repeaterControl.FormId ? String(repeaterControl.FormId) : undefined,  // Extract FormId for RCC linking
       columns,
     };
 
@@ -354,8 +379,9 @@ export class ControlWalker implements IControlWalker {
     currentPath: string
   ): void {
     // DIAGNOSTIC: Log rc controls with their paths
+    // Note: Control uses index signature so dynamic properties are accessible via bracket notation
     if (control.t === 'rc' || control.t === 'lrc') {
-      logger.info(`[ControlWalker] Walking ${control.t}: DesignName="${(control as any).DesignName || 'none'}", Caption="${control.Caption || 'none'}", path="${currentPath}"`);
+      logger.info(`[ControlWalker] Walking ${control.t}: DesignName="${control.DesignName || 'none'}", Caption="${control.Caption || 'none'}", path="${currentPath}"`);
     }
 
     // Visit current control with path
@@ -374,21 +400,22 @@ export class ControlWalker implements IControlWalker {
 
     // Walk HeaderActions array (e.g., Edit, View, Delete actions)
     // BC uses /ha[N] notation for these
-    const headerActions = (control as any).HeaderActions;
+    // Note: HeaderActions and Actions are BC-specific properties accessed via index signature
+    const headerActions = control['HeaderActions'];
     if (headerActions && Array.isArray(headerActions)) {
       for (let i = 0; i < headerActions.length; i++) {
         const actionPath = `${currentPath}${separator}ha[${i}]`;
-        this.walkControl(headerActions[i], visitor, depth + 1, actionPath);
+        this.walkControl(headerActions[i] as Control, visitor, depth + 1, actionPath);
       }
     }
 
     // Walk Actions array (e.g., other actions)
     // BC uses /a[N] notation for these
-    const actions = (control as any).Actions;
+    const actions = control['Actions'];
     if (actions && Array.isArray(actions)) {
       for (let i = 0; i < actions.length; i++) {
         const actionPath = `${currentPath}${separator}a[${i}]`;
-        this.walkControl(actions[i], visitor, depth + 1, actionPath);
+        this.walkControl(actions[i] as Control, visitor, depth + 1, actionPath);
       }
     }
 

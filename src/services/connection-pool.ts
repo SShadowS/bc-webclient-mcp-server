@@ -21,7 +21,7 @@ import { v4 as uuidv4 } from 'uuid';
 /**
  * Represents a pooled connection with metadata
  */
-interface PooledConnection {
+export interface PooledConnection {
   /** Unique identifier for this pooled connection */
   id: string;
 

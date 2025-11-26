@@ -14,6 +14,7 @@ import type { BCError } from '../core/errors.js';
 import { ConnectionError, ProtocolError } from '../core/errors.js';
 import type { IBCConnection } from '../core/interfaces.js';
 import type { BCSession, BCInteraction, Handler } from '../types/bc-types.js';
+import type { BCConfig } from '../types.js';
 import { BCRawWebSocketClient } from './clients/BCRawWebSocketClient.js';
 import type { ChildFormInfo } from '../util/loadform-helpers.js';
 import { logger } from '../core/logger.js';
@@ -89,8 +90,19 @@ export class BCPageConnection implements IBCConnection {
   private async createNewConnection(): Promise<BCRawWebSocketClient> {
     logger.info(`[BCPageConnection] Creating NEW WebSocket connection...`);
 
+    // BCRawWebSocketClient expects BCConfig but we only need baseUrl for connection
+    // The Azure auth fields are not used for on-prem NavUserPassword authentication
+    const partialConfig = {
+      baseUrl: this.config.baseUrl,
+      environment: '',
+      tenantId: this.config.tenantId || 'default',
+      azureClientId: '',
+      azureTenantId: '',
+      azureAuthority: '',
+      roleCenterPageId: 0,
+    } as BCConfig;
     const client = new BCRawWebSocketClient(
-      { baseUrl: this.config.baseUrl } as any,
+      partialConfig,
       this.config.username,
       this.config.password,
       this.config.tenantId || 'default'
@@ -152,15 +164,16 @@ export class BCPageConnection implements IBCConnection {
       // FIX: Don't override openFormIds - let BCRawWebSocketClient manage session-level form tracking
       // BCPageConnection was incorrectly accumulating formIds across unrelated pages (Page 21 → Page 22)
       // causing BC to return empty responses due to form state mismatch
+      // Note: callbackId is generated internally by BCRawWebSocketClient, no need to pass it
       const response = await this.currentClient.invoke({
         interactionName: interaction.interactionName,
         namedParameters: interaction.namedParameters || {},
         controlPath: interaction.controlPath,
         formId: interaction.formId,
-        openFormIds: interaction.openFormIds, // Only pass if explicitly provided by caller
+        // Copy readonly array to mutable if provided
+        openFormIds: interaction.openFormIds ? [...interaction.openFormIds] : undefined,
         lastClientAckSequenceNumber: this.lastAckSequence,
-        callbackId: this.nextCallbackId++,
-      } as any);
+      });
 
       // Validate response
       if (!Array.isArray(response)) {
@@ -175,12 +188,15 @@ export class BCPageConnection implements IBCConnection {
         );
       }
 
+      // Cast response for typed handler processing
+      const handlers = response as readonly Handler[];
+
       // Update ack sequence from response
-      this.updateAckSequenceFromHandlers(response);
+      this.updateAckSequenceFromHandlers(handlers);
 
       // Track form if this was an OpenForm
       if (isOpenForm) {
-        const formId = this.extractFormId(response);
+        const formId = this.extractFormId(handlers);
         if (formId && this.currentPageId) {
           this.openForms.set(this.currentPageId, formId);
           logger.debug(`[BCPageConnection] Tracking form: Page ${this.currentPageId} -> formId ${formId}`);
@@ -192,7 +208,7 @@ export class BCPageConnection implements IBCConnection {
         }
       }
 
-      return ok(response as readonly Handler[]);
+      return ok(handlers);
     } catch (error) {
       const errorMessage = String(error);
       return err(
@@ -213,29 +229,35 @@ export class BCPageConnection implements IBCConnection {
    */
   private extractFormId(handlers: readonly Handler[]): string | null {
     try {
+      // Handler with parameters structure
+      type HandlerWithParams = { handlerType: string; parameters?: readonly unknown[] };
+      type FormShowData = { ServerId?: string };
+      type CallbackParams = { CompletedInteractions?: Array<{ Result?: { value?: string } }> };
+
       // Look for FormToShow event with ServerId
       const formShowHandler = handlers.find(
-        (h: any) => h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-                    h.parameters?.[0] === 'FormToShow'
+        (h) => h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+               (h as HandlerWithParams).parameters?.[0] === 'FormToShow'
       );
 
       if (formShowHandler) {
-        const serverId = (formShowHandler as any).parameters?.[1]?.ServerId;
-        if (serverId) {
-          return serverId;
+        const params = (formShowHandler as HandlerWithParams).parameters;
+        const formData = params?.[1] as FormShowData | undefined;
+        if (formData?.ServerId) {
+          return formData.ServerId;
         }
       }
 
       // Fallback: try old callback response format (for compatibility)
       const callbackHandler = handlers.find(
-        (h: any) => h.handlerType === 'DN.CallbackResponseProperties'
+        (h) => h.handlerType === 'DN.CallbackResponseProperties'
       );
 
       if (callbackHandler) {
-        const params = (callbackHandler as any).parameters?.[0];
+        const params = (callbackHandler as HandlerWithParams).parameters?.[0] as CallbackParams | undefined;
         const completedInteractions = params?.CompletedInteractions;
         if (Array.isArray(completedInteractions) && completedInteractions.length > 0) {
-          return completedInteractions[0].Result?.value;
+          return completedInteractions[0].Result?.value ?? null;
         }
       }
 
@@ -252,24 +274,24 @@ export class BCPageConnection implements IBCConnection {
   private updateAckSequenceFromHandlers(handlers: readonly Handler[]): void {
     let maxSeq = this.lastAckSequence;
 
-    const visit = (obj: any): void => {
+    const visit = (obj: unknown): void => {
       if (!obj || typeof obj !== 'object') return;
-      for (const [k, v] of Object.entries(obj)) {
+      for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
         const key = k.toLowerCase();
         if (
           typeof v === 'number' &&
           (key.includes('sequencenumber') || key.includes('ack') || key.includes('serversequence'))
         ) {
           if (v > maxSeq) maxSeq = v;
-        } else if (v && typeof v === 'object') {
-          visit(v);
         } else if (Array.isArray(v)) {
           for (const item of v) visit(item);
+        } else if (v && typeof v === 'object') {
+          visit(v);
         }
       }
     };
 
-    for (const h of handlers as any[]) visit(h);
+    for (const h of handlers) visit(h);
     if (maxSeq > this.lastAckSequence) {
       this.lastAckSequence = maxSeq;
       logger.debug(`[BCPageConnection] Updated lastAckSequence=${this.lastAckSequence}`);
@@ -292,22 +314,22 @@ export class BCPageConnection implements IBCConnection {
     logger.info(`[BCPageConnection] Loading ${childForms.length} child forms...`);
 
     const allHandlers: Handler[] = [];
-    let callbackId = 0;
 
     for (const child of childForms) {
       try {
+        // ChildFormInfo has serverId but not controlPath, so use serverId for controlPath
+        // Note: callbackId is generated internally by BCRawWebSocketClient
         const response = await this.currentClient.invoke({
           interactionName: 'LoadForm',
           formId: child.serverId,
-          controlPath: (child as any).controlPath || child.serverId || 'server:',
+          controlPath: child.serverId || 'server:',
           namedParameters: {},
           openFormIds: undefined, // Let BCRawWebSocketClient manage form tracking
           lastClientAckSequenceNumber: this.lastAckSequence,
-          callbackId: this.nextCallbackId++,
-        } as any);
+        });
 
         if (Array.isArray(response)) {
-          allHandlers.push(...response);
+          allHandlers.push(...(response as Handler[]));
           logger.debug(`[BCPageConnection] Loaded ${child.serverId}: ${response.length} handlers`);
 
           // Track the loaded child form so openFormIds stays in sync
@@ -330,13 +352,17 @@ export class BCPageConnection implements IBCConnection {
    * Delegates to the underlying WebSocket client.
    */
   public async waitForHandlers<T>(
-    predicate: (handlers: any[]) => { matched: boolean; data?: T },
+    predicate: (handlers: Handler[]) => { matched: boolean; data?: T },
     options?: { timeoutMs?: number; signal?: AbortSignal }
   ): Promise<T> {
     if (!this.currentClient) {
       throw new Error('No active connection - call connect() first');
     }
-    return this.currentClient.waitForHandlers(predicate, options);
+    // Wrap predicate to handle unknown[] → Handler[] conversion from raw client
+    const wrappedPredicate = (handlers: unknown[]): { matched: boolean; data?: T } => {
+      return predicate(handlers as Handler[]);
+    };
+    return this.currentClient.waitForHandlers(wrappedPredicate, options);
   }
 
   /**

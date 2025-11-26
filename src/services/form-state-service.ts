@@ -30,7 +30,82 @@ import {
  */
 interface Handler {
   handlerType: string;
-  parameters?: any[];
+  parameters?: readonly unknown[];
+}
+
+/**
+ * BC Form structure from FormToShow event
+ */
+interface FormToShowData {
+  ServerId?: string;
+  Caption?: string;
+  DesignName?: string;
+  Children?: BcControl[];
+  children?: BcControl[];
+}
+
+/**
+ * BC Control structure for form tree
+ */
+interface BcControl {
+  Caption?: string;
+  caption?: string;
+  Name?: string;
+  name?: string;
+  SourceExpr?: string;
+  sourceExpr?: string;
+  SourceExpression?: string;
+  Kind?: string;
+  kind?: string;
+  Type?: string;
+  type?: string;
+  Editable?: boolean;
+  Visible?: boolean;
+  IsPrimary?: boolean;
+  isPrimary?: boolean;
+  IsDefault?: boolean;
+  isDefault?: boolean;
+  Value?: unknown;
+  FormattedValue?: string;
+  Metadata?: Record<string, unknown>;
+  Controls?: BcControl[];
+  controls?: BcControl[];
+  Children?: BcControl[];
+  children?: BcControl[];
+}
+
+/**
+ * BC Change object from LogicalClientChangeHandler
+ */
+interface BcChange {
+  t?: string;
+  type?: string;
+  ControlReference?: ControlReference;
+  controlReference?: ControlReference;
+  Properties?: Record<string, unknown>;
+  properties?: Record<string, unknown>;
+  Caption?: string;
+  Name?: string;
+  Editable?: boolean;
+  Visible?: boolean;
+  Value?: unknown;
+  FormattedValue?: string;
+  Control?: BcControl;
+  ParentPath?: string;
+  RowChanges?: unknown[];
+  rowChanges?: unknown[];
+  Controls?: BcControl[];
+  controls?: BcControl[];
+  RootControls?: BcControl[];
+  rootControls?: BcControl[];
+}
+
+/**
+ * Control reference for identifying controls in changes
+ */
+interface ControlReference {
+  controlPath?: string;
+  ControlPath?: string;
 }
 
 /**
@@ -141,7 +216,7 @@ export class FormStateService {
    *
    * This must be called BEFORE applyChanges() to establish the control tree.
    */
-  initFromFormToShow(formId: string, formToShowData: any): void {
+  initFromFormToShow(formId: string, formToShowData: FormToShowData | null | undefined): void {
     const state = this.getOrCreateFormState(formId);
 
     // FormToShow has Children array at the root level
@@ -157,7 +232,7 @@ export class FormStateService {
       children: []
     };
 
-    children.forEach((control: any, index: number) => {
+    children.forEach((control: BcControl, index: number) => {
       const childPath = `server:c[${index}]`;
       const node = this.parseControl(state, control, childPath);
       if (node) {
@@ -183,7 +258,7 @@ export class FormStateService {
    * This is the critical function that parses LoadForm responses
    * and builds the control tree.
    */
-  applyChanges(formId: string, changes: any): void {
+  applyChanges(formId: string, changes: BcChange | BcChange[] | null | undefined): void {
     const state = this.getOrCreateFormState(formId);
 
     if (!changes || typeof changes !== 'object') {
@@ -205,7 +280,7 @@ export class FormStateService {
   /**
    * Apply a single change object to FormState
    */
-  private applySingleChange(state: FormState, change: any): void {
+  private applySingleChange(state: FormState, change: BcChange): void {
     if (!change || typeof change !== 'object') return;
 
     const changeType = change.t || change.type;
@@ -235,8 +310,9 @@ export class FormStateService {
 
       default:
         // Unknown change type - try to extract controls anyway
-        if (change.Controls || change.controls) {
-          this.parseControls(state, change.Controls || change.controls, 'server:');
+        const controls = change.Controls || change.controls;
+        if (controls) {
+          this.parseControls(state, controls, 'server:');
         }
         break;
     }
@@ -245,7 +321,7 @@ export class FormStateService {
   /**
    * Apply property changes to existing controls
    */
-  private applyPropertyChanges(state: FormState, change: any): void {
+  private applyPropertyChanges(state: FormState, change: BcChange): void {
     const controlRef = change.ControlReference || change.controlReference;
     if (!controlRef) return;
 
@@ -253,24 +329,25 @@ export class FormStateService {
     const node = state.pathIndex.get(path);
     if (!node) return;
 
-    // Update properties
+    // Update properties - use change itself as fallback if Properties not defined
     const props = change.Properties || change.properties || change;
-    if (props.Caption !== undefined) node.caption = props.Caption;
-    if (props.Name !== undefined) node.name = props.Name;
-    if (props.Editable !== undefined) node.editable = props.Editable;
-    if (props.Visible !== undefined) node.visible = props.Visible;
-    if (props.Value !== undefined) {
+    const propsRecord = props as Record<string, unknown>;
+    if (propsRecord.Caption !== undefined) node.caption = String(propsRecord.Caption);
+    if (propsRecord.Name !== undefined) node.name = String(propsRecord.Name);
+    if (propsRecord.Editable !== undefined) node.editable = Boolean(propsRecord.Editable);
+    if (propsRecord.Visible !== undefined) node.visible = Boolean(propsRecord.Visible);
+    if (propsRecord.Value !== undefined) {
       node.value = node.value || {};
-      node.value.raw = props.Value;
-      node.value.formatted = props.FormattedValue || String(props.Value);
+      node.value.raw = propsRecord.Value;
+      node.value.formatted = propsRecord.FormattedValue ? String(propsRecord.FormattedValue) : String(propsRecord.Value);
     }
   }
 
   /**
    * Apply control change (add/modify control)
    */
-  private applyControlChange(state: FormState, change: any): void {
-    const control = change.Control || change;
+  private applyControlChange(state: FormState, change: BcChange): void {
+    const control = change.Control || (change as unknown as BcControl);
     const parentPath = change.ParentPath || 'server:';
 
     this.parseControl(state, control, parentPath);
@@ -279,7 +356,7 @@ export class FormStateService {
   /**
    * Apply data refresh (field values, repeater data)
    */
-  private applyDataRefresh(state: FormState, change: any): void {
+  private applyDataRefresh(state: FormState, change: BcChange): void {
     const controlRef = change.ControlReference || change.controlReference;
     if (!controlRef) return;
 
@@ -305,7 +382,7 @@ export class FormStateService {
   /**
    * Apply full form update (initial structure)
    */
-  private applyFullUpdate(state: FormState, change: any): void {
+  private applyFullUpdate(state: FormState, change: BcChange): void {
     const controls = change.Controls || change.controls || change.RootControls || change.rootControls;
     if (controls) {
       state.root = this.parseControls(state, controls, 'server:');
@@ -315,7 +392,7 @@ export class FormStateService {
   /**
    * Parse array of controls into control tree
    */
-  private parseControls(state: FormState, controls: any[], parentPath: string): ControlNode {
+  private parseControls(state: FormState, controls: BcControl[], parentPath: string): ControlNode {
     const rootNode: ControlNode = {
       path: parentPath,
       children: []
@@ -337,7 +414,7 @@ export class FormStateService {
   /**
    * Parse single control into ControlNode
    */
-  private parseControl(state: FormState, control: any, path: string): ControlNode | null {
+  private parseControl(state: FormState, control: BcControl, path: string): ControlNode | null {
     if (!control || typeof control !== 'object') return null;
 
     const node: ControlNode = {
@@ -387,7 +464,7 @@ export class FormStateService {
   /**
    * Resolve control path from ControlReference object
    */
-  private resolveControlPath(controlRef: any): string {
+  private resolveControlPath(controlRef: ControlReference | string): string {
     if (typeof controlRef === 'string') return controlRef;
     if (controlRef.controlPath) return controlRef.controlPath;
     if (controlRef.ControlPath) return controlRef.ControlPath;

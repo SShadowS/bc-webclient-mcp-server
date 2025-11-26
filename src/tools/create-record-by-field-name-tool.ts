@@ -306,16 +306,22 @@ export class CreateRecordByFieldNameTool extends BaseMCPTool {
     return ok({ listFormId });
   }
 
+  /** Handler structure for predicate type safety */
+  private static isFormToShowHandler(h: unknown): h is { handlerType: string; parameters?: readonly unknown[] } {
+    return h !== null && typeof h === 'object' && 'handlerType' in h;
+  }
+
   /** Create predicate for FormToShow detection */
-  private createFormToShowPredicate(): (handlers: any[]) => { matched: boolean; data?: string } {
+  private createFormToShowPredicate(): (handlers: unknown[]) => { matched: boolean; data?: string } {
     return (handlers) => {
-      const formShowHandler = handlers.find(
-        h =>
-          h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-          h.parameters?.[0] === 'FormToShow'
-      );
-      if (formShowHandler) {
-        return { matched: true, data: formShowHandler.parameters?.[1]?.ServerId };
+      const formShowHandler = handlers.find((h) => {
+        if (!CreateRecordByFieldNameTool.isFormToShowHandler(h)) return false;
+        return h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
+          h.parameters?.[0] === 'FormToShow';
+      });
+      if (formShowHandler && CreateRecordByFieldNameTool.isFormToShowHandler(formShowHandler)) {
+        const formData = formShowHandler.parameters?.[1] as { ServerId?: string } | undefined;
+        return { matched: true, data: formData?.ServerId };
       }
       return { matched: false };
     };
@@ -344,16 +350,18 @@ export class CreateRecordByFieldNameTool extends BaseMCPTool {
   }
 
   /** Create predicate for new card form detection */
-  private createCardFormPredicate(listFormId: string): (handlers: any[]) => { matched: boolean; data?: string } {
+  private createCardFormPredicate(listFormId: string): (handlers: unknown[]) => { matched: boolean; data?: string } {
     return (handlers) => {
-      const formShowHandler = handlers.find(
-        h =>
-          h.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
-          h.parameters?.[0] === 'FormToShow' &&
-          h.parameters?.[1]?.ServerId !== listFormId
-      );
-      if (formShowHandler) {
-        return { matched: true, data: formShowHandler.parameters?.[1]?.ServerId };
+      const formShowHandler = handlers.find((h) => {
+        if (!CreateRecordByFieldNameTool.isFormToShowHandler(h)) return false;
+        if (h.handlerType !== 'DN.LogicalClientEventRaisingHandler') return false;
+        if (h.parameters?.[0] !== 'FormToShow') return false;
+        const formData = h.parameters?.[1] as { ServerId?: string } | undefined;
+        return formData?.ServerId !== listFormId;
+      });
+      if (formShowHandler && CreateRecordByFieldNameTool.isFormToShowHandler(formShowHandler)) {
+        const formData = formShowHandler.parameters?.[1] as { ServerId?: string } | undefined;
+        return { matched: true, data: formData?.ServerId };
       }
       return { matched: false };
     };

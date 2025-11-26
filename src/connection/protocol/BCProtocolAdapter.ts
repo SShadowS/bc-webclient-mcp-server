@@ -24,6 +24,7 @@
  */
 
 import { logger } from '../../core/logger.js';
+import { isDataRefreshChangeType } from '../../types/bc-type-discriminators.js';
 import type {
   IBCProtocolAdapter,
   IBCWebSocketManager,
@@ -37,6 +38,24 @@ import {
   extractSessionInfo,
   extractOpenFormIds,
 } from './handlers.js';
+
+/** Form/Dialog data from BC EventRaising handler parameters */
+interface FormEventData {
+  ServerId?: string;
+  Caption?: string;
+  DesignName?: string;
+  IsTaskDialog?: boolean;
+  IsModal?: boolean;
+  OriginatingControl?: {
+    formId?: string;
+    controlPath?: string;
+  };
+}
+
+/** Error/validation message data from BC handler parameters */
+interface MessageData {
+  Message?: string;
+}
 
 /**
  * BC Protocol Adapter implementation.
@@ -81,7 +100,7 @@ export class BCProtocolAdapter implements IBCProtocolAdapter {
     logger.info('[BCProtocolAdapter] Starting protocol adapter');
 
     // Subscribe to raw WebSocket messages
-    this.unsubscribe = this.wsManager.onRawMessage((msg: any) => {
+    this.unsubscribe = this.wsManager.onRawMessage((msg: unknown) => {
       this.handleRawMessage(msg);
     });
   }
@@ -112,6 +131,11 @@ export class BCProtocolAdapter implements IBCProtocolAdapter {
     return this.lastServerSequence;
   }
 
+  /** Raw message structure for type-safe access */
+  private static asMessageEnvelope(msg: unknown): { method?: string; params?: Array<{ sequenceNumber?: number; openFormIds?: string[] }> } {
+    return msg as { method?: string; params?: Array<{ sequenceNumber?: number; openFormIds?: string[] }> };
+  }
+
   /**
    * Handle raw WebSocket message.
    *
@@ -123,18 +147,20 @@ export class BCProtocolAdapter implements IBCProtocolAdapter {
    * @param msg Raw JSON-RPC message from WebSocket
    * @internal
    */
-  private handleRawMessage(msg: any): void {
+  private handleRawMessage(msg: unknown): void {
     try {
+      const typedMsg = BCProtocolAdapter.asMessageEnvelope(msg);
+
       // Track server sequence number from Message events
-      if (msg.method === 'Message' && msg.params?.[0]?.sequenceNumber !== undefined) {
-        const serverSeq = msg.params[0].sequenceNumber;
+      if (typedMsg.method === 'Message' && typedMsg.params?.[0]?.sequenceNumber !== undefined) {
+        const serverSeq = typedMsg.params[0].sequenceNumber;
         if (serverSeq > this.lastServerSequence) {
           this.lastServerSequence = serverSeq;
           logger.info(`[BCProtocolAdapter] Server sequence: ${serverSeq}`);
         }
 
         // Extract openFormIds from Message event (if present)
-        const openFormIds = msg.params[0].openFormIds as string[] | undefined;
+        const openFormIds = typedMsg.params[0].openFormIds;
 
         // Emit Message event BEFORE processing handlers
         // This allows SessionManager to track sequence and openFormIds
@@ -173,8 +199,8 @@ export class BCProtocolAdapter implements IBCProtocolAdapter {
 
   /** Emit FormToShow event from LogicalClientEventRaisingHandler. */
   private emitFormToShow(handler: BCHandler): void {
-    if (handler.parameters?.[0] !== 'FormToShow' || !handler.parameters?.[1]?.ServerId) return;
-    const formData = handler.parameters[1];
+    const formData = handler.parameters?.[1] as FormEventData | undefined;
+    if (handler.parameters?.[0] !== 'FormToShow' || !formData?.ServerId) return;
     this.eventEmitter.emit({
       kind: 'FormToShow',
       formId: formData.ServerId,
@@ -186,13 +212,13 @@ export class BCProtocolAdapter implements IBCProtocolAdapter {
 
   /** Emit DialogToShow event from LogicalClientEventRaisingHandler. */
   private emitDialogToShow(handler: BCHandler): void {
-    if (handler.parameters?.[0] !== 'DialogToShow' || !handler.parameters?.[1]?.ServerId) return;
-    const dialogData = handler.parameters[1];
+    const dialogData = handler.parameters?.[1] as FormEventData | undefined;
+    if (handler.parameters?.[0] !== 'DialogToShow' || !dialogData?.ServerId) return;
     const originatingControl = dialogData.OriginatingControl;
     this.eventEmitter.emit({
       kind: 'DialogToShow',
       dialogId: dialogData.ServerId,
-      caption: dialogData.Caption,
+      caption: dialogData.Caption || '',
       designName: dialogData.DesignName,
       isTaskDialog: dialogData.IsTaskDialog,
       isModal: dialogData.IsModal,
@@ -207,7 +233,7 @@ export class BCProtocolAdapter implements IBCProtocolAdapter {
   private emitDataRefreshChange(handler: BCHandler): void {
     const changes = handler.parameters?.[1];
     if (!Array.isArray(changes)) return;
-    const dataRefreshChanges = changes.filter((c: any) => c.t === 'DataRefreshChange');
+    const dataRefreshChanges = changes.filter((c: { t?: string }) => isDataRefreshChangeType(c.t));
     if (dataRefreshChanges.length === 0) return;
     this.eventEmitter.emit({
       kind: 'DataRefreshChange',
@@ -226,24 +252,24 @@ export class BCProtocolAdapter implements IBCProtocolAdapter {
   /** Emit Error event (ErrorMessage or ErrorDialog). */
   private emitError(handler: BCHandler): void {
     const errorType = handler.handlerType === 'DN.ErrorMessageProperties' ? 'ErrorMessage' : 'ErrorDialog';
-    const message = handler.parameters?.[0]?.Message;
-    this.eventEmitter.emit({ kind: 'Error', errorType, message, raw: handler });
-    logger.info(`[BCProtocolAdapter] Emitted Error (${errorType}): ${message || 'no message'}`);
+    const msgData = handler.parameters?.[0] as MessageData | undefined;
+    this.eventEmitter.emit({ kind: 'Error', errorType, message: msgData?.Message, raw: handler });
+    logger.info(`[BCProtocolAdapter] Emitted Error (${errorType}): ${msgData?.Message || 'no message'}`);
   }
 
   /** Emit ValidationMessage event. */
   private emitValidationMessage(handler: BCHandler): void {
-    const message = handler.parameters?.[0]?.Message;
-    this.eventEmitter.emit({ kind: 'ValidationMessage', message, raw: handler });
-    logger.info(`[BCProtocolAdapter] Emitted ValidationMessage: ${message || 'no message'}`);
+    const msgData = handler.parameters?.[0] as MessageData | undefined;
+    this.eventEmitter.emit({ kind: 'ValidationMessage', message: msgData?.Message, raw: handler });
+    logger.info(`[BCProtocolAdapter] Emitted ValidationMessage: ${msgData?.Message || 'no message'}`);
   }
 
   /** Emit Dialog event (Confirm or YesNo). */
   private emitDialog(handler: BCHandler): void {
     const dialogType = handler.handlerType === 'DN.ConfirmDialogProperties' ? 'Confirm' : 'YesNo';
-    const message = handler.parameters?.[0]?.Message;
-    this.eventEmitter.emit({ kind: 'Dialog', dialogType, message, raw: handler });
-    logger.info(`[BCProtocolAdapter] Emitted Dialog (${dialogType}): ${message || 'no message'}`);
+    const msgData = handler.parameters?.[0] as MessageData | undefined;
+    this.eventEmitter.emit({ kind: 'Dialog', dialogType, message: msgData?.Message, raw: handler });
+    logger.info(`[BCProtocolAdapter] Emitted Dialog (${dialogType}): ${msgData?.Message || 'no message'}`);
   }
 
   /**

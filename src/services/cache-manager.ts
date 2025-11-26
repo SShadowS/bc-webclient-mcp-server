@@ -27,7 +27,7 @@ import { logger } from '../core/logger.js';
 /**
  * Cache entry with metadata
  */
-interface CacheEntry<T = any> {
+interface CacheEntry<T = unknown> {
   /** The cache key */
   key: string;
 
@@ -124,6 +124,7 @@ export class CacheManager {
   private cache = new Map<string, CacheEntry>();
 
   /** Pending operations (for stampede protection) */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Generic operations require any for type flexibility
   private pendingOperations = new Map<string, PendingOperation<any>>();
 
   /** Cleanup interval handle */

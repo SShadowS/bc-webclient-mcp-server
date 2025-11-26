@@ -97,8 +97,8 @@ export interface IBCConnection {
    */
   loadChildForms(childForms: Array<{
     serverId: string;
-    container: any;
-    form: any;
+    container: Control;
+    form: Control;
   }>): Promise<Result<readonly Handler[], BCError>>;
 
   /**
@@ -109,7 +109,7 @@ export interface IBCConnection {
    * @returns Promise that resolves with the data from the predicate
    */
   waitForHandlers<T>(
-    predicate: (handlers: any[]) => { matched: boolean; data?: T },
+    predicate: (handlers: Handler[]) => { matched: boolean; data?: T },
     options?: { timeoutMs?: number; signal?: AbortSignal }
   ): Promise<T>;
 
@@ -117,7 +117,7 @@ export interface IBCConnection {
    * Gets the underlying raw WebSocket client (for advanced operations).
    * Returns null if not connected.
    */
-  getRawClient(): any | null;
+  getRawClient(): unknown;
 }
 
 /**

@@ -31,7 +31,7 @@ import type { FieldMetadata } from '../types/bc-types.js';
  */
 export interface FilterSpec {
   operator: string;
-  value: any;
+  value: unknown;
 }
 
 /**
@@ -194,8 +194,8 @@ export class FilterMetadataService {
    */
   public async getOrComputeRepeaterPath(
     pageId: string,
-    logicalForm: any,
-    findRepeaterFn: (form: any) => string | null
+    logicalForm: unknown,
+    findRepeaterFn: (form: unknown) => string | null
   ): Promise<string | null> {
     // Input validation
     if (!pageId || typeof pageId !== 'string') {
@@ -289,8 +289,8 @@ export class FilterMetadataService {
    */
   public async getOrComputeFieldMetadata(
     pageId: string,
-    logicalForm: any,
-    extractFieldsFn: (form: any) => Map<string, FieldMetadata>
+    logicalForm: unknown,
+    extractFieldsFn: (form: unknown) => Map<string, FieldMetadata>
   ): Promise<Map<string, FieldMetadata>> {
     // Input validation
     if (!pageId || typeof pageId !== 'string') {

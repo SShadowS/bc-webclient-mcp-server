@@ -14,6 +14,68 @@ import { LogicalFormParseError } from '../core/errors.js';
 import { ok, err, type Result } from '../core/result.js';
 import type { BCError } from '../core/errors.js';
 import type { PageSearchResult } from '../types/mcp-types.js';
+import { isDataRefreshChangeType, isDataRowInsertedType } from '../types/bc-type-discriminators.js';
+
+/**
+ * BC Handler structure from protocol
+ */
+export interface BcHandler {
+  handlerType: string;
+  parameters?: readonly unknown[];
+  LogicalForm?: BcLogicalForm;
+}
+
+/**
+ * BC LogicalForm structure
+ */
+interface BcLogicalForm {
+  Id?: string;
+  Children?: BcControl[];
+  Controls?: BcControl[];
+}
+
+/**
+ * BC Control structure
+ */
+interface BcControl {
+  Type?: number;
+  t?: string;
+  Value?: unknown[];
+  Properties?: { Value?: unknown[] };
+  Controls?: BcControl[];
+}
+
+/**
+ * BC Change object from LogicalClientChangeHandler
+ */
+interface BcChange {
+  t?: string;
+  ControlReference?: { controlPath?: string };
+  RowChanges?: BcRowChange[];
+}
+
+/**
+ * BC Row change in DataRefreshChange
+ */
+interface BcRowChange {
+  t?: string;
+  DataRowInserted?: [number, BcRowData];
+}
+
+/**
+ * BC Row data in row change
+ */
+interface BcRowData {
+  bookmark?: string;
+  cells?: Record<string, { stringValue?: string }>;
+}
+
+/**
+ * Input can be a handler wrapper or array of handlers
+ */
+interface HandlerWrapper {
+  LogicalForm?: BcLogicalForm;
+}
 
 /**
  * Tell Me search result row structure.
@@ -51,16 +113,16 @@ export interface TellMeSearchResultRow {
  * @returns Array of search result rows
  */
 export function extractTellMeResults(
-  handlersOrForm: any
+  handlersOrForm: BcHandler[] | HandlerWrapper | null | undefined
 ): Result<TellMeSearchResultRow[], BCError> {
   try {
     // Handle both array of handlers and single form object
-    let form: any;
+    let form: BcLogicalForm | undefined;
     const isArrayInput = Array.isArray(handlersOrForm);
 
     if (isArrayInput) {
       // Search for handler with LogicalForm
-      const handler = handlersOrForm.find((h: any) => h?.LogicalForm);
+      const handler = handlersOrForm.find((h) => h?.LogicalForm);
       form = handler?.LogicalForm;
 
       if (!form) {
@@ -118,16 +180,19 @@ export function extractTellMeResults(
     }
 
     // Parse each result row
-    const results: TellMeSearchResultRow[] = resultsArray.map((row: any[]) => ({
-      name: String(row[0] || ''),
-      category: String(row[1] || ''),
-      objectId: String(row[2] || ''),
-      objectType: String(row[3] || ''),
-      key: String(row[4] || ''),
-      context: row[5] || undefined,
-      action: row[6],
-      actionKey: row[7],
-    }));
+    const results: TellMeSearchResultRow[] = resultsArray.map((row: unknown) => {
+      const rowArray = row as unknown[];
+      return {
+        name: String(rowArray[0] || ''),
+        category: String(rowArray[1] || ''),
+        objectId: String(rowArray[2] || ''),
+        objectType: String(rowArray[3] || ''),
+        key: String(rowArray[4] || ''),
+        context: rowArray[5] ? String(rowArray[5]) : undefined,
+        action: rowArray[6] ? String(rowArray[6]) : undefined,
+        actionKey: rowArray[7] ? String(rowArray[7]) : undefined,
+      };
+    });
 
     return ok(results);
   } catch (error) {
@@ -186,7 +251,7 @@ function mapCategoryToPageType(category: string): string {
  * @param logicalForm - Decompressed LogicalForm
  * @returns Form ID or undefined
  */
-export function getFormId(logicalForm: any): string | undefined {
+export function getFormId(logicalForm: HandlerWrapper | null | undefined): string | undefined {
   return logicalForm?.LogicalForm?.Id;
 }
 
@@ -197,11 +262,12 @@ export function getFormId(logicalForm: any): string | undefined {
  * @param logicalForm - Decompressed LogicalForm
  * @returns Search query string or undefined
  */
-export function getSearchQuery(logicalForm: any): string | undefined {
+export function getSearchQuery(logicalForm: HandlerWrapper | null | undefined): string | undefined {
   try {
     const form = logicalForm?.LogicalForm;
     const searchControl = form?.Controls?.[0]?.Controls?.[0];
-    return searchControl?.Properties?.Value;
+    const value = searchControl?.Properties?.Value;
+    return Array.isArray(value) && value.length > 0 ? String(value[0]) : undefined;
   } catch {
     return undefined;
   }
@@ -217,7 +283,7 @@ export function getSearchQuery(logicalForm: any): string | undefined {
  * @returns Array of search result rows
  */
 export function extractTellMeResultsFromChangeHandler(
-  handlers: any[]
+  handlers: BcHandler[]
 ): Result<TellMeSearchResultRow[], BCError> {
   try {
     if (!Array.isArray(handlers)) {
@@ -228,7 +294,7 @@ export function extractTellMeResultsFromChangeHandler(
 
     // Find LogicalClientChangeHandler
     const changeHandler = handlers.find(
-      (h: any) => h.handlerType === 'DN.LogicalClientChangeHandler'
+      (h) => h.handlerType === 'DN.LogicalClientChangeHandler'
     );
 
     if (!changeHandler) {
@@ -236,15 +302,15 @@ export function extractTellMeResultsFromChangeHandler(
     }
 
     // Get changes array (parameters[1])
-    const changes = changeHandler.parameters?.[1];
+    const changes = changeHandler.parameters?.[1] as BcChange[] | undefined;
     if (!Array.isArray(changes)) {
       return ok([]); // No changes
     }
 
     // Find change for pages repeater (c[1]) - can be DataRefreshChange, InitializeChange, or ControlAddChange
     const pagesDataChange = changes.find(
-      (c: any) =>
-        (c.t === 'DataRefreshChange' || c.t === 'InitializeChange' || c.t === 'ControlAddChange') &&
+      (c) =>
+        (isDataRefreshChangeType(c.t) || c.t === 'InitializeChange' || c.t === 'ControlAddChange') &&
         c.ControlReference?.controlPath === 'server:c[1]'
     );
 
@@ -253,9 +319,9 @@ export function extractTellMeResultsFromChangeHandler(
     }
 
     // Extract results from row changes
-    const results: TellMeSearchResultRow[] = pagesDataChange.RowChanges
-      .filter((row: any) => row.t === 'DataRowInserted')
-      .map((row: any) => {
+    const mappedResults = pagesDataChange.RowChanges
+      .filter((row: BcRowChange) => isDataRowInsertedType(row.t))
+      .map((row: BcRowChange): TellMeSearchResultRow | null => {
         const rowData = row.DataRowInserted?.[1];
         const cells = rowData?.cells;
 
@@ -288,8 +354,11 @@ export function extractTellMeResultsFromChangeHandler(
           action: undefined,
           actionKey: undefined,
         };
-      })
-      .filter((r: any) => r !== null);
+      });
+
+    const results: TellMeSearchResultRow[] = mappedResults.filter(
+      (r): r is TellMeSearchResultRow => r !== null
+    );
 
     return ok(results);
   } catch (error) {

@@ -44,7 +44,7 @@ export interface IBCClient {
   /** Disconnect WebSocket */
   disconnect(): Promise<void>;
   /** Open BC session */
-  openSession(connectionRequest: any): Promise<any>;
+  openSession(connectionRequest: unknown): Promise<unknown[]>;
   /** Invoke BC action */
   invoke(options: {
     interactionName: string;
@@ -57,7 +57,7 @@ export interface IBCClient {
     lastClientAckSequenceNumber?: number;
     signal?: AbortSignal;
     timeoutMs?: number;
-  }): Promise<any>;
+  }): Promise<unknown>;
 }
 
 /**

@@ -9,8 +9,140 @@ import type { Result } from '../core/result.js';
 import { ok, err, isOk } from '../core/result.js';
 import type { BCError } from '../core/errors.js';
 import { LogicalFormParseError } from '../core/errors.js';
-import type { LogicalForm, Control, ControlType } from '../types/bc-types.js';
+import type { LogicalForm, Control, ControlType, Handler, LogicalClientChangeHandler } from '../types/bc-types.js';
+import type {
+  DataRefreshChange,
+  DataRowInsertedChange,
+  PropertyChange,
+  PropertyChanges,
+  ControlChange,
+  Change,
+  ClientDataRow,
+  LogicalControlBase,
+  ControlTypeId,
+} from '../types/bc-protocol-types.js';
+import { isDataRefreshChange, isDataRowInsertedChange } from '../types/bc-protocol-types.js';
+import {
+  isDataRefreshChangeType,
+  isDataRowInsertedType,
+  isDataRowUpdatedType,
+  isPropertyChangesType,
+  isPropertyChangeType,
+} from '../types/bc-type-discriminators.js';
 import { logger } from '../core/logger.js';
+
+/**
+ * Row data from DataRowInserted/DataRowUpdated
+ * BC uses both lowercase (bookmark) and uppercase (Bookmark) depending on context
+ */
+interface BcRowData {
+  bookmark?: string;
+  Bookmark?: string;
+  cells?: Record<string, BcCellValue>;
+  /** Index signature for cell values when cells are at top level */
+  [key: string]: unknown;
+}
+
+/**
+ * Cell value structure in BC protocol
+ */
+interface BcCellValue {
+  sv?: string;
+  i32v?: number;
+  dcv?: number;
+  bv?: boolean;
+  dtv?: string;
+  stringValue?: string;
+  decimalValue?: number;
+  intValue?: number;
+  boolValue?: boolean;
+  dateTimeValue?: string;
+  objectValue?: unknown;
+}
+
+/**
+ * PropertyChanges message from BC protocol
+ */
+interface BcPropertyChanges {
+  t: 'PropertyChanges' | 'PropertyChange';
+  ControlReference?: { controlPath?: string };
+  Changes?: Record<string, unknown>;
+}
+
+/**
+ * LogicalForm with Properties (extended for runtime)
+ */
+interface LogicalFormWithProperties extends LogicalForm {
+  Properties?: Record<string, unknown>;
+}
+
+/**
+ * Generic control type for walking control trees
+ */
+interface WalkableControl {
+  t?: string;
+  Children?: WalkableControl[];
+  Columns?: RepeaterColumn[];
+  ColumnBinder?: { Name?: string };
+  Caption?: string;
+  DesignName?: string;
+  Name?: string;
+  ControlId?: number;
+  ControlID?: number;
+  TableFieldNo?: number;
+  FieldNo?: number;
+}
+
+/**
+ * Repeater column structure
+ */
+interface RepeaterColumn {
+  ColumnBinder?: { Name?: string };
+  Name?: string;
+  Caption?: string;
+  DesignName?: string;
+  ControlId?: number;
+  ControlID?: number;
+  TableFieldNo?: number;
+  FieldNo?: number;
+}
+
+/**
+ * PropertyChange data structure
+ */
+interface PropertyChangeData {
+  t: string;
+  ControlReference?: { controlPath?: string };
+  Changes?: Record<string, unknown>;
+}
+
+/**
+ * DataRowUpdated container from handlers
+ */
+interface DataRowUpdatedContainer {
+  t: string;
+  DataRowUpdated?: [number, BcRowData];
+}
+
+/**
+ * Handler with parameters structure
+ */
+interface HandlerWithParams {
+  handlerType: string;
+  parameters?: unknown[];
+}
+
+/**
+ * Mutable control for applying property changes
+ */
+interface MutableControl {
+  t?: string;
+  DesignName?: string;
+  Name?: string;
+  Caption?: string;
+  Children?: MutableControl[];
+  Properties?: Record<string, unknown>;
+}
 
 /**
  * Field control types that contain data values.
@@ -167,14 +299,15 @@ export class PageDataExtractor {
    * Checks if LogicalForm has a repeater control at the top level
    * (not nested in tabs/parts).
    */
-  private hasTopLevelRepeater(logicalForm: any): boolean {
+  private hasTopLevelRepeater(logicalForm: LogicalForm): boolean {
     if (!logicalForm.Children || !Array.isArray(logicalForm.Children)) {
       return false;
     }
 
     // Check only immediate children (top-level controls)
     for (const child of logicalForm.Children) {
-      if (this.isRepeaterControl(child.t as ControlType)) {
+      const control = child as Control;
+      if (this.isRepeaterControl(control.t as ControlType)) {
         return true;
       }
     }
@@ -202,7 +335,7 @@ export class PageDataExtractor {
       controlType: 'rc' | 'lrc';
     }> = [];
 
-    const walkControl = (control: any, path: string): void => {
+    const walkControl = (control: Control, path: string): void => {
       if (!control || typeof control !== 'object') return;
 
       // Check if this is a repeater control
@@ -210,8 +343,8 @@ export class PageDataExtractor {
       if (controlType === 'rc' || controlType === 'lrc') {
         repeaters.push({
           path,
-          caption: control.Caption || control.DesignName || 'Unnamed',
-          designName: control.DesignName || '',
+          caption: String(control.Caption || control.DesignName || 'Unnamed'),
+          designName: String(control.DesignName || ''),
           controlType: controlType as 'rc' | 'lrc',
         });
         // Don't walk into repeater children - they're the line data itself
@@ -222,7 +355,7 @@ export class PageDataExtractor {
       if (Array.isArray(control.Children)) {
         for (let i = 0; i < control.Children.length; i++) {
           const childPath = path ? `${path}/c[${i}]` : `c[${i}]`;
-          walkControl(control.Children[i], childPath);
+          walkControl(control.Children[i] as Control, childPath);
         }
       }
     };
@@ -302,16 +435,18 @@ export class PageDataExtractor {
 
       // Walk control tree and extract field values from field controls only
       const fieldEncounters = new Map<string, number>();  // Track duplicate field names
-      this.walkControls(effectiveForm, (control: any) => {
+      this.walkControls(effectiveForm, (control: Control) => {
         if (this.isFieldControl(control.t as ControlType)) {
           // Derive a stable control ID (BC tends to use ControlIdentifier or ControlId/ControlID)
+          // Use type assertion for optional runtime properties
+          const ctrlAny = control as Record<string, unknown>;
           const controlId =
-            control.ControlIdentifier != null
-              ? String(control.ControlIdentifier)
-              : control.ControlId != null
-              ? String(control.ControlId)
-              : control.ControlID != null
-              ? String(control.ControlID)
+            ctrlAny.ControlIdentifier != null
+              ? String(ctrlAny.ControlIdentifier)
+              : ctrlAny.ControlId != null
+              ? String(ctrlAny.ControlId)
+              : ctrlAny.ControlID != null
+              ? String(ctrlAny.ControlID)
               : undefined;
 
           let fieldName: string | null = null;
@@ -368,8 +503,9 @@ export class PageDataExtractor {
 
       // Extract bookmark from LogicalForm Properties (card/document pages)
       // Use effectiveForm which has PropertyChanges applied (Bookmark is set via PropertyChanges)
-      const bookmark = (effectiveForm as any).Properties?.Bookmark as string | undefined;
-      logger.info(`extractCardPageData: effectiveForm.Properties = ${JSON.stringify((effectiveForm as any).Properties)?.substring(0, 200)}`);
+      const formWithProps = effectiveForm as LogicalFormWithProperties;
+      const bookmark = formWithProps.Properties?.Bookmark as string | undefined;
+      logger.info(`extractCardPageData: effectiveForm.Properties = ${JSON.stringify(formWithProps.Properties)?.substring(0, 200)}`);
       logger.info(`extractCardPageData: Bookmark = ${bookmark}`);
       const record: PageRecord = { bookmark, fields };
 
@@ -401,8 +537,8 @@ export class PageDataExtractor {
   ): Result<PageDataExtractionResult, BCError> {
     try {
       // Find LogicalClientChangeHandler with DataRefreshChange
-      const changeHandler = (handlers as any[]).find(
-        (h: any) => h.handlerType === 'DN.LogicalClientChangeHandler'
+      const changeHandler = (handlers as readonly Handler[]).find(
+        (h): h is LogicalClientChangeHandler => h.handlerType === 'DN.LogicalClientChangeHandler'
       );
 
       if (!changeHandler) {
@@ -415,7 +551,7 @@ export class PageDataExtractor {
       }
 
       // Get changes array (parameters[1])
-      const changes = changeHandler.parameters?.[1];
+      const changes = changeHandler.parameters?.[1] as readonly Change[] | undefined;
       if (!Array.isArray(changes)) {
         return ok({
           pageType: 'list',
@@ -425,8 +561,10 @@ export class PageDataExtractor {
       }
 
       // Find DataRefreshChange for main repeater
+      // BC27+ uses full type name 'DataRefreshChange' instead of shorthand 'drch'
+      // BC27 uses lowercase 'controlPath' not 'ControlPath'
       const dataChange = changes.find(
-        (c: any) => c.t === 'DataRefreshChange' && c.ControlReference?.controlPath
+        (c): c is DataRefreshChange => isDataRefreshChangeType(c.t) && !!(c as DataRefreshChange).ControlReference?.controlPath
       );
 
       if (!dataChange || !Array.isArray(dataChange.RowChanges)) {
@@ -447,9 +585,15 @@ export class PageDataExtractor {
       }
 
       // Extract records from row changes
-      const records: PageRecord[] = dataChange.RowChanges
-        .filter((row: any) => row.t === 'DataRowInserted')
-        .map((row: any) => this.extractRecordFromRow(row.DataRowInserted?.[1], fieldMetadata, columnMappings))
+      // Note: RowChanges contains DataRowInsertedChange with custom serialization
+      // The actual row data is in a legacy DataRowInserted property (array format)
+      const rowChanges = dataChange.RowChanges as readonly (DataRowInsertedChange & { DataRowInserted?: [number, ClientDataRow] })[];
+      const records: PageRecord[] = rowChanges
+        .filter((row): row is DataRowInsertedChange & { DataRowInserted: [number, ClientDataRow] } =>
+          // BC27+ uses full type name 'DataRowInserted' instead of shorthand 'drich'
+          isDataRowInsertedType(row.t) && Array.isArray((row as { DataRowInserted?: unknown }).DataRowInserted)
+        )
+        .map((row) => this.extractRecordFromRow(row.DataRowInserted[1], fieldMetadata, columnMappings))
         .filter((record: PageRecord | null): record is PageRecord => record !== null);
 
       return ok({
@@ -504,13 +648,16 @@ export class PageDataExtractor {
       const linesBlocks: DocumentLinesBlock[] = [];
 
       // Find ALL DataRefreshChange handlers
-      const dataRefreshHandlers = handlers.filter((h: any) => {
-        if (h.handlerType !== 'DN.LogicalClientChangeHandler') return false;
+      const dataRefreshHandlers = handlers.filter((h): h is Handler => {
+        const handler = h as Handler;
+        if (handler.handlerType !== 'DN.LogicalClientChangeHandler') return false;
 
-        const params = h.parameters?.[1];
+        const changeHandler = handler as LogicalClientChangeHandler;
+        const params = changeHandler.parameters?.[1] as readonly Change[] | undefined;
         if (!Array.isArray(params)) return false;
 
-        return params.some((change: any) => change.t === 'DataRefreshChange');
+        // BC27+ uses full type name 'DataRefreshChange' instead of shorthand 'drch'
+        return params.some((change) => isDataRefreshChangeType(change.t));
       });
 
       logger.info(`Found ${dataRefreshHandlers.length} DataRefreshChange handler(s)`);
@@ -580,7 +727,7 @@ export class PageDataExtractor {
   /**
    * Walks control tree and calls visitor for each control.
    */
-  private walkControls(control: any, visitor: (control: Control) => void): void {
+  private walkControls(control: Control | LogicalForm, visitor: (control: Control) => void): void {
     if (!control || typeof control !== 'object') {
       return;
     }
@@ -591,7 +738,7 @@ export class PageDataExtractor {
     // Walk children
     if (Array.isArray(control.Children)) {
       for (const child of control.Children) {
-        this.walkControls(child, visitor);
+        this.walkControls(child as Control, visitor);
       }
     }
   }
@@ -628,19 +775,22 @@ export class PageDataExtractor {
    *
    * This method checks BOTH locations to support both scenarios.
    */
-  private extractFieldValueFromControl(control: any): FieldValue | null {
+  private extractFieldValueFromControl(control: Control): FieldValue | null {
     const type = control.t as ControlType;
+    // Use type assertion to access runtime properties that may not be in the base type
+    const ctrlRecord = control as Record<string, unknown>;
 
     try {
       // PropertyChanges sets Properties.StringValue/ObjectValue (drill-down pattern)
       // OpenForm sets direct StringValue/ObjectValue
-      const propertiesStringValue = control.Properties?.StringValue;
-      const propertiesObjectValue = control.Properties?.ObjectValue;
+      const props = ctrlRecord.Properties as Record<string, unknown> | undefined;
+      const propertiesStringValue = props?.StringValue as string | undefined;
+      const propertiesObjectValue = props?.ObjectValue;
 
       switch (type) {
         case 'bc': // Boolean
           return {
-            value: propertiesObjectValue ?? control.ObjectValue ?? false,
+            value: Boolean(propertiesObjectValue ?? control.ObjectValue ?? false),
             type: 'boolean',
           };
 
@@ -648,7 +798,7 @@ export class PageDataExtractor {
         case 'pc': // Percent
           const decimalStr = propertiesStringValue ?? control.StringValue ?? '0';
           return {
-            value: parseFloat(decimalStr),
+            value: parseFloat(String(decimalStr)),
             displayValue: String(decimalStr),
             type: 'number',
           };
@@ -656,24 +806,26 @@ export class PageDataExtractor {
         case 'i32c': // Integer
           const intStr = propertiesStringValue ?? control.StringValue ?? '0';
           return {
-            value: parseInt(intStr, 10),
+            value: parseInt(String(intStr), 10),
             displayValue: String(intStr),
             type: 'number',
           };
 
         case 'sec': // Select/Enum
-          return this.extractSelectValue(control);
+          return this.extractSelectValue(control, props);
 
         case 'dtc': // DateTime
+          const dateVal = propertiesStringValue ?? control.StringValue ?? null;
           return {
-            value: propertiesStringValue ?? control.StringValue ?? null,
+            value: dateVal != null ? String(dateVal) : null,
             type: 'date',
           };
 
         case 'sc': // String
         default:
+          const strVal = propertiesStringValue ?? propertiesObjectValue ?? control.StringValue ?? control.ObjectValue ?? null;
           return {
-            value: propertiesStringValue ?? propertiesObjectValue ?? control.StringValue ?? control.ObjectValue ?? null,
+            value: strVal != null ? String(strVal) : null,
             type: 'string',
           };
       }
@@ -688,13 +840,14 @@ export class PageDataExtractor {
   /**
    * Extracts value from a select/enum control.
    */
-  private extractSelectValue(control: any): FieldValue | null {
+  private extractSelectValue(control: Control, props?: Record<string, unknown>): FieldValue | null {
     // PropertyChanges sets Properties.CurrentIndex/StringValue (drill-down pattern)
     // OpenForm sets direct CurrentIndex/StringValue
-    const currentIndex = control.Properties?.CurrentIndex ?? control.CurrentIndex;
-    const items = control.Properties?.Items ?? control.Items;
-    const stringValue = control.Properties?.StringValue ?? control.StringValue;
-    const objectValue = control.Properties?.ObjectValue ?? control.ObjectValue;
+    const ctrlRecord = control as Record<string, unknown>;
+    const currentIndex = props?.CurrentIndex ?? ctrlRecord.CurrentIndex;
+    const items = (props?.Items ?? ctrlRecord.Items) as readonly { Value?: unknown; Caption?: string }[] | undefined;
+    const stringValue = props?.StringValue ?? control.StringValue;
+    const objectValue = props?.ObjectValue ?? control.ObjectValue;
 
     // CRITICAL: Prefer explicit StringValue from Properties (set by PropertyChanges)
     // over Items lookup. BC sends the localized display string via StringValue
@@ -703,16 +856,16 @@ export class PageDataExtractor {
     if (stringValue !== null && stringValue !== undefined && stringValue !== '') {
       // BC provided explicit string value via PropertyChanges
       return {
-        value: stringValue,
+        value: String(stringValue),
         type: 'string',
       };
     }
 
     // No explicit string value, try to look up from Items array
-    if (currentIndex === undefined || !Array.isArray(items)) {
+    if (typeof currentIndex !== 'number' || !Array.isArray(items)) {
       // No Items array available, fallback to object value
       return {
-        value: objectValue ?? null,
+        value: objectValue != null ? String(objectValue) : null,
         type: 'string',
       };
     }
@@ -726,7 +879,7 @@ export class PageDataExtractor {
     }
 
     return {
-      value: selectedItem.Value ?? selectedItem,
+      value: selectedItem.Value != null ? String(selectedItem.Value) : String(selectedItem),
       displayValue: selectedItem.Caption ?? String(selectedItem),
       type: 'string',
     };
@@ -740,11 +893,23 @@ export class PageDataExtractor {
    * @param columnMappings - Optional column mappings for runtime ID → semantic name translation
    */
   private extractRecordFromRow(
-    rowData: any,
+    rowData: BcRowData | ClientDataRow,
     fieldMetadata: Map<string, { visible: boolean; hasCaption: boolean; controlId?: string }> | null = null,
     columnMappings?: Map<string, ColumnMapping> | null
   ): PageRecord | null {
-    if (!rowData || !rowData.cells) {
+    if (!rowData) {
+      return null;
+    }
+
+    // BC has two cell patterns:
+    // 1. Nested: rowData.cells = { fieldName: cellValue }
+    // 2. Flat: rowData[fieldName] = cellValue (ClientDataRow style)
+    const bcRow = rowData as BcRowData;
+    const clientRow = rowData as ClientDataRow;
+
+    // Get cells - prefer nested 'cells' property, fall back to flat structure
+    const cells = bcRow.cells ?? this.extractFlatCells(clientRow);
+    if (!cells || Object.keys(cells).length === 0) {
       return null;
     }
 
@@ -766,9 +931,9 @@ export class PageDataExtractor {
 
     // Extract cell values with filtering
     let cellIndex = 0;
-    for (const [cellKey, cellValue] of Object.entries(rowData.cells)) {
+    for (const [cellKey, cellValue] of Object.entries(cells)) {
       // Extract cell value early to check for GUID pattern
-      const extractedValue = this.extractCellValue(cellValue as any);
+      const extractedValue = this.extractCellValue(cellValue as BcCellValue);
 
       // POSITIONAL + PATTERN FILTER: Skip first cell if it's a GUID (likely SystemId)
       // This is a pragmatic heuristic since we cannot map control IDs to semantic names
@@ -829,16 +994,42 @@ export class PageDataExtractor {
       cellIndex++;
     }
 
+    // Get bookmark - BC uses both lowercase and uppercase
+    const bookmark = bcRow.bookmark ?? clientRow.Bookmark;
+
     return {
-      bookmark: rowData.bookmark,
+      bookmark,
       fields,
     };
   }
 
   /**
+   * Extracts flat cells from ClientDataRow (skipping known metadata fields).
+   */
+  private extractFlatCells(row: ClientDataRow): Record<string, BcCellValue> {
+    const cells: Record<string, BcCellValue> = {};
+    const metadataFields = ['Bookmark', 'Selected', 'Draft', 'Expanded', 'CanExpand', 'Depth'];
+
+    for (const [key, value] of Object.entries(row)) {
+      // Skip metadata fields
+      if (metadataFields.includes(key)) continue;
+
+      // Value could be a cell value object or direct primitive
+      if (value && typeof value === 'object') {
+        cells[key] = value as BcCellValue;
+      } else if (value !== undefined) {
+        // Wrap primitive in cell value object
+        cells[key] = { sv: String(value) } as BcCellValue;
+      }
+    }
+
+    return cells;
+  }
+
+  /**
    * Extracts field value from a cell (DataRefreshChange pattern).
    */
-  private extractCellValue(cell: any): FieldValue | null {
+  private extractCellValue(cell: BcCellValue): FieldValue | null {
     if (!cell || typeof cell !== 'object') {
       return null;
     }
@@ -927,8 +1118,13 @@ export class PageDataExtractor {
           displayValue: cell.stringValue,
           type: 'number'
         };
-      } else {
+      } else if (typeof cell.objectValue === 'string') {
         return { value: cell.objectValue, type: 'string' };
+      } else if (cell.objectValue === null) {
+        return { value: null, type: 'string' };
+      } else {
+        // Unknown object type - convert to string
+        return { value: String(cell.objectValue), type: 'string' };
       }
     }
 
@@ -939,14 +1135,15 @@ export class PageDataExtractor {
   /**
    * Finds DataRowUpdated from handlers (drill-down pattern).
    */
-  private findDataRowUpdated(handlers: readonly unknown[]): any | null {
+  private findDataRowUpdated(handlers: readonly unknown[]): DataRowUpdatedContainer | null {
     logger.info(`findDataRowUpdated: Searching ${handlers.length} handlers...`);
-    for (const handler of handlers as any[]) {
-      if (handler.handlerType === 'DN.LogicalClientChangeHandler') {
-        const changes = handler.parameters?.[1];
+    for (const handler of handlers) {
+      const h = handler as HandlerWithParams;
+      if (h.handlerType === 'DN.LogicalClientChangeHandler') {
+        const changes = h.parameters?.[1];
         if (Array.isArray(changes)) {
           logger.info(`  Checking ${changes.length} changes...`);
-          const dataRowUpdated = changes.find((c: any) => c.t === 'DataRowUpdated');
+          const dataRowUpdated = changes.find((c: { t?: string }) => isDataRowUpdatedType(c.t)) as DataRowUpdatedContainer | undefined;
           if (dataRowUpdated) {
             logger.info(`  Found DataRowUpdated! Keys: ${Object.keys(dataRowUpdated).join(', ')}`);
             return dataRowUpdated;
@@ -1004,7 +1201,7 @@ export class PageDataExtractor {
     try {
       // Recursively walk the control tree to find ALL repeaters
       // (not just direct children, as Document pages have nested repeaters)
-      const walkControl = (control: any): void => {
+      const walkControl = (control: WalkableControl): void => {
         if (!control || typeof control !== 'object') return;
 
         const controlType = control.t as ControlType | undefined;
@@ -1015,7 +1212,7 @@ export class PageDataExtractor {
 
         // If this is a repeater with columns, extract mappings
         if (isRepeater && Array.isArray(control.Columns)) {
-          const columns: any[] = control.Columns;
+          const columns: RepeaterColumn[] = control.Columns;
 
           for (let index = 0; index < columns.length; index++) {
             const col = columns[index];
@@ -1094,7 +1291,7 @@ export class PageDataExtractor {
       };
 
       // Start the recursive walk from the LogicalForm root
-      walkControl(logicalForm as any);
+      walkControl(logicalForm as WalkableControl);
 
       logger.debug(`Built column mappings map with ${mappings.size} entries from LogicalForm.Columns[]`);
       return mappings;
@@ -1122,17 +1319,18 @@ export class PageDataExtractor {
       let index = 0;
 
       // Walk all controls looking for ColumnBinder.Name properties
-      this.walkControls(logicalForm, (control: any) => {
-        if (control.ColumnBinder && typeof control.ColumnBinder.Name === 'string') {
-          const runtimeId = control.ColumnBinder.Name;
-          const caption = typeof control.Caption === 'string' ? control.Caption : null;
-          const designName = typeof control.DesignName === 'string' ? control.DesignName : null;
+      this.walkControls(logicalForm, (control: Control) => {
+        const walkable = control as WalkableControl;
+        if (walkable.ColumnBinder && typeof walkable.ColumnBinder.Name === 'string') {
+          const runtimeId = walkable.ColumnBinder.Name;
+          const caption = typeof walkable.Caption === 'string' ? walkable.Caption : null;
+          const designName = typeof walkable.DesignName === 'string' ? walkable.DesignName : null;
 
           // Semantic name: prefer Caption, then DesignName, then Name
           const semanticName =
             (caption && caption.trim().length > 0) ? caption :
             (designName && designName.trim().length > 0) ? designName :
-            (typeof control.Name === 'string') ? control.Name :
+            (typeof walkable.Name === 'string') ? walkable.Name :
             runtimeId;
 
           const mapping: ColumnMapping = {
@@ -1141,12 +1339,12 @@ export class PageDataExtractor {
             caption,
             designName,
             controlId:
-              typeof control.ControlId === 'number' ? control.ControlId :
-              typeof control.ControlID === 'number' ? control.ControlID :
+              typeof walkable.ControlId === 'number' ? walkable.ControlId :
+              typeof walkable.ControlID === 'number' ? walkable.ControlID :
               null,
             tableFieldNo:
-              typeof control.TableFieldNo === 'number' ? control.TableFieldNo :
-              typeof control.FieldNo === 'number' ? control.FieldNo :
+              typeof walkable.TableFieldNo === 'number' ? walkable.TableFieldNo :
+              typeof walkable.FieldNo === 'number' ? walkable.FieldNo :
               null,
             columnIndex: index++,
           };
@@ -1180,7 +1378,7 @@ export class PageDataExtractor {
    * Uses the same cell extraction and field mapping logic as list pages.
    */
   private extractFromDataRowUpdated(
-    dataRowUpdated: any,
+    dataRowUpdated: DataRowUpdatedContainer,
     fieldMetadata?: Map<string, { controlId: string; type: string; visible: boolean; hasCaption: boolean }>,
     columnMappings?: Map<string, ColumnMapping> | null
   ): Result<PageDataExtractionResult, BCError> {
@@ -1228,7 +1426,7 @@ export class PageDataExtractor {
       logger.info(`Processing ${Object.keys(rowData.cells).length} cells, columnMappings size = ${columnMappings?.size || 0}`);
 
       for (const [cellKey, cellValue] of Object.entries(rowData.cells)) {
-        const extractedValue = this.extractCellValue(cellValue as any);
+        const extractedValue = this.extractCellValue(cellValue as BcCellValue);
         logger.info(`  Cell ${cellKey}: extractedValue = ${JSON.stringify(extractedValue)?.substring(0, 100)}`);
 
         if (extractedValue === null) {
@@ -1331,28 +1529,31 @@ export class PageDataExtractor {
     for (const handler of handlers) {
       if (typeof handler !== 'object' || handler === null) continue;
 
-      const h = handler as any;
+      const h = handler as HandlerWithParams;
       if (h.handlerType === 'DN.LogicalClientChangeHandler') {
         const params = h.parameters;
         if (params && params[1] && Array.isArray(params[1])) {
           for (const change of params[1]) {
-            // BC uses both "PropertyChanges" (plural) AND "PropertyChange" (singular)
-            if (change && typeof change === 'object' && (change.t === 'PropertyChanges' || change.t === 'PropertyChange')) {
+            const propChange = change as PropertyChangeData;
+            // BC uses both full type names and shorthand codes:
+            // - "PropertyChanges" / "prc" / "lcpchs" (batch)
+            // - "PropertyChange" / "prch" / "lcpch" (single)
+            if (propChange && typeof propChange === 'object' && (isPropertyChangesType(propChange.t) || isPropertyChangeType(propChange.t))) {
               propertyChangesFound++;
-              logger.info(`   Found ${change.t} #${propertyChangesFound}: ControlReference=${JSON.stringify(change.ControlReference)}`);
-              logger.info(`   Changes keys: ${Object.keys(change.Changes || {}).join(', ')}`);
+              logger.info(`   Found ${propChange.t} #${propertyChangesFound}: ControlReference=${JSON.stringify(propChange.ControlReference)}`);
+              logger.info(`   Changes keys: ${Object.keys(propChange.Changes || {}).join(', ')}`);
 
               // DIAGNOSTIC: Log Name field specifically
-              if (change.ControlReference?.controlPath === 'server:c[0]/c[1]') {
-                logger.error(`[READ DIAGNOSTIC] Found Name field: t=${change.t}, StringValue="${change.Changes?.StringValue}"`);
+              if (propChange.ControlReference?.controlPath === 'server:c[0]/c[1]') {
+                logger.error(`[READ DIAGNOSTIC] Found Name field: t=${propChange.t}, StringValue="${propChange.Changes?.StringValue}"`);
               }
 
               // Apply this PropertyChanges/PropertyChange to the cloned form
-              const applied = this.applyPropertyChange(clonedForm, change);
+              const applied = this.applyPropertyChange(clonedForm, propChange);
               if (applied > 0) {
-                logger.info(`   Applied ${change.t} #${propertyChangesFound}`);
+                logger.info(`   Applied ${propChange.t} #${propertyChangesFound}`);
               } else {
-                logger.info(`   Failed to apply ${change.t} #${propertyChangesFound}`);
+                logger.info(`   Failed to apply ${propChange.t} #${propertyChangesFound}`);
               }
               appliedCount += applied;
             }
@@ -1369,7 +1570,7 @@ export class PageDataExtractor {
    * Recursively finds the first field control within a control tree.
    * Used to redirect PropertyChanges from group controls to actual field controls.
    */
-  private findFirstFieldControl(control: any): any | null {
+  private findFirstFieldControl(control: MutableControl): MutableControl | null {
     if (!control || typeof control !== 'object') return null;
 
     // Check if this control is a field control
@@ -1396,7 +1597,7 @@ export class PageDataExtractor {
    * @param propertyChange - PropertyChanges object containing Changes
    * @returns Number of properties applied (0 or 1)
    */
-  private applyPropertyChange(form: LogicalForm, propertyChange: any): number {
+  private applyPropertyChange(form: LogicalForm, propertyChange: PropertyChangeData): number {
     try {
       // Extract control reference
       const controlRef = propertyChange.ControlReference;
@@ -1405,7 +1606,7 @@ export class PageDataExtractor {
         return 0;
       }
 
-      const controlPath = controlRef.controlPath as string;
+      const controlPath = controlRef.controlPath;
       logger.info(`     Resolving controlPath: ${controlPath}`);
 
       // Resolve target control using path
@@ -1415,7 +1616,8 @@ export class PageDataExtractor {
         return 0;
       }
 
-      const controlInfo = `type=${(targetControl as any).t}, DesignName=${(targetControl as any).DesignName}, Caption=${(targetControl as any).Caption}`;
+      const mutableControl = targetControl as MutableControl;
+      const controlInfo = `type=${mutableControl.t}, DesignName=${mutableControl.DesignName}, Caption=${mutableControl.Caption}`;
       logger.info(`     Resolved control: ${controlInfo}`);
 
       // Extract Changes object
@@ -1429,7 +1631,6 @@ export class PageDataExtractor {
 
       // Apply PropertyChanges to target control as-is (don't redirect)
       // BC sends PropertyChanges for both group controls ('gc') and field controls ('sc', 'dc', etc.)
-      const mutableControl = targetControl as any;
 
       // Initialize Properties if needed
       if (!mutableControl.Properties) {
@@ -1441,10 +1642,9 @@ export class PageDataExtractor {
       for (const [key, value] of Object.entries(changes)) {
         mutableControl.Properties[key] = value;
         applied++;
-        const c = mutableControl;
         logger.info(
           `       • Applied PropertyChange: Properties.${key}=${JSON.stringify(value)} ` +
-          `(t=${c.t}, DesignName=${c.DesignName}, Name=${c.Name}, Caption=${c.Caption})`
+          `(t=${mutableControl.t}, DesignName=${mutableControl.DesignName}, Name=${mutableControl.Name}, Caption=${mutableControl.Caption})`
         );
       }
 
@@ -1483,7 +1683,7 @@ export class PageDataExtractor {
       // Filter out empty segments (handles trailing slashes)
       const segments = cleanPath.split('/').filter(s => s);
 
-      let current: any = form;
+      let current: MutableControl = form as MutableControl;
 
       for (const segment of segments) {
         // Match control path pattern with ANY letter prefix: c[...], gc[...], sc[...], dc[...]

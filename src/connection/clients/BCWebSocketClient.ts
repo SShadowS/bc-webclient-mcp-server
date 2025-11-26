@@ -17,7 +17,7 @@ export type AuthHeaders = {
 export class BCClient {
   private ws: WebSocket | null = null;
   private pendingRequests: Map<string | number, {
-    resolve: (value: any) => void;
+    resolve: (value: unknown) => void;
     reject: (error: Error) => void;
   }> = new Map();
   private messageQueue: JsonRpcRequest[] = [];
@@ -166,7 +166,7 @@ export class BCClient {
   /**
    * Send JSON-RPC request
    */
-  private async sendRequest(method: string, params?: any): Promise<any> {
+  private async sendRequest(method: string, params?: unknown): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const id = uuidv4();
       const request: JsonRpcRequest = {

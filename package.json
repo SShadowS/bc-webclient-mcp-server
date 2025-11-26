@@ -1,6 +1,6 @@
 {
   "name": "bc-webclient-mcp",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "Model Context Protocol (MCP) server for Microsoft Dynamics 365 Business Central via WebUI protocol. Enables AI assistants to interact with BC through the web client protocol, supporting Card, List, and Document pages with full line item support and server-side filtering.",
   "main": "dist/index.js",
   "type": "module",

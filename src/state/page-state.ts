@@ -87,7 +87,7 @@ export interface FieldState {
   controlPath?: string;
 
   /** Current field value */
-  value?: any;
+  value?: unknown;
 
   /** Whether field is enabled */
   enabled: boolean;
@@ -273,7 +273,7 @@ export interface RowState {
   bookmark: string;
 
   /** Cell values - Key: column designName, Value: cell value */
-  values: Map<string, any>;
+  values: Map<string, unknown>;
 
   /** Newly created, not yet saved (may have temp bookmark) */
   isNew?: boolean;
@@ -325,5 +325,5 @@ export type RowLookupResult = RowState | undefined | 'NOT_LOADED';
  */
 export interface BcHandlerMessage {
   handlerType: string;
-  parameters: any[];
+  parameters: readonly unknown[];
 }

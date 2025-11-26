@@ -46,8 +46,8 @@ export interface CachedPageContext {
   formIds: string[];
   openedAt: number;
   pageType: 'List' | 'Card' | 'Document' | 'Worksheet' | 'Report';
-  logicalForm: any;
-  handlers: any[];
+  logicalForm: unknown;
+  handlers: unknown[];
   // PageState (Phase 1: Dual-state approach)
   pageState?: PageState;
   // Metadata
@@ -183,8 +183,8 @@ export class PageContextCache {
       const age = Math.round((Date.now() - context.savedAt) / 1000);
       logger.info(`Loaded pageContext: ${pageContextId} (age: ${age}s)`);
       return context;
-    } catch (error: any) {
-      if (error.code === 'ENOENT') {
+    } catch (error: unknown) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
         // File doesn't exist - not an error
         logger.info(`PageContext not found in cache: ${pageContextId}`);
         return null;
@@ -203,8 +203,8 @@ export class PageContextCache {
     try {
       await fs.unlink(filePath);
       logger.info(`Deleted pageContext: ${pageContextId}`);
-    } catch (error: any) {
-      if (error.code !== 'ENOENT') {
+    } catch (error: unknown) {
+      if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) {
         logger.error(`Failed to delete pageContext ${pageContextId}: ${error}`);
       }
     }
@@ -361,11 +361,36 @@ export class PageContextCache {
     }
 
     // Merge new columns with existing
-    const existingColumns = repeater.Columns || [];
+    const existingColumns = (Array.isArray(repeater.Columns) ? repeater.Columns : []) as readonly RepeaterColumnDescription[];
     const mergedColumns = mergeColumns(existingColumns, columns);
 
-    // Update repeater
+    // Update repeater in LogicalForm
     repeater.Columns = mergedColumns;
+
+    // CRITICAL: Also update PageState columns with controlPath!
+    // PageState is used by write_page_data's findRepeaterBySubpage
+    if (context.pageState) {
+      // Find repeater in PageState by formId
+      for (const [, pageStateRepeater] of context.pageState.repeaters) {
+        if (pageStateRepeater.formId === formId) {
+          logger.info(`[ENRICH] Also updating PageState columns for repeater formId=${formId}`);
+
+          // Update each column's controlPath from the enriched columns
+          for (const enrichedCol of columns) {
+            // Match by caption or designName
+            const matchKey = enrichedCol.name?.toLowerCase().trim();
+            for (const [, col] of pageStateRepeater.columns) {
+              const colKey = col.designName?.toLowerCase().trim() || col.caption?.toLowerCase().trim();
+              if (colKey === matchKey && enrichedCol.controlPath) {
+                col.controlPath = enrichedCol.controlPath;
+                logger.info(`[ENRICH] PageState column "${col.caption}" enriched: controlPath="${col.controlPath}"`);
+              }
+            }
+          }
+          break;
+        }
+      }
+    }
 
     // Save enriched context
     await this.save(pageContextId, context);
@@ -378,14 +403,16 @@ export class PageContextCache {
   /**
    * Find a repeater control by formId in LogicalForm tree
    */
-  private findRepeaterByFormId(obj: any, targetFormId: string): any {
+  private findRepeaterByFormId(obj: unknown, targetFormId: string): Record<string, unknown> | null {
     if (!obj || typeof obj !== 'object') {
       return null;
     }
 
+    const record = obj as Record<string, unknown>;
+
     // Check if this object is a repeater with matching FormId
-    if ((obj.t === 'rc' || obj.t === 'BindablePagePartControl') && obj.FormId === targetFormId) {
-      return obj;
+    if ((record.t === 'rc' || record.t === 'BindablePagePartControl') && record.FormId === targetFormId) {
+      return record;
     }
 
     // Recurse into arrays
@@ -398,8 +425,8 @@ export class PageContextCache {
     }
 
     // Recurse into object properties
-    for (const key in obj) {
-      const found = this.findRepeaterByFormId(obj[key], targetFormId);
+    for (const key in record) {
+      const found = this.findRepeaterByFormId(record[key], targetFormId);
       if (found) return found;
     }
 
@@ -481,7 +508,7 @@ export class PageContextCache {
    * JSON replacer for serializing PageState Maps
    * Converts Maps to objects for JSON storage
    */
-  private jsonReplacer = (key: string, value: any): any => {
+  private jsonReplacer = (_key: string, value: unknown): unknown => {
     if (value instanceof Map) {
       return {
         _type: 'Map',
@@ -495,9 +522,9 @@ export class PageContextCache {
    * JSON reviver for deserializing PageState Maps
    * Converts stored objects back to Maps
    */
-  private jsonReviver = (key: string, value: any): any => {
-    if (value && value._type === 'Map') {
-      return new Map(value._entries);
+  private jsonReviver = (_key: string, value: unknown): unknown => {
+    if (value && typeof value === 'object' && '_type' in value && value._type === 'Map' && '_entries' in value) {
+      return new Map(value._entries as Array<[unknown, unknown]>);
     }
     return value;
   };

@@ -296,16 +296,24 @@ export class IntelligentMetadataParser {
   // Semantic Summary Generation
   // ============================================================================
 
+  /** LogicalForm structure from FormToShow handler */
+  private static asLogicalForm(obj: unknown): { ViewMode?: number; FormStyle?: number } | null {
+    if (obj && typeof obj === 'object') {
+      return obj as { ViewMode?: number; FormStyle?: number };
+    }
+    return null;
+  }
+
   /**
    * Extracts LogicalForm from handlers (finds FormToShow handler).
    */
-  private extractLogicalFormFromHandlers(handlers: readonly Handler[]): any | null {
+  private extractLogicalFormFromHandlers(handlers: readonly Handler[]): { ViewMode?: number; FormStyle?: number } | null {
     for (const handler of handlers) {
       if (
         handler.handlerType === 'DN.LogicalClientEventRaisingHandler' &&
         handler.parameters?.[0] === 'FormToShow'
       ) {
-        return handler.parameters[1]; // LogicalForm object
+        return IntelligentMetadataParser.asLogicalForm(handler.parameters[1]); // LogicalForm object
       }
     }
     return null;
