@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Session State Manager
  *
  * Tracks BC sessions and open pages for session introspection.
@@ -10,6 +10,7 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import type { ILogger } from '../core/interfaces.js';
+import type { LogicalForm } from '../types/bc-types.js';
 
 /**
  * Information about an open page in a session.
@@ -33,6 +34,7 @@ export interface DialogInfo {
   readonly originatingFormId?: string; // Form that triggered the dialog
   readonly originatingControlPath?: string;
   readonly openedAt: string; // ISO 8601 timestamp
+  readonly logicalForm?: LogicalForm; // The dialog's LogicalForm for dynamic action extraction
 }
 
 /**
