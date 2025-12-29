@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.5.2]
+
+### Fixed
+
+- **handle_dialog Cancel button**: Fixed Cancel/Abbrechen button not working on BC dialogs
+  - Cancel now uses `CloseForm` interaction instead of `DialogCancel` (more reliable for dialog dismissal)
+  - Works correctly with German localized dialogs ("Abbrechen")
+
+- **handle_dialog OK button**: Fixed OK/Yes/Ja button not working on BC dialogs
+  - OK now uses `InvokeAction` with `systemAction: 380` (bc-crud-service pattern)
+  - Previously used dynamic `systemAction` extraction which was inconsistent
+
+### Technical Details
+
+- Dialog button click strategies:
+  - **Cancel/Abbrechen/No/Nein**: Uses `CloseForm` with `formId: dialogFormId`
+  - **OK/Yes/Ja**: Uses `InvokeAction` with `systemAction: 380`, `controlPath: 'dialog:c[0]'`
+- Added unit tests documenting the dialog button strategies
+- Fallback chain: bc-crud-service pattern → DialogOK/DialogCancel → InvokeAction with dynamic systemAction
+
 ## [2.5.1]
 
 ### Fixed

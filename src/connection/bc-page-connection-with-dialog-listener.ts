@@ -192,7 +192,16 @@ export class BCPageConnection implements IBCConnection {
             caption: dialogForm.Caption || 'Dialog',
             isTaskDialog: !!dialogForm.IsTaskDialog,
             isModal: !!dialogForm.IsModal,
+            logicalForm: dialogForm, // Store LogicalForm for dynamic action extraction in handle_dialog
           });
+
+          // CRITICAL FIX: Add dialog form to openFormIds so BC recognizes it for actions
+          // Without this, InvokeAction on dialog buttons fails with "RPC Error"
+          const rawClient = this.getRawClient();
+          if (rawClient) {
+            rawClient.addOpenForm(dialogFormId);
+            logger.info(`[BCPageConnection] Added dialog ${dialogFormId} to openFormIds`);
+          }
 
           logger.info(`[BCPageConnection] Auto-tracked dialog: formId=${dialogFormId}, caption="${dialogForm.Caption}"`);
         } else {

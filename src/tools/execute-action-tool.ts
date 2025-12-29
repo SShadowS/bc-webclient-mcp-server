@@ -66,6 +66,18 @@ function isLogicalClientEventRaisingHandler(handler: Handler | GenericBCHandler)
 }
 
 /**
+ * Debug info for dialog tracking
+ */
+interface DialogTrackingDebug {
+  handlersScanned: number;
+  dialogToShowFound: boolean;
+  dialogFormExtracted: boolean;
+  dialogAddedToSession: boolean;
+  verificationResult: string;
+  error?: string;
+}
+
+/**
  * Output from execute_action tool.
  */
 export interface ExecuteActionOutput {
@@ -75,6 +87,7 @@ export interface ExecuteActionOutput {
   readonly formId: string;
   readonly message: string;
   readonly handlers?: readonly unknown[];
+  readonly _dialogTrackingDebug?: DialogTrackingDebug;
 }
 
 /** Parsed page context info */
@@ -161,7 +174,7 @@ export class ExecuteActionTool extends BaseMCPTool {
     const logger = createToolLogger('execute_action', pageContextId);
     const workflow = createWorkflowIntegration(workflowId);
 
-    logger.info(`Executing action "${actionName}" using pageContext: ${pageContextId}`);
+    logger.info(`[BUILD-2024-12-29-V2] Executing action "${actionName}" using pageContext: ${pageContextId}`);
 
     // Step 1: Parse and validate pageContextId
     const parseResult = this.parsePageContextId(pageContextId, actionName);
@@ -201,7 +214,7 @@ export class ExecuteActionTool extends BaseMCPTool {
     const handlers = handlersResult.value;
 
     // Step 5: Auto-track dialogs from handlers
-    await this.autoTrackDialogs(handlers, actualSessionId, logger);
+    const dialogTrackingDebug = await this.autoTrackDialogs(handlers, actualSessionId, logger);
 
     // Step 6: Check for errors in handlers
     const errorResult = this.checkForErrors(handlers, actualPageId, actionName, formId, actualSessionId);
@@ -220,6 +233,7 @@ export class ExecuteActionTool extends BaseMCPTool {
       formId,
       message: `Successfully executed action "${actionName}" on page ${actualPageId}`,
       handlers,
+      _dialogTrackingDebug: dialogTrackingDebug,
     });
   }
 
@@ -349,9 +363,21 @@ export class ExecuteActionTool extends BaseMCPTool {
   }
 
   /** Auto-track dialogs from handlers */
-  private async autoTrackDialogs(handlers: Handler[], actualSessionId: string, logger: ReturnType<typeof createToolLogger>): Promise<void> {
+  private async autoTrackDialogs(handlers: Handler[], actualSessionId: string, logger: ReturnType<typeof createToolLogger>): Promise<DialogTrackingDebug> {
+    const debug: DialogTrackingDebug = {
+      handlersScanned: handlers.length,
+      dialogToShowFound: false,
+      dialogFormExtracted: false,
+      dialogAddedToSession: false,
+      verificationResult: 'not_checked',
+    };
+
+    logger.info(`autoTrackDialogs: scanning ${handlers.length} handlers for DialogToShow, sessionId=${actualSessionId}`);
+
     for (const handler of handlers) {
       if (isLogicalClientEventRaisingHandler(handler) && handler.parameters?.[0] === 'DialogToShow') {
+        debug.dialogToShowFound = true;
+        logger.info(`autoTrackDialogs: found DialogToShow handler`);
         try {
           const HandlerParser = (await import('../parsers/handler-parser.js')).HandlerParser;
           const SessionStateManager = (await import('../services/session-state-manager.js')).SessionStateManager;
@@ -360,25 +386,42 @@ export class ExecuteActionTool extends BaseMCPTool {
           const dialogFormResult = parser.extractDialogForm([handler]);
 
           if (isOk(dialogFormResult)) {
+            debug.dialogFormExtracted = true;
             const dialogForm = dialogFormResult.value;
             const dialogFormId = dialogForm.ServerId;
             const sessionStateManager = SessionStateManager.getInstance();
+
+            logger.info(`autoTrackDialogs: adding dialog to SessionStateManager - sessionId=${actualSessionId}, dialogId=${dialogFormId}`);
 
             sessionStateManager.addDialog(actualSessionId, {
               dialogId: dialogFormId,
               caption: dialogForm.Caption || 'Dialog',
               isTaskDialog: !!dialogForm.IsTaskDialog,
               isModal: !!dialogForm.IsModal,
+              logicalForm: dialogForm, // Store LogicalForm for dynamic action extraction in handle_dialog
             });
 
+            debug.dialogAddedToSession = true;
+
+            // Verify the dialog was stored
+            const verifyDialog = sessionStateManager.getActiveDialog(actualSessionId);
+            debug.verificationResult = verifyDialog ? `stored:${verifyDialog.dialogId}` : 'NONE';
+            logger.info(`autoTrackDialogs: verification - activeDialog=${debug.verificationResult}`);
+
             logger.info(`Auto-tracked dialog: formId=${dialogFormId}, caption="${dialogForm.Caption}"`);
+          } else {
+            debug.error = `extractDialogForm failed: ${dialogFormResult.error.message}`;
+            logger.warn(`autoTrackDialogs: extractDialogForm failed - ${dialogFormResult.error.message}`);
           }
         } catch (error) {
+          debug.error = `exception: ${String(error)}`;
           logger.warn({ error: String(error) }, 'Failed to auto-track dialog (non-fatal)');
         }
         break; // Only process first dialog
       }
     }
+
+    return debug;
   }
 
   /** Check for error handlers in response */

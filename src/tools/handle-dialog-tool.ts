@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Handle Dialog MCP Tool
  *
  * Interacts with Business Central dialog windows (prompts, confirmations, template selection).
@@ -28,6 +28,7 @@ import { createToolLogger } from '../core/logger.js';
 import type { AuditLogger } from '../services/audit-logger.js';
 import { SessionStateManager } from '../services/session-state-manager.js';
 import { HandlerParser } from '../parsers/handler-parser.js';
+import { ControlParser } from '../parsers/control-parser.js';
 import { defaultTimeouts } from '../core/timeouts.js';
 import { createWorkflowIntegration } from '../services/workflow-integration.js';
 
@@ -42,6 +43,7 @@ interface DetectedDialog {
   dialogFormId: string;
   dialogHandlers: readonly unknown[];
   caption?: string;
+  logicalForm?: import('../types/bc-types.js').LogicalForm; // For dynamic action extraction
 }
 
 /**
@@ -55,7 +57,7 @@ export class HandleDialogTool extends BaseMCPTool {
   public readonly description =
     'Handles Business Central dialog windows (template selection, confirmations, prompts) within an existing session. ' +
     'Requires pageContextId to identify the session where dialog appears. ' +
-    'action (required): button to click - "OK" (systemAction: 0) or "Cancel" (systemAction: 1). ' +
+    'action (required): button to click - "OK" or "Cancel". The actual systemAction ID is dynamically extracted from dialog metadata for localization support. ' +
     'selection (optional): {bookmark: "..."} or {rowNumber: 1} or {rowFilter: {"Code": "EU-VIRKS"}} to select a row before clicking OK. ' +
     'wait (optional): "appear" to wait for dialog, "existing" to use already-open dialog (default: "appear"). ' +
     'timeoutMs (default: 5000): maximum time to wait for dialog when wait="appear". ' +
@@ -235,7 +237,7 @@ export class HandleDialogTool extends BaseMCPTool {
       // Step 3: Get or wait for dialog
       const dialogResult = await this.getOrWaitForDialog(connection, sessionId, waitMode, timeout, logger);
       if (!isOk(dialogResult)) return dialogResult;
-      const { dialogFormId, dialogHandlers } = dialogResult.value;
+      const { dialogFormId, dialogHandlers, logicalForm } = dialogResult.value;
 
       // Step 4: Select row if selection provided
       const selectionResult = await this.handleRowSelection(connection, dialogFormId, selection, logger);
@@ -243,7 +245,7 @@ export class HandleDialogTool extends BaseMCPTool {
       const selectedBookmark = selectionResult.value;
 
       // Step 5: Click button (OK or Cancel)
-      const clickResult = await this.clickDialogButton(connection, dialogFormId, action, selectedBookmark, logger);
+      const clickResult = await this.clickDialogButton(connection, dialogFormId, action, selectedBookmark, logicalForm, logger);
       if (!isOk(clickResult)) return clickResult;
 
       // Step 6: Cleanup and record
@@ -330,6 +332,7 @@ export class HandleDialogTool extends BaseMCPTool {
         dialogFormId: existingDialog.dialogId,
         dialogHandlers: [],
         caption: existingDialog.caption,
+        logicalForm: existingDialog.logicalForm,
       });
     }
 
@@ -361,9 +364,10 @@ export class HandleDialogTool extends BaseMCPTool {
       caption: dialogForm.Caption || 'Dialog',
       isTaskDialog: !!dialogForm.IsTaskDialog,
       isModal: !!dialogForm.IsModal,
+      logicalForm: dialogForm, // Store for dynamic action extraction
     });
 
-    return ok({ dialogFormId, dialogHandlers, caption: dialogForm.Caption });
+    return ok({ dialogFormId, dialogHandlers, caption: dialogForm.Caption, logicalForm: dialogForm });
   }
 
   /** Create predicate for DialogToShow detection */
@@ -405,6 +409,7 @@ export class HandleDialogTool extends BaseMCPTool {
       dialogFormId: activeDialog.dialogId,
       dialogHandlers: [],
       caption: activeDialog.caption,
+      logicalForm: activeDialog.logicalForm,
     });
   }
 
@@ -475,42 +480,197 @@ export class HandleDialogTool extends BaseMCPTool {
     }
   }
 
-  /** Click OK or Cancel button on dialog */
+  /** Click OK or Cancel button on dialog - dynamically extracts action metadata */
   private async clickDialogButton(
     connection: IBCConnection,
     dialogFormId: string,
     action: string,
     selectedBookmark: string | undefined,
+    logicalForm: import('../types/bc-types.js').LogicalForm | undefined,
     logger: ReturnType<typeof createToolLogger>
   ): Promise<Result<void, BCError>> {
     logger.info(`Clicking "${action}" button...`);
 
-    const systemAction = action === 'OK' ? 0 : 1;
+    // Default fallback values (for backwards compatibility)
+    let systemAction = action === 'OK' ? 0 : 1;
+    let controlPath = 'server:c[2]/cr';
+
+    // Try to dynamically extract button metadata from dialog's LogicalForm
+    if (logicalForm) {
+      const controlParser = new ControlParser();
+      const controls = controlParser.walkControls(logicalForm);
+      const actions = controlParser.extractActions(controls);
+
+      logger.info(`Found ${actions.length} actions in dialog, searching for "${action}"...`);
+
+      // Find matching action by caption or designName (case-insensitive)
+      const normalizedAction = action.toUpperCase();
+      const matchingAction = actions.find(a => {
+        const caption = (a.caption || '').toUpperCase().replace(/&/g, ''); // Remove & from captions like "O&K"
+        const designName = (a.controlId || '').toUpperCase();
+        return caption === normalizedAction ||
+          caption.includes(normalizedAction) ||
+          designName.includes(normalizedAction) ||
+          designName.includes('ACTION' + normalizedAction);
+      });
+
+      if (matchingAction) {
+        if (matchingAction.systemAction !== undefined) {
+          systemAction = matchingAction.systemAction;
+          logger.info(`Found dynamic systemAction: ${systemAction} (from caption: "${matchingAction.caption}")`);
+        }
+        if (matchingAction.controlPath) {
+          controlPath = matchingAction.controlPath;
+          logger.info(`Found dynamic controlPath: ${controlPath}`);
+        }
+      } else {
+        logger.warn(`Could not find action "${action}" in dialog metadata, using fallback values`);
+        // Log available actions for debugging
+        const availableActions = actions.slice(0, 10).map(a => `${a.caption}(${a.systemAction})`).join(', ');
+        logger.info(`Available actions: ${availableActions}`);
+      }
+    } else {
+      logger.warn(`No logicalForm available for dynamic action extraction, using fallback values`);
+    }
+
+    // For dialog buttons, try the special Dialog* interaction names first
+    // These are the canonical way BC handles dialog responses: DialogOK, DialogCancel, DialogYes, DialogNo
+    const dialogInteractionMap: Record<string, string> = {
+      'OK': 'DialogOK',
+      'CANCEL': 'DialogCancel',
+      'YES': 'DialogYes',
+      'NO': 'DialogNo',
+      'ABBRECHEN': 'DialogCancel', // German
+      'JA': 'DialogYes', // German
+      'NEIN': 'DialogNo', // German
+    };
+
+    const normalizedAction = action.toUpperCase();
+    const dialogInteractionName = dialogInteractionMap[normalizedAction];
+
+    // For Cancel button, try CloseForm first (most reliable way to dismiss dialog)
+    if (normalizedAction === 'CANCEL' || normalizedAction === 'ABBRECHEN') {
+      logger.info(`Attempting CloseForm for Cancel action on dialog ${dialogFormId}`);
+
+      const closeResult = await connection.invoke({
+        interactionName: 'CloseForm',
+        namedParameters: { FormId: dialogFormId },
+        controlPath: 'server:',
+        formId: dialogFormId,
+      } as any);
+
+      if (isOk(closeResult)) {
+        logger.info(`Dialog ${dialogFormId} closed successfully using CloseForm`);
+        return ok(undefined);
+      }
+      logger.warn(`CloseForm failed: ${closeResult.error.message}, trying alternative methods...`);
+    }
+
+    // For OK/Yes buttons on dialogs, use bc-crud-service pattern: InvokeAction with systemAction 380
+    // For Cancel/No buttons, CloseForm already handled above
+    if (normalizedAction === 'OK' || normalizedAction === 'YES' || normalizedAction === 'JA') {
+      // Use bc-crud-service pattern: systemAction 380 for dialog confirmation
+      const dialogSystemAction = 380;
+      const dialogControlPath = controlPath || 'dialog:c[0]';
+
+      logger.info(`Using bc-crud-service pattern for OK: systemAction=${dialogSystemAction}, controlPath="${dialogControlPath}", formId=${dialogFormId}`);
+
+      const okResult = await connection.invoke({
+        interactionName: 'InvokeAction',
+        namedParameters: {
+          systemAction: dialogSystemAction,
+          key: selectedBookmark || null,
+          repeaterControlTarget: null,
+        },
+        controlPath: dialogControlPath,
+        formId: dialogFormId,
+      } as any);
+
+      if (isOk(okResult)) {
+        logger.info(`${action} clicked successfully using bc-crud-service pattern (systemAction=380)`);
+        return ok(undefined);
+      }
+      logger.warn(`bc-crud-service pattern failed: ${okResult.error.message}, trying DialogOK...`);
+    }
+
+    if (dialogInteractionName) {
+      // Use special Dialog* interaction for standard dialog buttons
+      // NOTE: Based on action-service.ts - NO formId, empty object namedParameters, callbackId: '0'
+      logger.info(`Using dialog interaction: ${dialogInteractionName} (no formId - BC uses latest dialog from openFormIds)`);
+
+      const invokeActionResult = await connection.invoke({
+        interactionName: dialogInteractionName,
+        namedParameters: {}, // Empty object (BCRawWebSocketClient will stringify)
+        controlPath: 'dialog:c[0]', // Standard dialog control path
+        callbackId: '0', // Required for dialog interactions
+        // No formId - BC determines target from openFormIds
+      } as any);
+
+      if (!isOk(invokeActionResult)) {
+        // Fall back to InvokeAction with systemAction if Dialog* fails
+        logger.warn(`Dialog interaction ${dialogInteractionName} failed: ${invokeActionResult.error.message}, falling back to InvokeAction with extracted systemAction=${systemAction}`);
+      } else {
+        logger.info(`${action} clicked successfully using ${dialogInteractionName}`);
+        return ok(undefined);
+      }
+    }
+
+    // Final fallback: Use InvokeAction with dynamically extracted systemAction
+    // Use extracted controlPath or default to dialog action button path
+    const finalControlPath = controlPath || 'dialog:c[0]'; // Default controlPath for dialog buttons
+
+    logger.info(`Final fallback: systemAction=${systemAction}, controlPath="${finalControlPath}", formId=${dialogFormId}`);
+
+    // Build namedParameters as object (BCRawWebSocketClient will stringify)
+    const namedParams = {
+      systemAction,
+      key: selectedBookmark || null,
+      repeaterControlTarget: null,
+    };
+
+    logger.info(`namedParameters: ${JSON.stringify(namedParams)}`);
 
     const invokeActionResult = await connection.invoke({
       interactionName: 'InvokeAction',
-      namedParameters: {
-        formId: dialogFormId,
-        controlPath: 'server:c[2]/cr', // Standard action control path in dialogs
-        systemAction,
-        key: selectedBookmark || '',
-        data: { AlwaysCommit: false },
-        repeaterControlTarget: null,
-      },
+      namedParameters: namedParams, // Object, not stringified (BCRawWebSocketClient handles this)
+      controlPath: finalControlPath,
       formId: dialogFormId,
     } as any);
 
     if (!isOk(invokeActionResult)) {
+      // Enhanced error info
       return err(new ProtocolError(
         `Failed to click ${action}: ${invokeActionResult.error.message}`,
-        { dialogFormId, action, systemAction }
+        {
+          dialogFormId,
+          action,
+          systemAction,
+          controlPath: finalControlPath,
+          namedParams,
+          errorDetails: invokeActionResult.error
+        }
       ));
     }
 
-    logger.info(`${action} clicked successfully`);
+    // Check response handlers for errors
+    const handlers = invokeActionResult.value;
+    const errorHandler = (handlers as any[]).find(h =>
+      h.handlerType === 'DN.ErrorMessageProperties' ||
+      h.handlerType === 'DN.ErrorDialogProperties'
+    );
+
+    if (errorHandler) {
+      const errorParams = errorHandler.parameters?.[0] as { Message?: string; ErrorMessage?: string } | undefined;
+      const errorMessage = errorParams?.Message || errorParams?.ErrorMessage || 'Unknown BC error';
+      return err(new ProtocolError(
+        `BC error after clicking ${action}: ${errorMessage}`,
+        { dialogFormId, action, systemAction, errorHandler }
+      ));
+    }
+
+    logger.info(`${action} clicked successfully (systemAction=${systemAction}), handlers: ${handlers.length}`);
     return ok(undefined);
   }
-
   /** Close dialog state in SessionStateManager (non-fatal) */
   private closeDialogState(
     sessionId: string,

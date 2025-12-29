@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 /**
  * MCP STDIO Server Entry Point
  *
@@ -24,6 +24,7 @@ import { ReadPageDataTool } from './tools/read-page-data-tool.js';
 import { WritePageDataTool } from './tools/write-page-data-tool.js';
 import { ExecuteActionTool } from './tools/execute-action-tool.js';
 import { SelectAndDrillDownTool } from './tools/select-and-drill-down-tool.js';
+import { HandleDialogTool } from './tools/handle-dialog-tool.js';
 
 // Optional/Advanced tools (not in default registry, but available for opt-in)
 import { CreateRecordByFieldNameTool } from './tools/create-record-by-field-name-tool.js';
@@ -88,6 +89,7 @@ async function main(): Promise<void> {
     server.registerTool(new WritePageDataTool(connection, bcConfig, auditLogger));
     server.registerTool(new ExecuteActionTool(connection, bcConfig, auditLogger));
     server.registerTool(new SelectAndDrillDownTool(connection, bcConfig, auditLogger));
+    server.registerTool(new HandleDialogTool(connection, bcConfig, auditLogger));
 
     // Optional/Advanced tools
     server.registerTool(new CreateRecordByFieldNameTool(connection, bcConfig, auditLogger));
