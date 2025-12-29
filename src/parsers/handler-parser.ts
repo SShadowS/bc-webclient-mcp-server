@@ -274,11 +274,11 @@ export class HandlerParser implements IHandlerParser {
       );
     }
 
-    // Validate LogicalForm structure
-    if (!this.isValidLogicalForm(logicalForm)) {
+    // Validate LogicalForm structure - dialogs may not have CacheKey, so use relaxed validation
+    if (!this.isValidDialogForm(logicalForm)) {
       return err(
         new LogicalFormParseError('Invalid LogicalForm structure for dialog', {
-          missingFields: this.getMissingLogicalFormFields(logicalForm),
+          missingFields: this.getMissingDialogFormFields(logicalForm),
         })
       );
     }
@@ -292,6 +292,47 @@ export class HandlerParser implements IHandlerParser {
     }, '[HandlerParser] Extracted dialog form');
 
     return ok(logicalForm);
+  }
+
+  /**
+   * Validates that a dialog form has required properties.
+   * Dialogs have relaxed requirements - they may not have CacheKey.
+   */
+  private isValidDialogForm(form: unknown): form is LogicalForm {
+    if (!this.isObject(form)) {
+      return false;
+    }
+
+    // Dialogs require ServerId and Caption, but CacheKey is optional
+    const requiredFields = ['ServerId', 'Caption'];
+
+    for (const field of requiredFields) {
+      if (!(field in form) || typeof (form as Record<string, unknown>)[field] !== 'string') {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  /**
+   * Gets list of missing required fields from dialog form.
+   */
+  private getMissingDialogFormFields(form: unknown): readonly string[] {
+    if (!this.isObject(form)) {
+      return ['<not an object>'];
+    }
+
+    const requiredFields = ['ServerId', 'Caption'];
+    const missing: string[] = [];
+
+    for (const field of requiredFields) {
+      if (!(field in form) || typeof (form as Record<string, unknown>)[field] !== 'string') {
+        missing.push(field);
+      }
+    }
+
+    return missing;
   }
 
   // ============================================================================
