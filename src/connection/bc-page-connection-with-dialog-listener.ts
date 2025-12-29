@@ -192,6 +192,7 @@ export class BCPageConnection implements IBCConnection {
             caption: dialogForm.Caption || 'Dialog',
             isTaskDialog: !!dialogForm.IsTaskDialog,
             isModal: !!dialogForm.IsModal,
+            logicalForm: dialogForm, // Store LogicalForm for dynamic action extraction in handle_dialog
           });
 
           logger.info(`[BCPageConnection] Auto-tracked dialog: formId=${dialogFormId}, caption="${dialogForm.Caption}"`);

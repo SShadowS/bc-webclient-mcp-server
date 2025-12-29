@@ -369,6 +369,7 @@ export class ExecuteActionTool extends BaseMCPTool {
               caption: dialogForm.Caption || 'Dialog',
               isTaskDialog: !!dialogForm.IsTaskDialog,
               isModal: !!dialogForm.IsModal,
+              logicalForm: dialogForm, // Store LogicalForm for dynamic action extraction in handle_dialog
             });
 
             logger.info(`Auto-tracked dialog: formId=${dialogFormId}, caption="${dialogForm.Caption}"`);
